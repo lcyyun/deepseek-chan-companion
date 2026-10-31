@@ -1,0 +1,5 @@
+# Add this server to your existing Codex configuration, then restart its session.
+# Set L2D_BRIDGE_TOKEN in the environment of the Codex process.
+[mcp_servers.live2d]
+url = "http://127.0.0.1:39181/mcp"
+bearer_token_env_var = "L2D_BRIDGE_TOKEN"

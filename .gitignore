@@ -1,0 +1,26 @@
+node_modules/
+dist/
+release/
+vendor/
+public/vendor/
+.local/
+output/
+*.log
+.env*
+!.env.example
+*.moc3
+*.psd
+*.cmo3
+*.vtube.json
+desktop/native/*.exe
+# User credentials and per-machine runtime state must stay outside source control.
+**/bridge-token
+**/desktop.json
+**/settings.json
+**/secrets.json
+*.pem
+*.key
+*.pfx
+.DS_Store
+Thumbs.db
+/models/

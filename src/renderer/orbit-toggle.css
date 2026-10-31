@@ -1,0 +1,5 @@
+.orbit-switch { touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+body[data-view=toggle] .orbit-switch.orbit-dragging { cursor: grabbing; transform: none; transition: none; }
+.orbit-switch > svg, .orbit-switch > span { pointer-events: none; }
+body[data-view=toggle] .orbit-switch { background: linear-gradient(145deg, #fff, #edf5ff); border-color: #dceaff; }
+.orbit-switch > .orbit-logo { object-fit: contain; pointer-events: none; user-select: none; }

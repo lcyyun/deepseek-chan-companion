@@ -1,0 +1,62 @@
+// Isolated production React/Cubism input path; never controls the user's pet.
+const fs=require('node:fs'),path=require('node:path');
+const root=path.resolve(__dirname,'..'),output=path.join(root,'vendor','chest-reaction-smoke');
+fs.mkdirSync(output,{recursive:true});
+process.argv.push('--v5-only');
+let source=fs.readFileSync(path.join(__dirname,'live2d-actions.cjs'),'utf8');
+source=source.replace("const root = path.resolve(__dirname, '..');",'const root = '+JSON.stringify(root)+';')
+  .replace(/const output = path\.join\(root, 'vendor', .*?\);/, 'const output = '+JSON.stringify(output)+';')
+  .replace("source.replace('runtime.current=handle'", "source.replace('speaker.current.level()', '((window as any).qaAudioLevel ?? speaker.current.level())').replace('runtime.current=handle'");
+source=source.slice(0,source.indexOf('  if(expressionsOnly){'));
+source+=String.raw`
+  const assert=require('node:assert/strict');
+  await win.webContents.executeJavaScript('qaRuntime.setView(1.65,0,-.55);window.qaTaps=[];const tap=qaBehavior.tapChest.bind(qaBehavior);qaBehavior.tapChest=()=>{const ok=tap();qaTaps.push({ok,at:performance.now()});return ok;};void 0;');
+  await delay(900);
+  const view=()=>win.webContents.executeJavaScript('({regions:qaRuntime.getInteractionRegions(),active:qaBehavior.isChestReaction,awaiting:qaBehavior.isChestAwaitingPetting,armed:qaBehavior.isChestHeartArmed,reaction:qaBehavior.chestReaction,params:Object.fromEntries(qaRuntime.getParameters().filter(p=>/^(Angle[XYZ]|Position[XYZ]|LeanInput|ParamBreath|ParamEyeBall[XY]|ParamEye[LR]Open|ParamBrow[LR]Y|ParamMouthForm|ParamMouthOpenY|key4|key7|key13)$/.test(p.id)).map(p=>[p.id,p.value])),taps:qaTaps})');
+  const hit=()=>win.webContents.executeJavaScript('(()=>{const b=qaRuntime.getInteractionRegions().chest;return{x:Math.round(b.x+b.width*.5),y:Math.round(b.y+b.height*.54)}})()');
+  const click=async(point,hold=30)=>{point ||= await hit();win.webContents.sendInputEvent({type:'mouseDown',...point,button:'left',clickCount:1});await delay(hold);win.webContents.sendInputEvent({type:'mouseUp',...point,button:'left',clickCount:1});await delay(35);};
+  const save=async name=>{await capture(name);const current=await view();report.samples.push({name,...current});return current;};
+  report.samples=[];report.initial=await view();
+  const point=await hit();assert.ok(point.y>0&&point.y<900&&point.x>0&&point.x<1100,'Visible real chest geometry');
+  await click();await delay(250);assert.equal((await view()).active,true,'A short chest tap starts the reaction');await save('first-surprise');
+  for(let i=0;i<5;i++)await click();
+  assert.equal((await view()).taps.filter(t=>t.ok).length,1,'Repeat clicks cannot queue or advance a reaction');
+  await delay(550);await save('first-panic');await delay(1700);const shy=await save('first-shy');assert.ok(shy.params.key7>.35,'First round reaches a blush');
+  await delay(2400);assert.equal((await view()).active,false);
+  await click();await delay(1800);const turned=await save('second-look-away');assert.ok(Math.abs(turned.params.AngleX)>10,'Second round visibly turns away');assert.ok(turned.params.key7>.3);
+  await delay(3100);assert.equal((await view()).active,false);
+  await click();await delay(1300);const angry=await save('third-reproach');assert.ok(angry.params.ParamBrowLY<-.25&&angry.params.ParamMouthForm<0,'Third round has restrained reproach');
+  await delay(3700);assert.equal((await view()).active,false);
+  assert.equal((await view()).awaiting,true,'Third round waits for comfort');
+  for(let i=0;i<3;i++)await click();
+  assert.equal((await view()).active,false,'Repeated taps must not restart the third head shake');
+  const comfortHead=await win.webContents.executeJavaScript('(()=>{const h=qaRuntime.getInteractionRegions().head;return{x:Math.round(h.x+h.width*.5),y:Math.round(h.y+h.height*.45)}})()');
+  await click(comfortHead,350);await delay(1450);
+  assert.equal((await view()).armed,true,'A fresh head touch arms the heart response');
+  await click();await delay(900);const heart=await save('fourth-heart');
+  assert.equal(heart.reaction.stage,4);assert.ok(heart.params.key4>.8,'Comforted tap uses the real heart eyes');
+  report.heartBreathing=[];
+  for(let i=0;i<16;i++){report.heartBreathing.push((await view()).params);await delay(90);}
+  assert.ok(Math.max(...report.heartBreathing.map(p=>p.PositionY))-Math.min(...report.heartBreathing.map(p=>p.PositionY))>1.2,'Heart breathing visibly moves the body');
+  assert.ok(report.heartBreathing.every(p=>p.ParamBreath>=0&&p.ParamBreath<=1));
+  await delay(3000);const afterHeart=await view();assert.equal(afterHeart.active,false);assert.equal(afterHeart.armed,false);assert.equal(afterHeart.awaiting,false);
+  await click(await hit(),650);assert.equal((await view()).active,false,'A held gaze gesture is not a tap');
+  const before=(await view()).taps.filter(t=>t.ok).length,p=await hit();
+  win.webContents.sendInputEvent({type:'mouseDown',...p,button:'left',clickCount:1});await delay(25);win.webContents.sendInputEvent({type:'mouseMove',x:p.x+25,y:p.y,modifiers:['leftButtonDown']});await delay(25);win.webContents.sendInputEvent({type:'mouseUp',x:p.x+25,y:p.y,button:'left',clickCount:1});await delay(100);
+  assert.equal((await view()).taps.filter(t=>t.ok).length,before,'Drag is not a tap');
+  await click();await delay(250);assert.equal((await view()).reaction.stage,1,'Heart completion returns the next click to round one');await request('/api/stop',{});await delay(100);
+  await win.webContents.executeJavaScript('qaBehavior.previewChestReaction(2);');await delay(700);
+  await request('/api/stop',{});await delay(120);assert.equal((await view()).active,false,'Stop cancels preview');
+  await win.webContents.executeJavaScript('qaBehavior.previewChestReaction(1);');await delay(250);
+  const head=await win.webContents.executeJavaScript('(()=>{const h=qaRuntime.getInteractionRegions().head;return{x:Math.round(h.x+h.width*.5),y:Math.round(h.y+h.height*.45)}})()');
+  await click(head);await delay(500);assert.equal((await view()).active,false);assert.ok(await win.webContents.executeJavaScript('qaBehavior.petContact>.8'),'Head touch still owns the face');
+  await delay(1000);
+  await win.webContents.executeJavaScript('qaBehavior.setState("speaking");window.qaAudioLevel=.7;qaBehavior.previewChestReaction(3);');
+  await delay(800);const speaking=await view();assert.ok(speaking.params.ParamMouthOpenY>.2,'Spoken mouth remains active during a reaction');await win.webContents.executeJavaScript('delete window.qaAudioLevel;qaBehavior.interrupt();');
+  report.checks={threeRounds:true,rapidClicksIgnored:true,thirdWaitsForComfort:true,heartAfterFreshPetting:true,heartBreathingAndReset:true,heldAndDraggedIgnored:true,stop:true,headTouch:true,speechOwnership:true};
+  report.final=await view();await fs.writeFile(path.join(output,'result.json'),JSON.stringify(report,null,2));
+  console.log(JSON.stringify({checks:report.checks,errors:report.errors,accepted:report.final.taps.filter(t=>t.ok).length}));
+  assert.deepEqual(report.errors,[]);win.destroy();await service.close();app.exit(0);
+})().catch(async error=>{console.error(error);try{win?.destroy();await service?.close();}finally{app.exit(1);}});
+`;
+const harness=path.join(output,'harness.cjs');fs.writeFileSync(harness,source);require(harness);

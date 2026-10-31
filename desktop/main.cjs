@@ -1,0 +1,325 @@
+const { app, BrowserWindow, ipcMain, globalShortcut, screen, Tray, Menu, nativeImage, safeStorage, dialog, shell, clipboard } = require('electron');
+const path = require('node:path');
+const fs = require('node:fs');
+const { pathToFileURL } = require('node:url');
+const zlib = require('node:zlib');
+const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, validRect } = require('./pet-input.cjs');
+const { startMouseInput } = require('./mouse-input.cjs');
+const { createToggleDragSession } = require('./toggle-drag.cjs');
+const ROOT = path.resolve(__dirname, '..');
+const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
+app.setName('大肥鱼 · DeepSeek-chan');
+// A custom userData path (tests/portable hosts) must never read the real profile.
+const defaultProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-chan');
+if (path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
+  require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
+}
+let service, pet, toggle, chat, tray, quitting = false, dragMode = false;
+let config = {}, dataDir, configFile, failures = [], lastSaved = 0;
+let sanitizeModelTuning;
+const roles = new Map();
+let inputRegions = [], pointerLocked = false, shapeKey = '';
+let resizingPet = false, scaleSaveTimer;
+let toggleGesture=null,lastToggleDrag=null,toggleShapeTimer,toggleDragSequence=0;
+const validPoint=point=>point&&['x','y'].every(key=>Number.isFinite(point[key])&&Math.abs(point[key])<=10000000);
+let placementRevision = 0, geometrySeen = false, bodyRegion = null, fullBodyRegion = null, petWorkArea;
+const toolAnchor=createToolAnchor();
+let mouseInput, trackingTimer, leftDown=false, trackingBlocked=false, trackingStarted=0, trackingSent=false, previousCursor=null, mouseInputError='';
+function sendTracking(active, extra={}) {
+  if (pet && !pet.isDestroyed()) pet.webContents.send('desktop-event',{type:'pointer-tracking',active,...extra});
+  trackingSent=active;
+}
+function suppressTracking() {trackingBlocked=leftDown;previousCursor=null;sendTracking(false);}
+function updateTracking() {
+  const active=leftDown&&!trackingBlocked&&!toggleGesture&&config.mouseTracking!==false&&!dragMode&&pet&&!pet.isDestroyed()&&pet.isVisible()&&Date.now()-trackingStarted>=120;
+  if(!active){if(trackingSent)sendTracking(false);previousCursor=null;return;}
+  const point=screen.getCursorScreenPoint(),bounds=pet.getBounds(),now=Date.now();
+  const speed=previousCursor?Math.min(1,Math.hypot(point.x-previousCursor.x,point.y-previousCursor.y)/Math.max(16,now-previousCursor.at)/1.2):0;
+  previousCursor={...point,at:now};
+  // Screen/canvas positions are DIP throughout; no remote service receives them.
+  sendTracking(true,{x:point.x-bounds.x,y:point.y-bounds.y,speed});
+}
+function initializeMouseTracking() {
+  mouseInput=startMouseInput({cacheDir:path.join(dataDir,'native'),onButton:down=>{
+    if(down&&!leftDown)trackingStarted=Date.now();
+    leftDown=down;
+    if(!down){trackingBlocked=false;previousCursor=null;sendTracking(false);}
+  },onUnavailable:error=>{mouseInputError=String(error?.message||error);leftDown=false;suppressTracking();pet?.webContents.send('desktop-event',{type:'mouse-input-unavailable',message:mouseInputError});}});
+  trackingTimer=setInterval(updateTracking,32);
+}
+function raiseTools() {
+  // Reassert the native topmost style after setShape, then keep controls above
+  // the protected pet surface without focusing them during every drag/resize.
+  for (const win of [chat, toggle]) if (win && !win.isDestroyed() && win.isVisible()) {
+    if (!win.isAlwaysOnTop()) win.setAlwaysOnTop(true,'screen-saver');
+    win.moveTop();
+  }
+}
+function scheduleToggleShape() {
+  if(toggleShapeTimer)return;
+  toggleShapeTimer=setTimeout(()=>{toggleShapeTimer=undefined;updateInputShape({duringToggle:true});},48);
+  toggleShapeTimer.unref?.();
+}
+function updateInputShape(options) {
+  if(toggleGesture&&!options?.duringToggle){scheduleToggleShape();return;}
+  if (!pet || pet.isDestroyed()) return;
+  const passthrough = config.clickThrough === true && !dragMode && !pointerLocked;
+  const [width,height] = pet.getContentSize();
+  const origin=pet.getContentBounds();
+  const exclusions=[toggle,chat].filter(win=>win&&!win.isDestroyed()&&win.isVisible()).map(win=>{
+    const bounds=win.getBounds();return{x:bounds.x-origin.x,y:bounds.y-origin.y,width:bounds.width,height:bounds.height};
+  });
+  const regions=fullBodyRegion?[fullBodyRegion,...inputRegions.slice(0,7)]:inputRegions;
+  const rects=buildInputShape({regions,width,height,fullWindow:pointerLocked,exclusions,padding:18*Math.max(1,config.petScale||1),fallbackRegions:geometrySeen?[]:[referenceBody(petScaleState())]});
+  // [] means "remove the native shape", not an empty hit area. If controls
+  // cover the whole pet, ignore input instead of accidentally protecting them.
+  pet.setIgnoreMouseEvents(passthrough || rects.length===0, {forward:true});
+  const key=JSON.stringify(rects);
+  const changed=key!==shapeKey;
+  if (changed) { try { pet.setShape(rects); shapeKey=key;pet.setAlwaysOnTop(true,'screen-saver'); } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
+  if(!toggleGesture||changed)raiseTools();
+}
+
+function saveConfig() {
+  if (pet && !pet.isDestroyed()) {
+    config.petBounds = pet.getBounds();
+    if(validRect(fullBodyRegion)&&config.petPosition)config.petFootprint={...fullBodyRegion,x:fullBodyRegion.x+config.petBounds.x-config.petPosition.x,y:fullBodyRegion.y+config.petBounds.y-config.petPosition.y,scale:config.petScale,modelRoot:config.modelRoot||null};
+  }
+  fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+}
+function petScaleState() {
+  const state=createPetPlacement({area:pet&&!pet.isDestroyed()?pet.getBounds():petWorkArea,scale:config.petScale||1,position:config.petPosition});
+  return {...state,revision:placementRevision,placement:{...state.placement,revision:placementRevision}};
+}
+function broadcastScale() {
+  const state=petScaleState();
+  for(const win of [pet,toggle,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'pet-scale',...state});
+  return state;
+}
+function togglePlacement() {return {manual:!!validPoint(config.togglePosition),bounds:toggle&&!toggle.isDestroyed()?toggle.getBounds():null};}
+function broadcastTogglePlacement() {
+  const placement=togglePlacement();
+  for(const win of [toggle,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'toggle-placement',...placement});
+  return placement;
+}
+function finishToggleDrag(reason='end',id) {
+  if(!toggleGesture||id&&toggleGesture.id!==id){
+    if(lastToggleDrag&&(!id||lastToggleDrag.id===id))return lastToggleDrag;
+    return {...togglePlacement(),id,moved:false,cancelled:true};
+  }
+  const gesture=toggleGesture,result=gesture.session.stop(reason);
+  toggleGesture=null;suppressTracking();clearTimeout(toggleShapeTimer);toggleShapeTimer=undefined;
+  layoutTools();
+  if(result.moved){const bounds=toggle.getBounds();config.togglePosition={x:bounds.x,y:bounds.y};saveConfig();}
+  lastToggleDrag={...broadcastTogglePlacement(),id:gesture.id,moved:result.moved,cancelled:!['end','released'].includes(reason)};
+  if(toggle&&!toggle.isDestroyed())toggle.webContents.send('desktop-event',{type:'toggle-drag-end',id:gesture.id,moved:result.moved,cancelled:lastToggleDrag.cancelled});
+  return lastToggleDrag;
+}
+function followToggle() {if(toggleGesture)finishToggleDrag('cancel');delete config.togglePosition;layoutTools();saveConfig();return broadcastTogglePlacement();}
+function dragToggle(data) {
+  if(!data||!['start','move','end'].includes(data.phase))throw new Error('悬浮球拖动阶段无效');
+  if(data.id!==undefined&&(typeof data.id!=='string'||data.id.length>100))throw new Error('悬浮球拖动标识无效');
+  if(data.phase==='end')return finishToggleDrag(data.cancelled?'cancel':'end',data.id);
+  if(!validPoint(data))throw new Error('悬浮球坐标无效');
+  if(data.phase==='start'){
+    if(toggleGesture)finishToggleDrag('superseded');
+    const id=data.id||`legacy-${++toggleDragSequence}`;
+    const gesture={id,session:null};toggleGesture=gesture;
+    gesture.session=createToggleDragSession({start:{x:data.x,y:data.y},bounds:toggle.getBounds(),
+      getCursor:()=>screen.getCursorScreenPoint(),isPressed:()=>leftDown,
+      onMove:(next,state)=>{
+        if(toggleGesture!==gesture||toggle.isDestroyed())return;
+        const bounds=constrainToolBounds(next,screen.getAllDisplays().map(display=>display.workArea));
+        config.togglePosition={x:bounds.x,y:bounds.y};
+        const previous=toggle.getBounds();
+        if(previous.x!==bounds.x||previous.y!==bounds.y)toggle.setBounds(bounds);
+        if(!gesture.announced){gesture.announced=true;toggle.webContents.send('desktop-event',{type:'toggle-drag-state',id,moved:true,native:state.native});}
+        scheduleToggleShape();
+      },onRelease:()=>finishToggleDrag('released',id),onError:()=>finishToggleDrag('cancel',id)});
+    suppressTracking();return togglePlacement();
+  }
+  if(!toggleGesture){if(data.id&&lastToggleDrag?.id===data.id)return lastToggleDrag;throw new Error('悬浮球尚未开始拖动');}
+  if(data.id&&toggleGesture.id!==data.id)return {...togglePlacement(),id:data.id,cancelled:true};
+  const state=toggleGesture.session.move(data);
+  return {...togglePlacement(),...state};
+}
+function resizePet(data) {
+  const current=petScaleState();
+  const scale=typeof data==='number'?data:typeof data?.factor==='number'?current.scale*Math.max(.5,Math.min(2,data.factor)):data?.scale;
+  if(!Number.isFinite(scale)||typeof data?.factor==='number'&&(!Number.isFinite(data.factor)||data.factor<=0))throw new Error('缩放比例无效');
+  const next=computePetZoom({bounds:current.bounds,area:petWorkArea,scale,currentScale:current.scale,position:current.position,anchor:data?.anchor,fullBody:fullBodyRegion});
+  return commitPlacement(next);
+}
+function commitPlacement(next) {
+  const before=petScaleState(),oldRegions=inputRegions;
+  const oldBody=fullBodyRegion||referenceBody(before);
+  config.petScale=next.scale;config.petPosition=next.position;config.petLayoutVersion=2;delete config.petView;
+  placementRevision++;
+  resizingPet=true;
+  try {if(JSON.stringify(pet.getBounds())!==JSON.stringify(next.bounds))pet.setBounds(next.bounds);}finally{resizingPet=false;}
+  const after=petScaleState();
+  toolAnchor.predict(before,after);
+  fullBodyRegion=transformRegion(oldBody,before,after);
+  bodyRegion=clipRegion(fullBodyRegion,after.bounds.width,after.bounds.height);
+  // The unclipped old body includes limbs/head outside the screen at 4x. Its
+  // affine prediction prevents the previous small native shape cutting the
+  // first resized frame. The next renderer revision replaces this prediction.
+  inputRegions=oldRegions.map(rect=>transformRegion(rect,before,after)).slice(0,8);
+  geometrySeen=false;
+  layoutTools();
+  clearTimeout(scaleSaveTimer);scaleSaveTimer=setTimeout(saveConfig,200);scaleSaveTimer.unref?.();
+  return broadcastScale();
+}
+function layoutTools() {
+  if (!pet || pet.isDestroyed()) return;
+  if(toggleGesture){scheduleToggleShape();return;}
+  const p = pet.getBounds(),state=petScaleState();
+  const local=toolAnchor.body||bodyRegion||clipRegion(referenceBody(state),p.width,p.height)||{x:p.width-100,y:p.height-100,width:70,height:70};
+  const tools=layoutToolBounds({...local,x:local.x+p.x,y:local.y+p.y},petWorkArea);
+  if (toggle && !toggle.isDestroyed()) {
+    if(!toggleGesture){
+      const bounds=validPoint(config.togglePosition)?constrainToolBounds({...tools.toggle,x:config.togglePosition.x,y:config.togglePosition.y},screen.getAllDisplays().map(display=>display.workArea)):tools.toggle;
+      if(validPoint(config.togglePosition))config.togglePosition={x:bounds.x,y:bounds.y};
+      toggle.setBounds(bounds);
+    }
+    if(validPoint(config.togglePosition)){
+      const bounds=toggle.getBounds(),area=screen.getDisplayMatching(bounds).workArea;
+      tools.chat=layoutToolBounds(bounds,area).chat;
+    }
+  }
+  if (chat && !chat.isDestroyed() && !(chat.isVisible() && chat.isFocused())) {
+    chat.setBounds(tools.chat);
+  }
+  updateInputShape();
+}
+function showChat() { if(chat.isVisible()){chat.hide();return;} layoutTools();chat.show();raiseTools();chat.focus();chat.webContents.send('desktop-event',{type:'focus-input'}); }
+function makeWindow(role, options) {
+  const win = new BrowserWindow({show:false,frame:false,backgroundColor:'#00000000',hasShadow:false, ...options,
+    icon:path.join(ROOT,'dist','icons','app.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,autoplayPolicy:'no-user-gesture-required',backgroundThrottling:role!=='pet'}});
+  roles.set(win.webContents.id,role);
+  const windowTitle=role==='pet'?'大肥鱼 · 桌宠':role==='toggle'?'大肥鱼 · 聊天开关':'大肥鱼 · 便携聊天';
+  win.setTitle(windowTitle);win.on('page-title-updated',event=>event.preventDefault());
+  win.webContents.setWindowOpenHandler(({url})=>{openSafe(url);return{action:'deny'};});
+  win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(service.url+'/')){event.preventDefault();openSafe(url);}});
+  win.webContents.on('console-message',event=>{if(process.env.COMPANION_DEBUG) console.log(`[${role}] ${event.message}`);});
+  win.webContents.on('render-process-gone',(_event,details)=>console.error(`${role} renderer stopped: ${details.reason}`));
+  win.loadURL(`${service.url}/?view=${role}`);
+  return win;
+}
+function openSafe(url) { try{ const u=new URL(String(url)); if(['https:','http:'].includes(u.protocol))shell.openExternal(u.href); }catch{} }
+function icon() {
+  const portrait=nativeImage.createFromPath(path.join(ROOT,'dist','icons','app-avatar.png'));
+  if(!portrait.isEmpty())return portrait.resize({width:32,height:32});
+  const size=32, raw=Buffer.alloc((size*4+1)*size);
+  for(let y=0;y<size;y++){for(let x=0;x<size;x++){const p=y*(size*4+1)+1+x*4;const inside=(x-15.5)**2+(y-15.5)**2<225;raw[p]=53;raw[p+1]=130;raw[p+2]=246;raw[p+3]=inside?255:0;if(inside&&((x>7&&x<12&&y>8&&y<23)||(x>10&&x<23&&(y===9||y===10||y===21||y===22))||(x>20&&x<24&&y>10&&y<22))){raw[p]=239;raw[p+1]=248;raw[p+2]=255;}}}
+  function chunk(type,data){const t=Buffer.from(type),len=Buffer.alloc(4),crc=Buffer.alloc(4);len.writeUInt32BE(data.length);let c=0xffffffff;for(const b of Buffer.concat([t,data])){c^=b;for(let k=0;k<8;k++)c=(c>>>1)^((c&1)?0xedb88320:0);}crc.writeUInt32BE((c^0xffffffff)>>>0);return Buffer.concat([len,t,data,crc]);}
+  const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(size);ihdr.writeUInt32BE(size,4);ihdr[8]=8;ihdr[9]=6;
+  return nativeImage.createFromBuffer(Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]));
+}
+function setDragMode(enabled) {dragMode=enabled;suppressTracking();pointerLocked=false;updateInputShape();pet.setFocusable(enabled);pet.webContents.send('desktop-event',{type:'drag-mode',enabled});}
+function resetPosition(){const display=screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement({},petWorkArea));saveConfig();}
+function registerKeys(){
+  const bindings=[
+    ['CommandOrControl+Alt+Space',()=>showChat()],
+    ['CommandOrControl+Alt+Backspace',()=>service.dispatch({type:'stop'})],
+    ['CommandOrControl+Alt+1',()=>service.dispatch({type:'perform',intent:'agree',emotion:'happy',intensity:.85,durationMs:3600})],
+    ['CommandOrControl+Alt+2',()=>service.dispatch({type:'perform',intent:'explain',gesture:'pointer',emotion:'happy',intensity:.85,durationMs:6500})],
+    ['CommandOrControl+Alt+3',()=>service.dispatch({type:'perform',intent:'shy',emotion:'shy',intensity:.85,durationMs:5500})],
+    ['CommandOrControl+Alt+4',()=>service.dispatch({type:'perform',intent:'think',emotion:'puzzled',gesture:'pointer',intensity:.65,durationMs:6000})],
+    ['CommandOrControl+Alt+5',()=>service.dispatch({type:'perform',intent:'cuddle',emotion:'happy',intensity:.65,durationMs:4200})],
+    ['CommandOrControl+Alt+6',()=>service.dispatch({type:'perform',intent:'idea',emotion:'happy',gesture:'pointer',intensity:.7,durationMs:1800})],
+    ['CommandOrControl+Alt+0',()=>service.dispatch({type:'reset'})],
+  ];
+  for(const [key,fn] of bindings)if(!globalShortcut.register(key,fn))failures.push(key);
+}
+
+if(!app.requestSingleInstanceLock())app.quit();
+else {
+  app.on('second-instance',()=>{if(chat){chat.show();chat.focus();}});
+  app.whenReady().then(async()=>{
+    dataDir=app.getPath('userData');fs.mkdirSync(dataDir,{recursive:true});configFile=path.join(dataDir,'desktop.json');
+    try{config=JSON.parse(fs.readFileSync(configFile,'utf8'));}catch{}
+    ({sanitizeModelTuning}=await import(pathToFileURL(path.join(ROOT,'src/shared/model-tuning.mjs')).href));
+    config.modelTuning=sanitizeModelTuning(config.modelTuning);
+    const {createService}=await import(pathToFileURL(path.join(ROOT,'server/index.mjs')).href);
+    service=await createService({port:Number(process.env.COMPANION_PORT)||39181,modelRoot:config.modelRoot||DEFAULT_MODEL,dataDir,staticRoot:path.join(ROOT,'dist'),
+      encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Windows凭据加密不可用，暂时无法保存密钥');return safeStorage.encryptString(value);},
+      decrypt:value=>safeStorage.decryptString(value)});
+    const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();
+    petWorkArea={...display.workArea};config.petDisplayId=display.id;
+    const initialZoom=restorePetPlacement(config,petWorkArea);
+    config.petScale=initialZoom.scale;config.petPosition=initialZoom.position;config.petLayoutVersion=2;delete config.petView;
+    pet=makeWindow('pet',{...initialZoom.bounds,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
+    toggle=makeWindow('toggle',{width:58,height:58,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
+    chat=makeWindow('chat',{width:420,height:560,transparent:false,backgroundColor:'#f7f9fc',alwaysOnTop:true,skipTaskbar:true,resizable:false});
+    updateInputShape();
+    pet.webContents.on('did-start-loading',()=>{suppressTracking();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
+    pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
+    pet.on('hide',()=>{suppressTracking();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'input-cancel'});});
+    pet.once('ready-to-show',()=>{pet.showInactive();pet.setAlwaysOnTop(true,'screen-saver');layoutTools();broadcastScale();});
+    toggle.once('ready-to-show',()=>{layoutTools();toggle.showInactive();toggle.setAlwaysOnTop(true,'screen-saver');});
+    toggle.webContents.on('did-start-loading',()=>{if(toggleGesture)finishToggleDrag('cancel');});
+    toggle.webContents.on('render-process-gone',()=>{if(toggleGesture)finishToggleDrag('cancel');});
+    toggle.on('hide',()=>{if(toggleGesture)finishToggleDrag('cancel');});
+    for(const win of [toggle,chat]){
+      win.once('ready-to-show',()=>{win.setAlwaysOnTop(true,'screen-saver');updateInputShape();});
+      for(const name of ['show','hide','move','resize'])win.on(name,updateInputShape);
+    }
+    pet.on('show',()=>{pet.setAlwaysOnTop(true,'screen-saver');updateInputShape();});
+    chat.on('close',event=>{if(!quitting){event.preventDefault();chat.hide();}});
+    chat.on('blur',()=>{if(!quitting)layoutTools();});
+    pet.on('move',()=>{layoutTools();if(!resizingPet&&Date.now()-lastSaved>500){lastSaved=Date.now();saveConfig();}});
+    pet.on('close',event=>{if(!quitting){event.preventDefault();pet.hide();}});
+    const refreshDisplay=()=>{const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement(config,petWorkArea));};
+    screen.on('display-metrics-changed',refreshDisplay);screen.on('display-removed',refreshDisplay);
+    tray=new Tray(icon());tray.setToolTip('大肥鱼 · DeepSeek-chan');
+    tray.setContextMenu(Menu.buildFromTemplate([{label:'打开聊天   Ctrl+Alt+Space',click:showChat},{label:'显示桌宠',click:()=>pet.showInactive()},{label:'移动桌宠',click:()=>setDragMode(!dragMode)},{label:'恢复位置',click:resetPosition},{label:'悬浮球跟随桌宠',click:followToggle},{label:'停止说话和动作',click:()=>service.dispatch({type:'stop'})},{type:'separator'},{label:'退出大肥鱼',click:()=>app.quit()}]));
+    tray.on('double-click',showChat);registerKeys();
+    initializeMouseTracking();
+    if(process.env.COMPANION_SHOW_CHAT==='1')chat.once('ready-to-show',()=>chat.show());
+  }).catch(error=>{console.error(error);dialog.showErrorBox('大肥鱼启动失败',String(error.message||error));app.quit();});
+}
+ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,modelTuning:config.modelTuning};});
+ipcMain.handle('window-control',async(event,action,data)=>{
+  if(!roles.has(event.sender.id))throw new Error('未知窗口');
+  switch(action){
+    case 'toggle-chat':showChat();break;
+    case 'toggle-drag':if(roles.get(event.sender.id)!=='toggle')throw new Error('仅悬浮球可以移动自身');return dragToggle(data);
+    case 'toggle-follow':return followToggle();
+    case 'hide-chat':case 'minimize':chat.hide();break;
+    case 'hide-pet':pet.hide();break;
+    case 'show-pet':pet.showInactive();break;
+    case 'drag-mode':setDragMode(typeof data==='boolean'?data:!dragMode);return dragMode;
+    case 'pet-hit-regions':{
+      if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以更新命中区域');
+      const legacy=Array.isArray(data);if(!legacy&&data?.revision!==placementRevision)return{accepted:false,revision:placementRevision};
+      inputRegions=(legacy?data:Array.isArray(data?.regions)?data.regions:[]).filter(validRect).slice(0,8);
+      const body=legacy?inputRegions[0]:data.body;
+      fullBodyRegion=validRect(data?.fullBody)?data.fullBody:validRect(body)?body:null;
+      const bounds=pet.getBounds();bodyRegion=validRect(body)?clipRegion(body,bounds.width,bounds.height):null;geometrySeen=true;
+      toolAnchor.update(bodyRegion,placementRevision);
+      layoutTools();return{accepted:true,revision:placementRevision};
+    }
+    case 'pet-pointer-lock':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以捕获指针');pointerLocked=data===true;updateInputShape();break;
+    case 'pet-input-mode':config.clickThrough=data===true;saveConfig();updateInputShape();pet.webContents.send('desktop-event',{type:'input-mode',clickThrough:config.clickThrough});return config.clickThrough;
+    case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
+    case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
+    case 'basin-enabled':config.basinEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'basin-enabled',enabled:config.basinEnabled});return config.basinEnabled;
+    case 'model-tuning':config.modelTuning=sanitizeModelTuning(data,config.modelTuning);saveConfig();for(const win of [pet,chat,toggle])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'model-tuning',tuning:config.modelTuning});return config.modelTuning;
+    case 'chest-reaction':if(![1,2,3,4].includes(data))throw new Error('点击反应不存在');if(pet&&!pet.isDestroyed())pet.webContents.send('desktop-event',{type:'chest-preview',stage:data});return true;
+    case 'suspend-tracking':if(roles.get(event.sender.id)==='pet')suppressTracking();break;
+    case 'move-pet':{if(data&&Number.isFinite(data.dx)&&Number.isFinite(data.dy)){const current=petScaleState();const footprint=fullBodyRegion?{...fullBodyRegion,x:fullBodyRegion.x+current.bounds.x-current.position.x,y:fullBodyRegion.y+current.bounds.y-current.position.y}:undefined;const position=constrainPosition({x:current.position.x+Math.max(-2000,Math.min(2000,data.dx)),y:current.position.y+Math.max(-2000,Math.min(2000,data.dy))},petWorkArea,current.scale,footprint);return commitPlacement(createPetPlacement({area:petWorkArea,scale:current.scale,position}));}break;}
+    case 'resize-pet':{if(data&&typeof data==='object'&&'factor'in data){if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以使用滚轮缩放');if(!dragMode)return petScaleState();}return resizePet(data);}
+    case 'choose-model':{const result=await dialog.showOpenDialog(chat,{title:'选择包含 .model3.json 的模型文件夹',properties:['openDirectory']});if(result.canceled)return null;const folder=result.filePaths[0];if(!fs.readdirSync(folder).some(f=>f.endsWith('.model3.json')))throw new Error('这个文件夹中没有 .model3.json');config.modelRoot=folder;fullBodyRegion=null;delete config.petFootprint;saveConfig();if(service.setModelRoot)await service.setModelRoot(folder);else {app.relaunch();app.quit();}pet.webContents.reload();return folder;}
+    case 'open-extension':await shell.openPath(path.join(ROOT,'extension'));break;
+    case 'open-url':openSafe(data);break;
+    case 'copy-pairing':clipboard.writeText(service.token);return true;
+    case 'reset-position':resetPosition();break;
+    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
+    case 'quit':app.quit();break;
+    default:throw new Error('不支持的操作');
+  }
+  return true;
+});
+app.on('before-quit',()=>{quitting=true;toggleGesture?.session.stop('quit');toggleGesture=null;clearTimeout(toggleShapeTimer);clearTimeout(scaleSaveTimer);clearInterval(trackingTimer);mouseInput?.stop();try{saveConfig();}catch{};globalShortcut.unregisterAll();service?.close();});
+app.on('window-all-closed',()=>{if(quitting)app.quit();});

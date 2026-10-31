@@ -1,0 +1,22 @@
+# Replace the plugin's absolute path with your checkout path.
+# Set L2D_BRIDGE_TOKEN in the DSH process environment; never commit a real token.
+- insert:
+    - id: live2d-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: live2d
+        transport: streamable-http
+        url: http://127.0.0.1:39181/mcp
+        headers:
+          Authorization: !!js '`Bearer ${process.env.L2D_BRIDGE_TOKEN}`'
+    - id: live2d-state-bridge
+      name: 'C:/path/to/deepseek-chan-companion/integrations/dsh/live2d-bridge.mjs'
+      config:
+        baseUrl: http://127.0.0.1:39181
+        chat: true
+        # Optional: use a specific existing companion session instead of creating one.
+        # chatSessionId: your-companion-session-id
+        # Exact names of trusted, installed read-only web tools. Empty means no web search.
+        searchTools: []
+        # Optional: restrict the shared pet to one DSH session.
+        # sessionId: your-session-id
