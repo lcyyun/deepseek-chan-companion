@@ -103,6 +103,16 @@ test('explicit stop synchronously releases a press without reporting a failure',
   await nextTurn(); assert.equal(failures.length, 0);
 });
 
+test('fresh held samples reach consumers without duplicating button edges or fabricating a release',windows,async t=>{
+  const samples=[];
+  const {controller,child,changes}=await wrapperFixture(t,{onSample:sample=>samples.push(sample)});
+  child.message({type:'heartbeat',button:'left',down:true,seq:1});
+  child.message({type:'heartbeat',button:'left',down:true,seq:2});
+  assert.deepEqual(changes,[false,true]);
+  assert.deepEqual(samples,[{down:true,seq:0},{down:true,seq:1},{down:true,seq:2}]);
+  controller.stop();assert.deepEqual(changes,[false,true,false]);assert.equal(samples.length,3,'shutdown is cancellation, not a physical up sample');
+});
+
 test('heartbeat loss releases a held button and reports unavailable once', windows, async t => {
   const { changes, failures, failure } = await wrapperFixture(t);
   assert.equal((await deadline(failure)).code, 'MOUSE_HEARTBEAT_TIMEOUT');

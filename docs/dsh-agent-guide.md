@@ -1,6 +1,6 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-适用于本仓库当前 0.10.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。
+适用于本仓库当前 0.10.1 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。
 
 ## 1. 先确定你使用哪条通路
 

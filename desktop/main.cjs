@@ -6,6 +6,7 @@ const zlib = require('node:zlib');
 const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, validRect } = require('./pet-input.cjs');
 const { startMouseInput } = require('./mouse-input.cjs');
 const { createToggleDragSession } = require('./toggle-drag.cjs');
+const { createPetPointerSession } = require('./pet-pointer-session.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
 app.setName('大肥鱼 · DeepSeek-chan');
@@ -25,6 +26,14 @@ const validPoint=point=>point&&['x','y'].every(key=>Number.isFinite(point[key])&
 let placementRevision = 0, geometrySeen = false, bodyRegion = null, fullBodyRegion = null, petWorkArea;
 const toolAnchor=createToolAnchor();
 let mouseInput, trackingTimer, leftDown=false, trackingBlocked=false, trackingStarted=0, trackingSent=false, previousCursor=null, mouseInputError='';
+const petPointer=createPetPointerSession({
+  onChange:state=>{pointerLocked=state.locked;updateInputShape({duringToggle:true});},
+  onRelease:({id})=>{
+    if(!pet||pet.isDestroyed())return;
+    try{const point=screen.getCursorScreenPoint();pet.webContents.send('desktop-event',{type:'pet-pointer-release',id,x:point.x,y:point.y});}
+    catch{pet.webContents.send('desktop-event',{type:'input-cancel'});}
+  },
+});
 function sendTracking(active, extra={}) {
   if (pet && !pet.isDestroyed()) pet.webContents.send('desktop-event',{type:'pointer-tracking',active,...extra});
   trackingSent=active;
@@ -44,7 +53,7 @@ function initializeMouseTracking() {
     if(down&&!leftDown)trackingStarted=Date.now();
     leftDown=down;
     if(!down){trackingBlocked=false;previousCursor=null;sendTracking(false);}
-  },onUnavailable:error=>{mouseInputError=String(error?.message||error);leftDown=false;suppressTracking();pet?.webContents.send('desktop-event',{type:'mouse-input-unavailable',message:mouseInputError});}});
+  },onSample:sample=>petPointer.sample(sample),onUnavailable:error=>{mouseInputError=String(error?.message||error);leftDown=false;suppressTracking();petPointer.clear();pet?.webContents.send('desktop-event',{type:'input-cancel'});pet?.webContents.send('desktop-event',{type:'mouse-input-unavailable',message:mouseInputError});}});
   trackingTimer=setInterval(updateTracking,32);
 }
 function raiseTools() {
@@ -216,7 +225,7 @@ function icon() {
   const ihdr=Buffer.alloc(13);ihdr.writeUInt32BE(size);ihdr.writeUInt32BE(size,4);ihdr[8]=8;ihdr[9]=6;
   return nativeImage.createFromBuffer(Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]));
 }
-function setDragMode(enabled) {dragMode=enabled;suppressTracking();pointerLocked=false;updateInputShape();pet.setFocusable(enabled);pet.webContents.send('desktop-event',{type:'drag-mode',enabled});}
+function setDragMode(enabled) {dragMode=enabled;suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'drag-mode',enabled});}
 function resetPosition(){const display=screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement({},petWorkArea));saveConfig();}
 function registerKeys(){
   const bindings=[
@@ -249,13 +258,16 @@ else {
     petWorkArea={...display.workArea};config.petDisplayId=display.id;
     const initialZoom=restorePetPlacement(config,petWorkArea);
     config.petScale=initialZoom.scale;config.petPosition=initialZoom.position;config.petLayoutVersion=2;delete config.petView;
-    pet=makeWindow('pet',{...initialZoom.bounds,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
+    // Windows/Chromium can discard mouse-down on an inactive non-focusable
+    // TYPE_WINDOW. Show without activating; let an actual pet click activate it.
+    pet=makeWindow('pet',{...initialZoom.bounds,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:true});
     toggle=makeWindow('toggle',{width:58,height:58,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
     chat=makeWindow('chat',{width:420,height:560,transparent:false,backgroundColor:'#f7f9fc',alwaysOnTop:true,skipTaskbar:true,resizable:false});
     updateInputShape();
-    pet.webContents.on('did-start-loading',()=>{suppressTracking();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
+    pet.webContents.on('did-start-loading',()=>{suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
+    pet.webContents.on('render-process-gone',()=>{petPointer.clear();pointerLocked=false;updateInputShape();});
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
-    pet.on('hide',()=>{suppressTracking();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'input-cancel'});});
+    pet.on('hide',()=>{suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'input-cancel'});});
     pet.once('ready-to-show',()=>{pet.showInactive();pet.setAlwaysOnTop(true,'screen-saver');layoutTools();broadcastScale();});
     toggle.once('ready-to-show',()=>{layoutTools();toggle.showInactive();toggle.setAlwaysOnTop(true,'screen-saver');});
     toggle.webContents.on('did-start-loading',()=>{if(toggleGesture)finishToggleDrag('cancel');});
@@ -265,7 +277,9 @@ else {
       win.once('ready-to-show',()=>{win.setAlwaysOnTop(true,'screen-saver');updateInputShape();});
       for(const name of ['show','hide','move','resize'])win.on(name,updateInputShape);
     }
-    pet.on('show',()=>{pet.setAlwaysOnTop(true,'screen-saver');updateInputShape();});
+    pet.on('show',()=>{
+      pet.setAlwaysOnTop(true,'screen-saver');shapeKey='';updateInputShape();
+    });
     chat.on('close',event=>{if(!quitting){event.preventDefault();chat.hide();}});
     chat.on('blur',()=>{if(!quitting)layoutTools();});
     pet.on('move',()=>{layoutTools();if(!resizingPet&&Date.now()-lastSaved>500){lastSaved=Date.now();saveConfig();}});
@@ -300,8 +314,8 @@ ipcMain.handle('window-control',async(event,action,data)=>{
       toolAnchor.update(bodyRegion,placementRevision);
       layoutTools();return{accepted:true,revision:placementRevision};
     }
-    case 'pet-pointer-lock':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以捕获指针');pointerLocked=data===true;updateInputShape();break;
-    case 'pet-input-mode':config.clickThrough=data===true;saveConfig();updateInputShape();pet.webContents.send('desktop-event',{type:'input-mode',clickThrough:config.clickThrough});return config.clickThrough;
+    case 'pet-pointer-lock':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以捕获指针');return petPointer.control(data);
+    case 'pet-input-mode':petPointer.clear();config.clickThrough=data===true;saveConfig();updateInputShape();pet.webContents.send('desktop-event',{type:'input-mode',clickThrough:config.clickThrough});return config.clickThrough;
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
     case 'basin-enabled':config.basinEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'basin-enabled',enabled:config.basinEnabled});return config.basinEnabled;
@@ -315,11 +329,11 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'open-url':openSafe(data);break;
     case 'copy-pairing':clipboard.writeText(service.token);return true;
     case 'reset-position':resetPosition();break;
-    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
+    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
     case 'quit':app.quit();break;
     default:throw new Error('不支持的操作');
   }
   return true;
 });
-app.on('before-quit',()=>{quitting=true;toggleGesture?.session.stop('quit');toggleGesture=null;clearTimeout(toggleShapeTimer);clearTimeout(scaleSaveTimer);clearInterval(trackingTimer);mouseInput?.stop();try{saveConfig();}catch{};globalShortcut.unregisterAll();service?.close();});
+app.on('before-quit',()=>{quitting=true;petPointer.clear();toggleGesture?.session.stop('quit');toggleGesture=null;clearTimeout(toggleShapeTimer);clearTimeout(scaleSaveTimer);clearInterval(trackingTimer);mouseInput?.stop();try{saveConfig();}catch{};globalShortcut.unregisterAll();service?.close();});
 app.on('window-all-closed',()=>{if(quitting)app.quit();});

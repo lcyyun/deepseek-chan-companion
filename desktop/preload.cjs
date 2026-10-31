@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('companion', {
   bootstrap: () => ipcRenderer.invoke('bootstrap'),
   control: (action, data) => {
     if (!allowed.has(action)) return Promise.reject(new Error('不支持的窗口操作'));
+    // pet-pointer-lock carries {locked,id}; legacy booleans remain supported by
+    // main. pet-pointer-release events use that id and screen-DIP coordinates.
     return ipcRenderer.invoke('window-control', action, data);
   },
   onEvent: callback => {

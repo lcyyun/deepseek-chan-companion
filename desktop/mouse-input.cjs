@@ -40,7 +40,7 @@ async function ensureMouseInput({ outputPath = EXECUTABLE, sourcePath = SOURCE, 
  * in Electron main, and this module has no service/provider/network connection.
  * stop() is synchronous and immediately releases any previously reported press.
  */
-function startMouseInput({ onButton = () => {}, onUnavailable = () => {}, executable, cacheDir, heartbeatTimeoutMs = 3000, spawnImpl = spawn } = {}) {
+function startMouseInput({ onButton = () => {}, onSample = () => {}, onUnavailable = () => {}, executable, cacheDir, heartbeatTimeoutMs = 3000, spawnImpl = spawn } = {}) {
   let child, timer, killTimer, stopped = false, failed = false, down = false, published = false;
   let buffer = '', lastReceived = 0, lastSequence = -1, resolveReady;
   const timeoutMs = Math.max(250, Number(heartbeatTimeoutMs) || 3000);
@@ -95,7 +95,9 @@ function startMouseInput({ onButton = () => {}, onUnavailable = () => {}, execut
         if (!['button', 'heartbeat'].includes(message.type) || message.button !== 'left' || typeof message.down !== 'boolean' || !Number.isSafeInteger(message.seq) || message.seq <= lastSequence) {
           return unavailable('MOUSE_PROTOCOL_ERROR', '鼠标状态数据异常，已停止全局跟随。');
         }
-        lastSequence = message.seq; lastReceived = Date.now(); notify(message.down); resolveReady(true);
+        lastSequence = message.seq; lastReceived = Date.now(); notify(message.down);
+        try { onSample({down:message.down,seq:message.seq}); } catch { /* The observer must survive a consumer failure. */ }
+        resolveReady(true);
       }
     });
     child.stderr.on('data', () => {});

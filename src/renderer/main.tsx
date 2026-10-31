@@ -67,7 +67,7 @@ function Pet(){
   const presentationWait=useRef<{timer:ReturnType<typeof setTimeout>;resolve:(valid:boolean)=>void}|null>(null);
   const speakingPage=useRef('');
   const faceTimeline=useRef<ReturnType<typeof createExpressionTimeline>|null>(null),faceFrame=useRef<number|undefined>(undefined);
-  const stage=useRef<HTMLElement>(null), pointer=useRef<{id:number;pat:boolean;chest:boolean;x:number;y:number;startX:number;startY:number;startClientX:number;startClientY:number;travel:number;at:number;started:number}|null>(null);
+  const stage=useRef<HTMLElement>(null), pointer=useRef<{id:number;session:string;captured:boolean;pat:boolean;chest:boolean;x:number;y:number;startX:number;startY:number;startClientX:number;startClientY:number;travel:number;at:number;started:number}|null>(null);
   const patEnd=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const petView=useRef({scale:1,offsetX:0,offsetY:0});
   const petPlacement=useRef<any>(null),captionRect=useRef({x:8,y:8,width:320,height:120});
@@ -159,21 +159,33 @@ function Pet(){
   }
   function endPointer(immediate=false,completeTap=false){
     const held=pointer.current;pointer.current=null;clearTimeout(patEnd.current);
-    window.companion?.control('pet-pointer-lock',false).catch(()=>{});
-    if(held&&stage.current?.hasPointerCapture(held.id))stage.current.releasePointerCapture(held.id);
+    if(held)window.companion?.control('pet-pointer-lock',{locked:false,id:held.session}).catch(()=>{});
+    // Chromium can already have removed the pointer while a native window is
+    // changing shape. Capture failures must never leave our gesture latched.
+    try{if(held&&stage.current?.hasPointerCapture(held.id))stage.current.releasePointerCapture(held.id);}catch{}
     const finish=()=>{behavior.current?.setPetting(false);setPetting(false);};
     if(!immediate&&held?.pat){patEnd.current=setTimeout(finish,Math.max(0,850-(performance.now()-held.started)));}else finish();
     if(completeTap&&held?.chest&&!dragEnabled.current&&held.travel<=8&&performance.now()-held.started<=450)behavior.current?.tapChest();
   }
   function pointerDown(e:React.PointerEvent<HTMLElement>){
-    if(e.button!==0||pointer.current)return;
+    if(e.button!==0||e.isPrimary===false)return;
+    // A new primary down proves the previous contact is over, even if Windows
+    // dropped its up/cancel event while the transparent window was moving.
+    if(pointer.current)endPointer(true);
     e.preventDefault();clearTimeout(patEnd.current);const hit=headPoint(e.clientX,e.clientY);
     const knock=!drag&&!!hit?.inside&&basinEnabled.current;
-    pointer.current={id:e.pointerId,pat:!drag&&!!hit?.inside&&!knock,chest:!drag&&!hit?.inside&&chestPoint(e.clientX,e.clientY)&&!behavior.current?.isChestReaction,x:e.screenX,y:e.screenY,startX:e.screenX,startY:e.screenY,startClientX:e.clientX,startClientY:e.clientY,travel:0,at:performance.now(),started:performance.now()};
-    e.currentTarget.setPointerCapture(e.pointerId);window.companion?.control('pet-pointer-lock',true).catch(()=>{});
+    pointer.current={id:e.pointerId,session:crypto.randomUUID(),captured:false,pat:!drag&&!!hit?.inside&&!knock,chest:!drag&&!hit?.inside&&chestPoint(e.clientX,e.clientY)&&!behavior.current?.isChestReaction,x:e.screenX,y:e.screenY,startX:e.screenX,startY:e.screenY,startClientX:e.clientX,startClientY:e.clientY,travel:0,at:performance.now(),started:performance.now()};
+    try{e.currentTarget.setPointerCapture(e.pointerId);pointer.current.captured=true;}catch{}
+    window.companion?.control('pet-pointer-lock',{locked:true,id:pointer.current.session}).catch(()=>{});
     if(pointer.current.pat){behavior.current?.setPetting(true,{x:hit!.x,y:hit!.y,speed:0,newContact:true});setPetting(true);}
     else {behavior.current?.setPetting(false);setPetting(false);}
     if(knock&&behavior.current?.knockBasin())void basinSound.current.play().catch(e=>reportError('铁盆音效未能播放：'+String(e?.message||e)));
+  }
+  function nativePointerRelease(event:any){
+    const held=pointer.current;
+    if(!held||event.id!==held.session)return;
+    if(Number.isFinite(event.x)&&Number.isFinite(event.y))held.travel=Math.max(held.travel,Math.hypot(event.x-held.startX,event.y-held.startY));
+    endPointer(false,true);
   }
   function pointerMove(e:React.PointerEvent<HTMLElement>){
     const hit=headPoint(e.clientX,e.clientY);setHeadHover(!!hit?.inside&&!drag);
@@ -266,7 +278,7 @@ function Pet(){
       }
       if(e.type==='watch'&&!e.watch?.enabled){clearTimeout(autoWatch.current.timer);autoWatch.current.url='';autoWatch.current.lastAt=0;if(speakingPage.current)stop();}
     });
-    const offDesktop=window.companion?.onEvent(e=>{if(e.type==='chest-preview')behavior.current?.previewChestReaction(e.stage);if(e.type==='model-tuning')applyModelTuning(e.tuning);if(e.type==='basin-enabled')applyBasin(e.enabled);if(e.type==='pet-scale')applyPetScale(e);if(e.type==='pointer-tracking')trackPointer(e);if(e.type==='mouse-input-unavailable')reportError('鼠标跟随暂不可用：'+e.message);if(e.type==='drag-mode'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);setDrag(e.enabled);}if(e.type==='input-mode'||e.type==='input-cancel'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}});
+    const offDesktop=window.companion?.onEvent(e=>{if(e.type==='pet-pointer-release')nativePointerRelease(e);if(e.type==='chest-preview')behavior.current?.previewChestReaction(e.stage);if(e.type==='model-tuning')applyModelTuning(e.tuning);if(e.type==='basin-enabled')applyBasin(e.enabled);if(e.type==='pet-scale')applyPetScale(e);if(e.type==='pointer-tracking')trackPointer(e);if(e.type==='mouse-input-unavailable')reportError('鼠标跟随暂不可用：'+e.message);if(e.type==='drag-mode'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);setDrag(e.enabled);}if(e.type==='input-mode'||e.type==='input-cancel'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}});
     applyPetScale((credentials() as any).petScale);applyBasin((credentials() as any).basinEnabled);applyModelTuning((credentials() as any).modelTuning);
     window.companion?.control('diagnostics').then((d:any)=>{setDrag(!!d?.dragMode);applyPetScale(d?.petScale);if(d?.modelTuning)applyModelTuning(d.modelTuning);if(typeof d?.basinEnabled==='boolean')applyBasin(d.basinEnabled);});
     // The main process owns hide/held-button suppression. A renderer-only latch
@@ -296,7 +308,7 @@ function Pet(){
   const captionWidth=Math.min(340,innerWidth-16),captionLeft=Math.max(8,Math.min(innerWidth-captionWidth-8,anchor.x+anchor.width/2-captionWidth/2));
   captionRect.current={x:captionLeft,y:Math.max(8,anchor.y-125),width:captionWidth,height:120};
   const captionStyle={left:captionRect.current.x,top:captionRect.current.y,width:captionWidth};
-  return <main ref={stage} className={'pet-stage '+(drag?'dragging ':'')+(headHover?'head-hover ':'')+(petting?'petting ':'')} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={e=>{if(pointer.current?.id===e.pointerId){pointer.current.travel=Math.max(pointer.current.travel,Math.hypot(e.clientX-pointer.current.startClientX,e.clientY-pointer.current.startClientY));endPointer(false,true);}}} onPointerCancel={e=>{if(pointer.current?.id===e.pointerId)endPointer(true);}} onLostPointerCapture={e=>{if(pointer.current?.id===e.pointerId)endPointer(true);}} onPointerLeave={()=>setHeadHover(false)} onContextMenu={e=>e.preventDefault()}>
+  return <main ref={stage} className={'pet-stage '+(drag?'dragging ':'')+(headHover?'head-hover ':'')+(petting?'petting ':'')} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={e=>{if(pointer.current?.id===e.pointerId){pointer.current.travel=Math.max(pointer.current.travel,Math.hypot(e.clientX-pointer.current.startClientX,e.clientY-pointer.current.startClientY));endPointer(false,true);}}} onPointerCancel={e=>{if(pointer.current?.id===e.pointerId)endPointer(true);}} onLostPointerCapture={e=>{if(pointer.current?.id===e.pointerId&&pointer.current.captured&&!e.currentTarget.hasPointerCapture(e.pointerId))endPointer(true);}} onPointerLeave={()=>setHeadHover(false)} onContextMenu={e=>e.preventDefault()}>
     {guardRects.map((r,i)=><div key={i} className="input-guard" style={{left:r.x-18,top:r.y-18,width:r.width+36,height:r.height+36}}/>)}
     {drag&&modelRegion&&<div className="drag-frame" style={{left:modelRegion.body.x-12,top:modelRegion.body.y-12,width:modelRegion.body.width+24,height:modelRegion.body.height+24}}/>}
     {bubble&&<div className="speech-bubble" style={captionStyle}>{bubble}</div>}

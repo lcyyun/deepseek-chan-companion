@@ -63,7 +63,9 @@ internal static class MouseButtons
                         previous = down;
                         lastHeartbeat = now;
                     }
-                    else if (now - lastHeartbeat >= 1000)
+                    // Fresh held samples let a newly captured DOM gesture
+                    // confirm its own press even when the edge reached main first.
+                    else if (now - lastHeartbeat >= (down ? 32 : 1000))
                     {
                         if (!WriteState("heartbeat", down, sequence++)) break;
                         lastHeartbeat = now;

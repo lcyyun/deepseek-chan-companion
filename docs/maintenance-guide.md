@@ -36,6 +36,7 @@ flowchart LR
 | [desktop/preload.cjs](../desktop/preload.cjs) | `window.companion` 的最小桥接及可调用操作白名单 |
 | [desktop/pet-input.cjs](../desktop/pet-input.cjs) | 纯几何计算：工作区、位置恢复、缩放锚点、原生命中区域、控件避让 |
 | [desktop/toggle-drag.cjs](../desktop/toggle-drag.cjs) | 单次悬浮球拖动的原生光标采样；可注入输入源测试，释放即停止 |
+| [desktop/pet-pointer-session.cjs](../desktop/pet-pointer-session.cjs) | 桌宠接触会话与系统松手兜底；隔离迟到事件，避免旧接触锁住后续点击 |
 | [desktop/profile-migration.cjs](../desktop/profile-migration.cjs) | 品牌更名时复制旧配置和加密状态，不覆盖新目录已有文件 |
 | [desktop/mouse-input.cjs](../desktop/mouse-input.cjs)、[MouseButtons.cs](../desktop/native/MouseButtons.cs) | 物理鼠标左键观察、辅助程序编译、心跳、退出和故障时释放状态 |
 | [server/service.mjs](../server/service.mjs) | 本地 HTTP/WS、配对、模型清单、请求取消、事件广播、网页上下文 |
@@ -211,6 +212,14 @@ node scripts/setup-mouse-input.mjs
 - 全局跟随：主进程采样物理左键与桌面光标，短暂按住后发送局部 DIP 坐标；渲染器按角色尺寸归一化，不能按整个工作区宽高归一化，否则角色会变迟钝。鼠标位置不发送给聊天后端。
 - 悬浮球：用 screen 坐标相对起点移动原生窗口，超过 5 DIP 视为拖动。仅本次捕获期间，主进程在确认真实左键及对应光标位置后每约 16ms 采样，避免移动中的窗口收不到及时 pointermove；保留抓取点偏移，接管后忽略迟到的 renderer 坐标。释放/取消停止采样，前端等待该 session 的 `moved` 结果决定是否打开聊天。原生 shape 更新合并到约 48ms，结束立即同步，避免每条 move 都重排窗口。手动位置独立保存；“悬浮球跟随桌宠”清除手动位置。
 
+Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showInactive()`。不要在退出移动模式时将它改成 `false`。0.10.0 在隐藏/重新显示后，真实鼠标事件只剩 pointer up，没有 pointer down；原生 shape 有效、穿透关闭、缩放为 1，且自动化工具激活窗口后又可暂时恢复。改为可激活窗口后允许用户实际点击时正常激活，不需要在显示时调用 `webContents.focus()`。只做渲染器 `sendInputEvent()` 或主动激活目标的自动点击会漏掉这类问题；验收必须包含普通鼠标的隐藏→显示→点击路径。
+
+对应版本的 [Chromium Windows 消息处理](https://github.com/chromium/chromium/blob/142.0.7444.265/ui/views/win/hwnd_message_handler.cc#L2029)中，不可激活的普通窗口可返回 `MA_NOACTIVATEANDEAT`。这是原生路由层的问题，不能仅用模型命中矩形或表情预览判断是否修复。
+
+触摸输入自 0.10.1 起用独立会话标识关联 `pet-pointer-lock` 与 `pet-pointer-release`。DOM 的 pointer up/cancel 是主要结束路径；系统观察器确认本次实际按下后，提供漏掉松手事件的兜底。捕获或释放指针的异常不能中断行为和清理；新的主指针按下先清理残留接触。旧会话的解锁、松手和失去捕获事件不能结束新的接触。辅助进程不可用、隐藏或进入移动模式都走取消，不把取消解释为一次胸前轻点。
+
+观察器的 `onButton` 仍只报告状态边沿，`onSample` 提供有序新样本；按住期间每约 32ms 发心跳，未按住仍每秒一次。主进程不能拿开始会话前的缓存按下状态，去配对一个迟到的松手。页面自己收到的短点不等待系统确认。
+
 ### 7.4 胸前反应的四阶段契约
 
 反应序列在 `BehaviorController` 中管理，`chest-reaction.mjs` 只采样姿态和表情。实体点击依次播放三轮：4.8 秒的惊讶→慌张→害羞、4.4 秒的气鼓鼓转头、4.4 秒的认真摇头。只有完整播放完一轮才推进阶段；忙碌连点不排队。
@@ -329,6 +338,7 @@ node scripts/setup-mouse-input.mjs
 | 桌面 IPC/UI | `desktop-tuning.test.mjs`、`desktop-toggle.test.mjs`、`expression-menu.test.mjs` | 独立 profile 的真实 Electron/React 事件、持久化及菜单边界；依赖先构建 dist |
 | 几何和辅助进程 | `pet-input.test.mjs`、`mouse-input.test.mjs` | 缩放、命中形状、边界和鼠标观察故障释放 |
 | 悬浮球采样 | `toggle-drag.test.mjs`、`desktop-toggle.test.mjs` | 注入物理源验证无 renderer move 仍跟随、抓取偏移、取消、迟到事件及轻点分流；不冒充系统鼠标实测 |
+| 桌宠触摸恢复 | `pet-pointer.test.mjs`、`pet-pointer-session.test.mjs`、`desktop-pointer.test.mjs` | 生产 React 的三类触摸、捕获异常、丢失松手、旧会话隔离、系统确认时序及主进程隐藏/显示/退出移动模式后的可激活状态 |
 | 音效 | `basin-audio.test.mjs`、`basin-sound.test.mjs` | 重叠上限、取消、静音、音色切换与解码生命周期 |
 | 真实模型/音频 | `live2d-smoke.cjs`、`live2d-actions.cjs`、`chest-reaction-production.cjs` | SDK+模型实渲染、像素/参数、动作转场、触摸和声音；需自行提供模型 |
 | 原生桌面输入 | `native-controls-qa.cjs`、`native-workarea-qa.cjs` | 独立窗口中的系统级命中、遮挡与后层点击；应串行使用鼠标 |

@@ -97,7 +97,7 @@ function differences(first, second, size, rect) {
     if(!nativeInputOnly)return {};
     if(action==='diagnostics')return{dragMode:false,clickThrough:false};
     if(action==='pet-hit-regions'){nativeLog.regions=Array.isArray(data)?data:data.regions;updateNativeShape();}
-    if(action==='pet-pointer-lock'){nativeLog.locked=data===true;nativeLog.events.push({at:Date.now(),kind:'pointer-lock',locked:nativeLog.locked});updateNativeShape();}
+    if(action==='pet-pointer-lock'){nativeLog.locked=data===true||data?.locked===true;nativeLog.events.push({at:Date.now(),kind:'pointer-lock',locked:nativeLog.locked});updateNativeShape();}
     return {};
   });
   await app.whenReady();
