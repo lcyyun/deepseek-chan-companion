@@ -2,6 +2,8 @@
 
 桌宠的语音适合即时交流。回答保留有用结论和关键理由，较长的步骤、解释、背景放在可展开详情中。这里的“短”不是把一篇长回答按字符截断。
 
+本文对应 0.14.0。该版新增动作选择指南，沿用 0.13 的朗读与组合执行顺序；智能体可先读[模型控制快速指南](model-control-quickstart.md)。
+
 ## 当前协议
 
 模型返回结构化 JSON：
@@ -31,6 +33,14 @@
 `bodyAnimation` 可选 `auto`（本地安排）、`none`（本段不安排说话肢体）或 12 个具体动画 ID，完整列表见 [DSH 指南](dsh-agent-guide.md#44-12-组肢体动画)。长解释和选项比较都可用 `talk`，安慰可用 `chest-both`。具体动画自带手型，优先于旧 `gesture` 提示；脸部语气仍由 `emotion/expressionCues` 决定。
 
 `combination` 选择首段开场的完整表情与动作组合，可为 `auto/none` 或 [12 个组合 ID](dsh-agent-guide.md#45-12-个开场组合)。默认只在 `bodyAnimation` 也是 `auto` 或省略时，根据首段的准确意图和兼容情绪选择；不靠文本情绪词猜测，也不默认重返 `think` 长等待。显式组合可以先于显式独立肢体播放，每轮最多一次。整个流程都不为了动作拉长文字。
+
+## 用选择指南表达语气
+
+能力目录中的 `tags` 用于检索，`useWhen/avoidWhen` 用于判断这句话是否适合该表现；它们不加入回复 JSON，也不触发额外调用。`recommendedEmotions/recommendedBody` 是少量备选搭配，组合的搭配指组合后的剩余口播，不能同时派发表情、身体和完整组合来争抢通道。
+
+先写自然、够用的短答，再决定表现。优先熟悉 `agree` 开心点头、`explain` 讲个重点、`shy` 有点害羞、`think` 冥思苦想、`idea` 想到了、`cuddle` 撒娇捧胸；根据赞同、说明、含蓄、思索、新点子或亲昵语境选择，不强制轮换。`think` 仍需显式指定，单纯后台计算继续使用 `thinking` 状态。普通事实可以保持 `neutral`，无需动作的段落用 `bodyAnimation:none, combination:none`。
+
+系统提示采用 `formatPerformanceGuide({includeCatalog:true})` 的紧凑标签、场景与短规则；完整避免场景与推荐搭配仍由能力查询提供。提示信息更清楚不代表应该多写话或多换表情：一条连贯的 `speak`、一两个合适的表情，通常比密集动作更自然。
 
 ## 长度预算
 

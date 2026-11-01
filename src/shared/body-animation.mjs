@@ -81,16 +81,31 @@ export function sampleBodyAnimation(id,progress,intensity=1,options={}) {
   const entrance=options.continuing?1:ease(p*duration/.9);
   const exit=options.hold?1:1-ease((p*duration-duration+.95)/.95);
   let values=sampleFrames(sequence.frames,p,amount);
+  let talkArmOffsets=null;
   if(continuous){
-    const phase=elapsed%3.5, delayed=(elapsed+.0-.18+3.5)%3.5;
+    const phase=elapsed%3.5, delayed=(elapsed-.2+3.5)%3.5;
     const main=pulse(phase,.35,1.45), second=pulse(phase,1.95,.65)*.35;
     const follow=pulse(delayed,.35,1.45)+pulse(delayed,1.95,.65)*.35;
+    const swing=main*Math.sin((phase-.35)/1.45*Math.PI*2);
+    const wristSwing=pulse(delayed,.35,1.45)*Math.sin((delayed-.35)/1.45*Math.PI*2);
     const envelope=entrance*exit*amount;
-    // Two soft beats, then a genuine pause; the wrist trails the upper arm.
+    // The arm traces a small rounded emphasis, followed by wrist and finger.
+    // All offsets rest between phrases and use the inherited speech clock.
     const side=-.18;
-    values={...neutral,headX:side*8*envelope,headY:(1+main*2.4)*envelope,headZ:side*3*envelope,
-      gazeX:side*.42*envelope,gazeY:.04*envelope,bodyX:side*1.2*envelope,bodyY:main*.65*envelope,
+    values={...neutral,headX:(side*8+swing*1.6)*envelope,headY:(1+main*2.4)*envelope,headZ:(side*3+swing*.6)*envelope,
+      gazeX:side*.42*envelope,gazeY:.04*envelope,bodyX:(side*1.2+swing*.3)*envelope,bodyY:main*.65*envelope,
       bodyZ:side*.9*envelope,lean:(-2.8-main*1.6)*envelope,lift:(main+second)*envelope,turn:(follow-.35*main)*envelope};
+    const active=clamp(main+second+follow);
+    talkArmOffsets={
+      Param36:((main+second)*.068+swing*.022)*envelope,
+      Param39:(swing*.05+(follow-.35*main)*.02)*envelope,
+      // Raising farther makes the index disappear into the side hair at 150%.
+      // The second accent lowers slightly, so the arc stays away from the face.
+      Param41:(main*.036-second*.04+wristSwing*.009)*envelope,
+      Param42:(wristSwing*.03+(follow-.35*main)*.013)*envelope,
+      // Rig-checked small bend only; selectors and other hand variants stay fixed.
+      Param43:(-.022-Math.sin((elapsed-.2)*Math.PI*2/3.5)*.03)*active*envelope,
+    };
   }
   if(preset.handSide==='right'&&preset.gesture==='chest'||preset.handSide==='left'&&preset.gesture==='pointer'){
     for(const key of ['headX','headZ','gazeX','bodyX','bodyZ'])values[key]*=-1;
@@ -99,10 +114,9 @@ export function sampleBodyAnimation(id,progress,intensity=1,options={}) {
     for(const key of ['headX','headZ','gazeX','bodyX','bodyZ'])values[key]*=.3;
     values.lean-=entrance*exit*amount;
   }
-  // Only continuous authored inputs: hand selectors and finger deformation are
-  // intentionally untouched. A delayed wrist arc makes the extended finger soft.
-  const armOffsets=sequence.pose==='think'?{Param39:values.lift*.012,Param41:values.lift*.014}
-    :sequence.pose==='idea'?{Param36:values.lift*(continuous?.05:.024),Param39:values.turn*.02,Param41:values.lift*(continuous?.065:.045),Param42:values.turn*.026}
-    :sequence.pose==='chest'?{Param59:values.lift*.016,Param60:values.lift*.032}:{};
+  // Alter continuous authored inputs only, never hand selectors or physics outputs.
+  const armOffsets=talkArmOffsets??(sequence.pose==='think'?{Param39:values.lift*.012,Param41:values.lift*.014}
+    :sequence.pose==='idea'?{Param36:values.lift*.024,Param39:values.turn*.02,Param41:values.lift*.045,Param42:values.turn*.026}
+    :sequence.pose==='chest'?{Param59:values.lift*.016,Param60:values.lift*.032}:{});
   return {...values,gesture:preset.gesture,pose:sequence.pose,handSide:preset.handSide,continuous,armOffsets};
 }

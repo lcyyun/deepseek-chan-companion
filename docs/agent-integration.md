@@ -1,6 +1,6 @@
 # 智能体与语音接入
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。本文对应 0.13.0。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.14.0。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
@@ -9,6 +9,14 @@
 两者连接同一个 `/mcp`，不需要各启动一份角色。工具包括 `avatar_capabilities`、`avatar_state`、`avatar_perform`、`avatar_expression`、`avatar_body`、`avatar_speak`、`avatar_set_state`、`avatar_stop`、`avatar_reset`、`avatar_watch_context`。动作工具立即返回接受状态；桌宠窗口负责实际动画和逐段朗读。
 
 只换表情用 `avatar_expression({emotion:"happy"})`，只做肢体用 `avatar_body({animation:"chest-right"})`；分别传 `{active:false}` 结束对应预览，不停止另一通道或说话。HTTP 使用同字段，另加 `type:"expression"` 或 `type:"body"`。身体动画 ID 以 `bodyAnimations` 能力清单为准。常规 `avatar_speak` 自带肢体编排，不必同时重复发送身体指令。
+
+### 0.14 能力目录中的选择指南
+
+`GET /api/capabilities` 和 `avatar_capabilities({})` 返回同一份选择信息。`expressionPresets[]`、`bodyAnimations[]`、`combinations[]` 每项按原 `id` 增加 `tags`、`useWhen`、`avoidWhen`、`recommendedEmotions`、`recommendedBody`，六个常用组合另有 `displayName`。原来的标题、描述、时长、手型等字段保留。
+
+顶层 `performanceGuide` 的结构为 `{modes, preferredCombinations, quickStart}`，只放模式说明、优先熟悉的组合 ID 与短指南；完整标签留在三个目录项，不复制一遍。`tags` 是稳定英文分类，场景说明是中文；推荐数组是备选 ID，组合的推荐用于开场完成后的独立承接。
+
+这些是读取用元数据，不是新增命令字段、动作参数或调用顺序。传给工具的仍是 `emotion`、`bodyAnimation`、`combination` 等现有字段；不要把 `tags` 或 `displayName` 当 ID 提交。`agree/explain/shy/think/idea/cuddle` 分别对应“开心点头／讲个重点／有点害羞／冥思苦想／想到了／撒娇捧胸”，优先熟悉但不强制播放；`think` 仍不自动选择。对话服务把同源的紧凑指南注入提示词，外部 MCP 调用者则自行读取能力并选择。
 
 ### 说话肢体选择
 

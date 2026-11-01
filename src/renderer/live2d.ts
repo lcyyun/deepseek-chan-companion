@@ -311,8 +311,10 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       if (['Part43', 'Part35', 'Part140', 'Part145'].includes(model.getPartId(i).getString().s)) pupilParts.set(i, []);
       if (model.getPartId(i).getString().s === 'Part56') handParts.add(i);
       if (model.getPartId(i).getString().s === 'Part52') chestArmParts.add(i);
-      if (model.getPartId(i).getString().s === 'Part128') replacedArmParts.add(i);
-      if (model.getPartId(i).getString().s === 'Part129') leftArmParts.add(i);
+      // The puff sleeves are parented to the bodice, not the arm roots. They
+      // still follow each arm's deformation and must travel with its handoff.
+      if (['Part128', 'Part68'].includes(model.getPartId(i).getString().s)) replacedArmParts.add(i);
+      if (['Part129', 'Part94'].includes(model.getPartId(i).getString().s)) leftArmParts.add(i);
       if (model.getPartId(i).getString().s === 'Part54') pointerArmParts.add(i);
       if (model.getPartId(i).getString().s === 'Part80') basinParts.add(i);
       if (['Part86', 'Part88'].includes(model.getPartId(i).getString().s)) chestParts.add(i);

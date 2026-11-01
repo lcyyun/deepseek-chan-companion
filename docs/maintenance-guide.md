@@ -1,6 +1,6 @@
 # 大肥鱼 · 项目维护与代码导读
 
-本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.13.0 实现以 Windows x64 和这份 DeepSeek-chan 模型为目标，版本差异见第 15–17 节。
+本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.14.0 实现以 Windows x64 和这份 DeepSeek-chan 模型为目标，版本差异见第 15–18 节。
 
 ## 1. 先理解四层结构
 
@@ -49,6 +49,7 @@ flowchart LR
 | [src/shared/behavior.mjs](../src/shared/behavior.mjs) | 与 DOM 无关的行为状态机：动作、表情、视线、摸头、敲盆和局部反应 |
 | [src/shared/body-animation.mjs](../src/shared/body-animation.mjs)、[renderer/body-animations.tsx](../src/renderer/body-animations.tsx) | 12 组独立肢体、连续讲话采样、中文目录和预览入口 |
 | [src/shared/speech-combination.mjs](../src/shared/speech-combination.mjs)、[renderer/combination-timeline.ts](../src/renderer/combination-timeline.ts) | 12 个原预设的开场选择，按实际语音时长决定是否播放，并交接独立时间线 |
+| [src/shared/performance-guide.mjs](../src/shared/performance-guide.mjs)、[performance-guide.d.mts](../src/shared/performance-guide.d.mts) | 49 项表情/肢体/组合的选择标签、场景、搭配、常用名称和紧凑指南；不参与计时或参数驱动 |
 | [src/shared/gesture-cues.mjs](../src/shared/gesture-cues.mjs)、[renderer/gesture-timeline.ts](../src/renderer/gesture-timeline.ts) | 由段落意图生成手势节点，并按实际播放进度执行、跨段保持和取消 |
 | [src/shared/behavior.d.mts](../src/shared/behavior.d.mts)、[renderer/behavior.ts](../src/renderer/behavior.ts) | 行为接口类型和渲染端导出；改公开方法时同步维护 |
 | [src/shared/expressions.mjs](../src/shared/expressions.mjs) | 表情目录、中文文案、基础脸部姿态、趣味眼型等参数 |
@@ -311,14 +312,14 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 
 ### 新增表情
 
-1. 在 `expressions.mjs` 增加唯一稳定 ID、中文标题/分组/描述、基础 face 与必要 parameters；同步 `.d.mts`。现有 UI、能力枚举和 override 校验从目录派生，但仍应检查是否有手写文档或测试列表。
+1. 在 `expressions.mjs` 增加唯一稳定 ID、中文标题/分组/描述、基础 face 与必要 parameters；同步 `.d.mts` 和 `performance-guide.mjs` 的同 ID 选择说明。现有 UI、能力枚举和 override 校验从目录派生，但仍应检查是否有手写文档或测试列表。
 2. 普通情绪优先通过脸部语义字段完成。趣味眼型明确标记，保持互斥；不要清空戴盆、眼镜、加载等独立开关。
 3. 在小表情页预览 20 秒，验证全局强度与单项微调即时更新、重置单项/全部不复活旧值。
 4. 运行行为和表情测试，再用真实模型看正面、讲话、摸头、敲盆打断及退出。固定嘴型的趣味表情要在 UI 说明限制。
 
 ### 新增动作或手势
 
-先判断是语义动作还是新增资产。点头/视线可以由上游参数完成；已有手臂动作应使用 manifest 名称调用。新增语义需要同步 `contracts.ts`、`protocol.mjs` 的能力/校验、behavior 动作合成和 UI。新手势必须定义打开、保留末帧、关闭、取消及切到别的手势的所有权；不要只有“打开成功”测试。
+先判断是语义动作还是新增资产。点头/视线可以由上游参数完成；已有手臂动作应使用 manifest 名称调用。新增语义需要同步 `contracts.ts`、`protocol.mjs` 的能力/校验、behavior 动作合成和 UI。新增或移除目录 ID 时同步 `performance-guide.mjs` 及所有推荐引用。新手势必须定义打开、保留末帧、关闭、取消及切到别的手势的所有权；不要只有“打开成功”测试。
 
 若必须做网格特效，把作用限制在明确部件，保留 UV/遮罩/层级，在绘制后 `finally` 还原，并验证不同体态及退出。不要重新修改模型资产来掩盖 runtime 混合错误。
 
@@ -342,6 +343,7 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 | --- | --- | --- |
 | 类型与构建 | `npx tsc --noEmit`、`npm run build` | TS 接口/前端资源可构建，不证明真实画面正确 |
 | 行为与配置 | `behavior.test.mjs`、`model-tuning.test.mjs`、`expression-*.test.mjs` | 状态优先级、取消、渐退、范围和重置 |
+| 选择指南 | `performance-guide.test.mjs` | 25/12/12 目录完整匹配、推荐 ID 有效、常用显示名、不可变元数据和紧凑文本预算；不证明实模姿态正确 |
 | 服务生产边界 | `server.test.mjs`、`production-events.test.mjs` | 真实 HTTP/WS、鉴权、事件、manifest 名称到资源的链路 |
 | 桌面 IPC/UI | `desktop-tuning.test.mjs`、`desktop-toggle.test.mjs`、`expression-menu.test.mjs` | 独立 profile 的真实 Electron/React 事件、持久化及菜单边界；依赖先构建 dist |
 | 几何和辅助进程 | `pet-input.test.mjs`、`mouse-input.test.mjs` | 缩放、命中形状、边界和鼠标观察故障释放 |
@@ -398,7 +400,7 @@ npm run package
 
 ## 14. 当前局限与后续方向
 
-独立预览最初在 0.11 引入，第 15 节保留其历史设计；完整手臂变体和持续讲话见第 16 节，0.13 的开场组合与渲染/音效维护见第 17 节。语义重点目前按文本子句比例映射到真实音频进度，连续肢体使用带停顿的内部节奏，都不是单字级或声学重音对齐。
+独立预览最初在 0.11 引入，第 15 节保留其历史设计；完整手臂变体和持续讲话见第 16 节，0.13 的开场组合与渲染/音效维护见第 17 节，0.14 的智能体选择指南见第 18 节。语义重点目前按文本子句比例映射到真实音频进度，连续肢体使用带停顿的内部节奏，都不是单字级或声学重音对齐。
 
 - 原生输入、系统语音和打包按 Windows 实现；不能把前端可运行等同于 macOS/Linux 桌宠支持。
 - 这份模型的手、眼、盆、胸部物理和命中部件经过专用适配；新增模型应抽出可选的模型 profile，重新校准后再启用这些增强。
@@ -436,7 +438,7 @@ npm run package
 
 相关验证：`tests/gesture-cues.test.mjs`、`tests/gesture-timeline.test.mjs`、`tests/speech-body.test.mjs`、`tests/behavior.test.mjs`，以及独立运行的 `tests/body-production.cjs`。最后一个需要 `L2D_MODEL_ROOT` 指向完整原模型，用隔离服务与隐藏窗口记录真实 Cubism 过程截图，不连接用户正在运行的实例。
 
-## 16. 完整手臂变体与连续讲话（0.13 当前目录）
+## 16. 完整手臂变体与连续讲话（0.13 引入，0.14 沿用目录）
 
 ### 目录、字段与所有权
 
@@ -460,7 +462,7 @@ npm run package
 
 行为层把手型、侧别和撒娇布局一起用于判断是否需要切换。即使都是举指，从左切到右也先走完整关闭，再打开新侧；只有实际开始新动作时才提交新布局。关闭请求 `active:false` 或 `kind:null` 重复到达不能重置释放计时；镜像要覆盖整个作者关闭过程，不能在特殊手型变回普通手的中途消失。绘制后仍在 `finally` 恢复临时数据。
 
-柔缓强调只对原姿势周围的 `Param36/39/41/42` 或 `Param59/60` 叠加有界增量，受手势幅度限制。`Param43` 不拿来尝试任意弯指，避免不自然交叠；手指柔软感主要靠前臂、手腕的相位差和停顿。身体继续使用物理上游输入，由原物理计算头发、衣物等余动。导出模型仍没有可任意摆放的自由骨骼或 IK。
+柔缓强调对原姿势周围的 `Param36/39/41/42` 或 `Param59/60` 叠加有界增量，受手势幅度限制。0.14 仅在 `talk` 中加入经实模校准的小范围 `Param43` 食指微弯；其他手势仍不写这个增量，也不能将它扩展成任意弯指。柔软感同时来自前臂轻晃、腕部相位差和停顿。身体继续使用物理上游输入，由原物理计算头发、衣物等余动。导出模型仍没有可任意摆放的自由骨骼或 IK。
 
 ### 聊天窗定位与验收边界
 
@@ -491,3 +493,23 @@ npm run package
 戴盆时调用 `BasinSound.prepare()`，提前建立 AudioContext、准备当前音色缓冲，把首次设备建立和解码从 pointer-down 路径移走。prepare 不创建发声 source，不主动 resume 挂起设备；音量为 0 或已经销毁时直接返回。后续点击仍由 `play()` 处理真实播放、音量、过期请求和有限余响。预热不能变成戴盆时偷偷敲一次，也不能让旧点击在设备恢复后补播。
 
 测试入口包括 `speech-combination.test.mjs`（选择与兼容性）、`combination-timeline.test.mjs`（真实时长门槛、迟到、暂停和尾段）、`speech-body.test.mjs`（renderer 交接）、行为与音效测试；渲染变更仍单独做真实模型检查。测试证明的边界与最终实际运行结果应分别记录。
+
+## 18. 0.14 智能体动作选择指南
+
+`performance-guide.mjs` 只保存语义说明，不依赖浏览器、模型实例、音频或计时器。它导出按稳定 ID 索引的 `EXPRESSION_GUIDE`、`BODY_ANIMATION_GUIDE`、`COMBINATION_GUIDE`，分别对应 25 种脸、12 组肢体和 12 个组合。每项含英文 `tags`、中文 `useWhen/avoidWhen` 和只引用已支持 ID 的 `recommendedEmotions/recommendedBody`。建议是备选项，组合的建议专指开场后的独立承接。
+
+常用六个组合增加 `displayName`：`agree` 开心点头、`explain` 讲个重点、`shy` 有点害羞、`think` 冥思苦想、`idea` 想到了、`cuddle` 撒娇捧胸。该字段帮助智能体识别用户提到的界面名称，不重命名 API ID，也不把这些动作变成每轮必播。`think` 仍只显式选择。
+
+`server/protocol.mjs` 在构造 `CAPABILITIES` 时把相应说明合并进原三个目录项，保留原来的参数与名称信息。顶层 `performanceGuide` 仅公开 `{modes, preferredCombinations, quickStart}`；不要直接把模块中的三个完整映射再挂一遍，避免每次能力查询重复整份目录。模块级 `PERFORMANCE_GUIDE` 保留映射供代码使用，`PERFORMANCE_GUIDE_BRIEF` 是短规则。
+
+`formatPerformanceGuide({includeCatalog:true})` 生成短规则加三行 `id(显示名)=[tag1/tag2]使用场景` 的紧凑提示，显示名只在存在时附带；总长度约 2200 字符，不把所有避免场景、配对列表和底层参数塞进系统提示。`includeCatalog:false` 仅返回短规则。系统提示使用同源标签文本，普通无工具的 API 模型也能读取；MCP 客户端通过能力读取完整说明，[快速指南](model-control-quickstart.md)则适合直接交给智能体。
+
+本层不改变 `planSpeechCombination` 的选择门槛、首段一次、语音时轴、停止、触摸优先级或小表情独立预览，也不新增工具字段。标签不能被当作 `gesture` 或 Cubism 参数执行。新增目录项时补齐使用语义；删除目录项时同步清理所有推荐引用，再运行 `node --test tests/performance-guide.test.mjs tests/server.test.mjs`。指南校验、调度回归、真实模型遮挡与动作柔和度验收应分别记录，不能以标签测试通过代替画面检查。
+
+### 0.14 肩袖归属与讲述微动
+
+`createLive2D` 收集左右整臂部件时还需纳入右肩 `Part68`、左肩 `Part94`。它们各有四片泡泡袖和装饰网格，虽挂在胸衣节点下，形变仍由手臂驱动。遗漏会让镜像后的前臂和未换侧的肩袖使用不同姿势，表现为左侧举指时右肩外翻。将这两组加入对应集合即可复用既有遮罩收集、逐网格层级、互斥显示和关闭过程，不应另建一条肩袖动画。
+
+`sampleBodyAnimation('talk', ...)` 以累计语音时间计算 3.5 秒节拍：主要强调、较轻强调和休息，腕部相位落后约 0.2 秒。前臂圆弧用 `Param36/39/41`，手腕用 `Param42`，食指用小范围 `Param43`。入口/出口权重与手势幅度继续生效，不改手型选择器，也不把秒数从每个新句子重新开始。抬腕过高或食指弯曲过大都会把指尖藏入侧发，尤其在用户 150% 幅度下；调参必须检查这个极值。
+
+`tests/mirror-artifact-production.cjs` 检查实际绘制的肩袖归属与放大/侧身画面；`tests/talk-production.cjs` 记录默认和最高幅度的连续参数、过程截图、四个视线方向及收回结果。两者复用隔离的生产渲染测试，不连接用户常用实例，输出在未提交的 `vendor/` 中。

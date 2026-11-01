@@ -1,6 +1,6 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-适用于本仓库当前 0.13.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。
+适用于本仓库当前 0.14.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
 
 ## 1. 先确定你使用哪条通路
 
@@ -15,7 +15,7 @@
 
 ## 2. 可直接给外部智能体的工作约定
 
-1. 开始时调用 `avatar_capabilities({})` 和 `avatar_state({})`，确认模型已就绪、能力名称和当前忙碌状态。
+1. 开始时调用 `avatar_capabilities({})` 和 `avatar_state({})`，确认模型已就绪、能力名称和当前忙碌状态；阅读 `performanceGuide.quickStart` 及相关目录项的选择标签。
 2. 用 `intent` 表达行为目的、`emotion` 表达脸部语气；说话肢体通常用 `bodyAnimation:"auto"`，需要特定手势时选具体动画。`gesture` 保留旧接口兼容。不要为了展示动作而把回答拉长。
 3. 默认一两句短回复，中文通常约 30–90 字；简单问候可以更短。长解释留在普通 DSH 聊天文本里，不全部交给朗读工具。
 4. 需要计算或检索时设为 `thinking`；有状态插件时优先让插件管理工作状态，避免两套控制互相覆盖。
@@ -27,6 +27,21 @@
 10. 配对码、API Key 和认证头不进入回复、日志、截图、补丁或仓库；故障报告只保留错误码和脱敏信息。
 
 如果你是**桌宠聊天桥内部的专用 DSH 会话**，采用第 8 节的 JSON 输出约定，替代上述主动调用角色工具的流程。
+
+### 2.1 用标签选择，不把标签当命令
+
+0.14 的 `expressionPresets`、`bodyAnimations`、`combinations` 仍是按 `id` 查找的数组，每项增加以下说明。三个目录共覆盖 49 项；它们复用已有工具和执行时序，没有新增“执行标签”的调用。
+
+| 字段 | 如何使用 |
+|---|---|
+| `tags` | 稳定英文检索标签，如 `reassure`、`emphasis`、`special-eyes`；不是允许的命令枚举 |
+| `useWhen` / `avoidWhen` | 中文适用与避免场景；先判断本句真实意图、语气再选 |
+| `recommendedEmotions` / `recommendedBody` | 可选的独立表情、肢体 ID；数组表示备选，不是同时叠加 |
+| `displayName` | 部分常用组合的界面名称；提交命令仍用 `id` |
+
+顶层 `performanceGuide` 只含 `modes`、`preferredCombinations`、`quickStart`，完整条目在上述三个目录中，不重复存放。`modes` 区分脸、肢体与完整组合。组合条目的推荐搭配表示**组合结束后的承接**，不是用独立预览覆盖正在播放的开场。
+
+优先熟悉这六项，按语境选择而非每轮轮播：`agree`＝开心点头（赞同）、`explain`＝讲个重点（解释）、`shy`＝有点害羞（含蓄回应）、`think`＝冥思苦想（明确演示思考）、`idea`＝想到了（新办法）、`cuddle`＝撒娇捧胸（亲昵互动）。`think` 仍需显式选择，后台计算用原来的 `thinking` 状态，不自动插入长组合。`tags/useWhen/avoidWhen/recommended*` 均不要写进 `avatar_speak` 或回复 `segments`。
 
 ## 3. 本地连接与鉴权
 
@@ -101,7 +116,7 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 
 | 工具 | 参数与限制 | 结果与用途 |
 | --- | --- | --- |
-| `avatar_capabilities` | `{}` | 支持的 intents、25 种 emotions、12 组 bodyAnimations、12 个组合预设、表情描述、gestures、gaze、states 和 cue 限制 |
+| `avatar_capabilities` | `{}` | 支持的 intents、25 种 emotions、12 组 bodyAnimations、12 个组合预设、选择标签与搭配建议、performanceGuide、gestures、gaze、states 和 cue 限制 |
 | `avatar_state` | `{}` | 当前状态、生成 busy、模型状态、桥状态、watch 状态等 |
 | `avatar_perform` | `intent?`、`emotion?`、`gesture?`、`gaze?`：字符串，最长 80；`intensity?`：0–1；`durationMs?`：100–30000 | 接受一次短表演，不等待表演结束。名称还会经能力白名单校验 |
 | `avatar_expression` | `emotion?`、`active?`、`intensity?` 0–1、`durationMs?` 200–20000；active 默认 true，此时 emotion 必填 | 只预览脸，不切换手臂；active:false 只结束面部预览 |
@@ -480,6 +495,7 @@ Invoke-RestMethod "$bridgeBase/api/stop" -Method Post -Headers $bridgeHeaders `
 | [server/dsh-manager.mjs](../server/dsh-manager.mjs) | DSH 桥注册、请求关联、搜索标志、断线处理 |
 | [integrations/dsh/live2d-bridge.mjs](../integrations/dsh/live2d-bridge.mjs) | 原生会话 API、事件观察、工具守卫与重连 |
 | [src/shared/expressions.mjs](../src/shared/expressions.mjs) / [expression-cues.mjs](../src/shared/expression-cues.mjs) | 25 种表情及 cue 规范化 |
+| [src/shared/performance-guide.mjs](../src/shared/performance-guide.mjs) | 三个动作目录的标签、场景建议、常用显示名与紧凑提示词 |
 | [server/adapters.mjs](../server/adapters.mjs) | Codex／兼容 API 的搜索能力和语音适配 |
 
 仓库内可运行 `node --test tests/server.test.mjs tests/expression-cues.test.mjs` 验证服务契约。这些测试使用隔离服务和测试宿主，不登录真实 DSH 账户；真实接入仍需记录本机 Harness 版本，完成一次 MCP 查询、一次短句朗读、一次专用聊天桥 JSON 回传和一次取消验证。

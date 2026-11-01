@@ -1221,8 +1221,8 @@ test('deliberate body motion has rest sections and bounded, selector-free emphas
     for (let i = 0; i <= 300; i++) {
       const sample = sampleBodyAnimation(preset.id, i / 300, 1);
       for (const [id, value] of Object.entries(sample.armOffsets)) {
-        assert.ok(!id.startsWith('Movement')); assert.ok(Math.abs(value) <= .066);
-        if (last?.armOffsets[id] !== undefined) assert.ok(Math.abs(value - last.armOffsets[id]) < .01);
+        assert.ok(!id.startsWith('Movement')); assert.ok(Math.abs(value) <= (preset.id==='talk'?.10:.066));
+        if (last?.armOffsets[id] !== undefined) assert.ok(Math.abs(value - last.armOffsets[id]) < .014);
       }
       last = sample;
     }
@@ -1318,17 +1318,33 @@ test('continuous explanation remains animated past four seconds and holds across
   behavior.clearSpeechGesture();advance(2);assert.equal(behavior.gesture,'none');
 });
 
-test('continuous hand cadence pauses with the audio clock and does not bend unsupported finger controls', () => {
+test('continuous hand cadence and its small finger bend pause with the audio clock', () => {
   const {behavior,runtime,advance}=fixture();
   const cue={id:'talk',key:'pause',durationMs:12000,progress:.5,elapsedSeconds:6,continuous:true,intensity:1};
   behavior.setSpeechGesture(cue);advance(4);
   const pose={...runtime.overlay.values};advance(3);
-  for(const id of ['Param36','Param39','Param41','Param42'])assert.ok(Math.abs(runtime.overlay.values[id]-pose[id])<.0001);
-  assert.equal(runtime.overlay.values.Param43,0,'finger softness comes from wrist motion, not uncalibrated hand deformation');
+  for(const id of ['Param36','Param39','Param41','Param42','Param43'])assert.ok(Math.abs(runtime.overlay.values[id]-pose[id])<.0001);
+  assert.ok(runtime.overlay.values.Param43>=-.105&&runtime.overlay.values.Param43<=.015);
   for(const id of ['talk']){
     const rest=sampleBodyAnimation(id,.5,1,{durationSeconds:12,elapsedSeconds:3.15,hold:true});
     assert.equal(rest.armOffsets.Param41,0,'cadence includes a quiet interval');
+    for(const value of Object.values(rest.armOffsets))assert.equal(Math.abs(value),0,'the wrist and finger also rest');
   }
+});
+
+test('talk combines a rounded arm motion, delayed wrist, and bounded finger softness at maximum tuning', () => {
+  const samples=Array.from({length:701},(_,i)=>sampleBodyAnimation('talk',.5,1,{durationSeconds:30,elapsedSeconds:i/200,hold:true}));
+  const offsets=id=>samples.map(sample=>sample.armOffsets[id]);
+  const span=id=>Math.max(...offsets(id))-Math.min(...offsets(id));
+  assert.ok(span('Param36')>.06&&span('Param41')>.045,'forearm emphasis is visible');
+  assert.ok(span('Param39')>.035&&span('Param42')>.035,'wrist turns both ways through the soft arc');
+  assert.ok(span('Param43')>.045,'finger flex is a changing gesture, not a fixed bend');
+  const peak=id=>offsets(id).indexOf(Math.max(...offsets(id)))/200;
+  assert.ok(peak('Param42')>peak('Param39')+.1,'the wrist trails the arm rather than moving rigidly with it');
+  for(const value of offsets('Param43'))assert.ok(value*1.5>=-.12&&value*1.5<=.16,'max user amplitude remains inside the real-model finger calibration');
+  for(const value of offsets('Param41'))assert.ok(.68+value*1.5<.75,'the raised index stays away from the side hair at maximum amplitude');
+  for(const value of offsets('Param42'))assert.ok(Math.abs(value*1.5)<.04,'wrist rotation retains clearance at maximum amplitude');
+  for(const preset of BODY_ANIMATION_PRESETS.filter(item=>item.id!=='talk'))assert.equal(sampleBodyAnimation(preset.id,.4,1).armOffsets.Param43,undefined,'other hand poses retain their original finger shape');
 });
 
 test('continuous sentence boundaries preserve cadence without adding elapsed time twice', () => {

@@ -90,6 +90,10 @@ test('real MCP client can handshake, discover and dispatch to the shared service
   assert.equal(service.getState().lastCommand.gesture, 'pointer');
   const capabilities = JSON.parse((await client.callTool({ name: 'avatar_capabilities', arguments: {} })).content[0].text);
   assert.deepEqual(capabilities, await (await request('/api/capabilities')).json());
+  assert.ok(capabilities.bodyAnimations.find(item => item.id === 'talk').tags.includes('continuous'));
+  assert.equal(capabilities.combinations.find(item => item.id === 'agree').displayName, '开心点头');
+  assert.ok(capabilities.expressionPresets.every(item => item.tags.length && item.useWhen && item.avoidWhen));
+  assert.ok(capabilities.performanceGuide.quickStart.includes('首段'));
   for (const intent of ['cuddle', 'idea']) {
     assert.ok(capabilities.intents.includes(intent));
     const response = await client.callTool({ name: 'avatar_perform', arguments: { intent, emotion: 'puzzled' } });
@@ -396,4 +400,23 @@ test('spoken combinations expose preset choices, normalize older clients, and pr
   assert.throws(() => normalizeCommand({ type: 'speak', text: '你好', combination: 'pointer-both' }));
   assert.throws(() => normalizeCommand({ type: 'expression', emotion: 'happy', combination: 'reassure' }));
   assert.throws(() => normalizeCommand({ type: 'body', animation: 'talk', combination: 'reassure' }));
+});
+
+
+test('API prompts include compact model-readable selection guidance without changing command IDs', () => {
+  const system = makeMessages({ text: '帮我解释一下这个步骤。' }).messages[0].content;
+  assert.ok(system.includes('agree(开心点头)='));
+  assert.ok(system.includes('talk=[explain/continuous/cadence]较长说明'));
+  assert.ok(system.includes(CAPABILITIES.performanceGuide.quickStart));
+  assert.deepEqual(CAPABILITIES.performanceGuide.preferredCombinations, ['agree', 'explain', 'shy', 'think', 'idea', 'cuddle']);
+  const bodies = new Set(CAPABILITIES.bodyAnimations.map(item => item.id));
+  const emotions = new Set(CAPABILITIES.emotions);
+  for (const catalog of [CAPABILITIES.expressionPresets, CAPABILITIES.bodyAnimations, CAPABILITIES.combinations]) {
+    for (const entry of catalog) {
+      assert.ok(entry.tags.length && entry.useWhen && entry.avoidWhen);
+      assert.ok(entry.recommendedBody.every(id => bodies.has(id)));
+      assert.ok(entry.recommendedEmotions.every(id => emotions.has(id)));
+    }
+  }
+  assert.throws(() => normalizeCommand({ type: 'body', animation: 'continuous' }));
 });
