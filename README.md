@@ -2,7 +2,9 @@
 
 在 Windows 桌面陪你聊天、做小动作、一起看网页的 Live2D 平台。角色文件从本机加载，大模型通过结构化指令驱动表情、视线和已有手势；声音按实际播放音频驱动嘴型。
 
-**当前版本：0.18.0。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+**当前版本：0.18.1。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+
+0.18.1 修复 DSH 聊天回合的表演被桥接状态命令的 requestId 覆盖，导致只显示文字、不播放表情/肢体/语音的问题；同时把“已注册但暂时没有工具调用”的 MCP 客户端显示为 `MCP 已接入 · 空闲`，不再在 65 秒空闲后误报 `MCP 未连接`。
 
 文档核对：**2026-11-01**。完整目录见[文档导航](docs/README.md)，各版变化见[版本记录](docs/changelog.md)。
 

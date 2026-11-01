@@ -105,14 +105,26 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     if (!enabled) { watchSessionId = null; clearWatchContext(); }
     else if (!wasEnabled) { watchSessionId = randomUUID(); clearWatchContext(); }
   }
-  function performanceState() {
-    const live = [...mcpClients].filter(([, info]) => Date.now() - info.lastSeen < leaseMs);
-    return { connected: live.length > 0, dshConnected: live.some(([name]) => /dsh|deepseek[\s_-]*harness/i.test(name)),
-      clients: live.map(([name]) => name), lastSeen: live.length ? Math.max(...live.map(([, info]) => info.lastSeen)) : null,
-      leaseMs };
+  function performanceState(dshState = dsh.state()) {
+    const now = Date.now(), known = [...mcpClients.entries()];
+    const live = known.filter(([, info]) => now - info.lastSeen < leaseMs);
+    // MCP HTTP has no disconnect event. Keep "registered" separate from
+    // "active" so an idle DSH MCP client is not reported as disconnected.
+    return {
+      connected: live.length > 0,
+      active: live.length > 0,
+      registered: known.length > 0,
+      dshConnected: live.some(([name]) => /dsh|deepseek[\s_-]*harness/i.test(name))
+        || (dshState.connected === true && known.length > 0),
+      clients: live.map(([name]) => name),
+      registeredClients: known.map(([name]) => name),
+      lastSeen: live.length ? Math.max(...live.map(([, info]) => info.lastSeen)) : null,
+      leaseMs,
+    };
   }
   function connectionState() {
-    const performance = performanceState(), dshState = dsh.state();
+    const dshState = dsh.state();
+    const performance = performanceState(dshState);
     return { ...resolveProvider(store.get(), { dsh: dshState, performance }), performance, dsh: dshState };
   }
   function publicSettings() { return { ...store.public(), ...connectionState() }; }
@@ -325,7 +337,14 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
         const input = await body(req);
         const name = String(input.source || 'dsh').slice(0, 80);
         bridges.set(name, { lastSeen: Date.now(), kind: 'events', sessionId: String(input.sessionId || '').slice(0, 100) });
-        if (input.state) dispatch({ type: 'state', state: input.state });
+        if (input.state) {
+          // A bridge status update is not a chat command: never invent a new
+          // command id that could be mistaken for the active chat request id.
+          const state = String(input.state);
+          if (!CAPABILITIES.states.includes(state)) throw error('状态无效。', 'INVALID_STATE');
+          currentState = state;
+          emit('state', { state: getState() });
+        }
         return send(res, 200, { accepted: true });
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'Method not allowed' });

@@ -10,6 +10,7 @@ import { BodyAnimationPreviews } from './body-animations';
 import { SettingsSelect } from './settings-select';
 import { ConnectionStatus, connectionMessage, chatProviderLabel } from './connection-status';
 import { chatErrorMessage } from '../shared/chat-error-message.mjs';
+import { thinkingRequestForCommand } from '../shared/thinking-request.mjs';
 import { createExpressionTimeline } from './expression-timeline';
 import { createGestureTimeline } from './gesture-timeline';
 import { createCombinationTimeline } from './combination-timeline';
@@ -316,7 +317,16 @@ function Pet(){
         if(!c)return;
         if(c.type==='stop'||c.type==='reset'){stop();if(c.type==='reset'){behavior.current?.reset();setState('idle');}return;}
         if(c.type==='speak'&&c.text){say({id:c.id||'',segments:[c]});return;}
-        if(c.type==='state'){if(c.state==='thinking')beginThinking(c.requestId||c.id);else setState(c.state);return;}
+        if(c.type==='state'){
+          if(c.state==='thinking'){
+            // Bridge status commands have no chat request id. Keep the active
+            // chat id instead of replacing it with the command's own id.
+            const next=thinkingRequestForCommand(c,thinking.current.pending?thinking.current.requestId:null);
+            if(next===null)beginThinking();
+            else if(next)beginThinking(next);
+          }else setState(c.state);
+          return;
+        }
         if(behavior.current)behavior.current.applyCommand(c);else pendingCommand.current=c;
       }
       if(e.type==='chat'){const reply=e.reply||e.data||e;if(reply.segments)say({...reply,requestId:reply.requestId||e.requestId} as Reply);}

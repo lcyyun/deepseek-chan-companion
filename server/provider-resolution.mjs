@@ -17,7 +17,9 @@ export function resolveProvider(settings, { dsh = {}, performance = {} } = {}) {
   if (providerEffective === 'dsh') {
     if (dshReady) {
       chatAvailable = true; chatStatus = 'ready';
-      chatMessage = performance.connected ? '当前由 DSH 提供对话；MCP 表演通道已连接。' : '当前由 DSH 提供对话；MCP 表演通道尚未连接。';
+      const performanceLabel = performance.connected ? '已连接'
+        : performance.registered || performance.dshConnected ? '已接入（空闲）' : '尚未连接';
+      chatMessage = `当前由 DSH 提供对话；MCP 表演通道${performanceLabel}。`;
     } else if (dsh.connected) {
       chatStatus = 'bridge-disabled'; chatMessage = 'DSH 聊天桥尚未就绪。请启用 chat: true 并检查 Session Controller。';
     } else if (remembered || dsh.reconnecting) {

@@ -111,8 +111,22 @@ test('real MCP activity and state heartbeat are separate; DSH MCP alone cannot s
   service.events.on('state', event => { if (!event.state.performance.connected) expired = true; });
   await waitFor(() => expired);
   assert.equal(service.getState().performance.connected, false);
+  assert.equal(service.getState().performance.registered, true, 'A known MCP client stays registered while idle');
+  assert.equal(service.getState().performance.active, false);
   await client.callTool({ name: 'avatar_state', arguments: {} });
   assert.equal(service.getState().performance.dshConnected, true, 'Known-client tool activity refreshes its lease');
+});
+
+test('DSH bridge thinking updates status without inventing a chat command or request id', async t => {
+  const { service, request } = await fixture(t);
+  const emitted = [];
+  service.events.on('event', event => emitted.push(event));
+  const response = await request('/api/bridge/event', { source: 'dsh', state: 'thinking' });
+  assert.equal(response.status, 200);
+  assert.equal(service.getState().state, 'thinking');
+  assert.equal(service.getState().requestId, null);
+  assert.equal(emitted.some(event => event.type === 'command'), false, 'Bridge status must not emit a command with a new id');
+  assert.equal(emitted.some(event => event.type === 'state' && event.state.state === 'thinking'), true);
 });
 
 test('fresh DSH chat bridge automatically routes to DSH, reconnects and retains its route after restart', async t => {

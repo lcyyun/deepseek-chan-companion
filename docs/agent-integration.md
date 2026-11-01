@@ -1,8 +1,8 @@
 # 智能体与语音接入
 
-最近校对：2026-11-01，按应用 0.18.0 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
+最近校对：2026-11-01，按应用 0.18.1 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.18.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.18.1；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
