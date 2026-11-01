@@ -135,6 +135,10 @@ test('native avatar_reply emits one atomic performance plan', async t => {
   assert.equal(event.reply.segments.length, 2);
   assert.equal(event.reply.segments[1].bodyAnimation, 'talk');
   assert.equal(event.reply.details, '完整说明');
+  await client.callTool({ name: 'avatar_reply', arguments: { segments: [
+    { text: '先害羞地抚胸。', emotion: 'shy', gesture: 'chest', combination: 'shy', expressionCues: [{ at: 0, emotion: 'shy', intensity: 0.8 }] },
+  ] } });
+  assert.equal(event.reply.segments[0].combination, 'reassure', 'An explicit chest gesture must not become a face-only shy opening');
 });
 
 test('DSH bridge thinking updates status without inventing a chat command or request id', async t => {

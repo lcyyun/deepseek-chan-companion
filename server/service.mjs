@@ -403,7 +403,17 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   connectionSignature = JSON.stringify({ ...connectionState(), performance: { ...performanceState(), lastSeen: null } });
   const connectionTimer = setInterval(publishConnections, Math.min(1000, Math.max(25, leaseMs / 2))); connectionTimer.unref?.();
   function presentNativeReply(plan = {}) {
-    const reply = normalizeReply({ segments: plan.segments, details: plan.details, sources: plan.sources, nativeTool: true });
+    // Native models often say "chest" as a gesture while choosing the face-only
+    // shy combination. The authored chest opening is "reassure"; use it so an
+    // explicit hand request cannot silently degrade to a face-only performance.
+    const segments = Array.isArray(plan.segments) ? plan.segments.map(segment => {
+      if (!segment || typeof segment !== 'object' || segment.gesture !== 'chest') return segment;
+      if (segment.combination === 'shy' || segment.combination === 'auto' || segment.combination === 'none' || segment.combination === undefined) {
+        return { ...segment, combination: 'reassure' };
+      }
+      return segment;
+    }) : plan.segments;
+    const reply = normalizeReply({ segments, details: plan.details, sources: plan.sources, nativeTool: true });
     reply.provider = 'native';
     reply.nativeTool = true;
     latestReply = reply;

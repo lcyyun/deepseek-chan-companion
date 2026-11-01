@@ -127,7 +127,7 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 | `avatar_expression` | `emotion?`、`active?`、`intensity?` 0–1、`durationMs?` 200–20000；active 默认 true，此时 emotion 必填 | 只预览脸，不切换手臂；active:false 只结束面部预览 |
 | `avatar_body` | `animation?`、`active?`、`intensity?` 0–1、`durationMs?` 2000–20000；active 默认 true，此时 animation 必填 | 独立肢体动画，保持表情；active:false 只结束肢体预览 |
 | `avatar_speak` | **`text` 必填**，1–6000 字符；`intent?`、`emotion?`、`gesture?`；`bodyAnimation?`：`auto/none` 或具体动画 ID；`combination?`：`auto/none` 或组合 ID；`expressionCues?`：最多 4 项，每项 `{at, emotion, intensity}`，三字段必填；`at` 0–0.9、`intensity` 0–1、emotion 字符串最长 80 | 提交一句朗读、可选开场组合及后续独立的面部、肢体编排。此工具没有 `gaze`、顶层 `intensity` 或 `durationMs` 参数 |
-| `avatar_reply` | **`segments` 必填**：1–3 段，每段 `text` 1–1200 字符，可选 `intent/emotion/gesture/bodyAnimation/combination/expressionCues`；`details?`、`sources?` | 原生桌宠模式的一次原子整轮表演。正常助手文本只展示，不重复朗读；同一轮最多调用一次。低层 `avatar_speak` 等不应在聊天桥中重复调用 |
+| `avatar_reply` | **`segments` 必填**：1–3 段，每段 `text` 1–1200 字符，可选 `intent/emotion/gesture/bodyAnimation/combination/expressionCues`；`details?`、`sources?` | 原生桌宠模式的一次原子整轮表演。字段必须用真实 ID；抚胸用 `combination: reassure` 或 `gesture: chest`，只写 `combination: shy` 不会动手；娓娓道来用后续段 `bodyAnimation: talk`。正常助手文本只展示，不重复朗读；同一轮最多调用一次 |
 | `avatar_set_state` | **`state` 必填**：`idle/thinking/listening/speaking/error` | 更新可见活动状态。设置 speaking 本身不会合成语音 |
 | `avatar_stop` | `{}` | 取消当前聊天生成、正在合成的语音，并广播停止，由桌宠取消播放／动作 |
 | `avatar_reset` | `{}` | 同样取消生成和语音，并让桌宠恢复基础姿态。不是清空用户设置或删除模型 |

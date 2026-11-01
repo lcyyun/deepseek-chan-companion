@@ -2,7 +2,9 @@
 
 在 Windows 桌面陪你聊天、做小动作、一起看网页的 Live2D 平台。角色文件从本机加载，大模型通过结构化指令驱动表情、视线和已有手势；声音按实际播放音频驱动嘴型。
 
-**当前版本：0.19.1。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+**当前版本：0.19.2。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+
+0.19.2 收紧 DSH 原生 `avatar_reply` 的工具字段：意图、表情、手势、组合、肢体必须使用真实 ID，不再接受 `hand_on_chest` 这类自造名字；并修正“害羞抚胸”被当成仅表情的问题——`gesture: chest` 会自动落到 `reassure` 抚胸组合，后续 `bodyAnimation: talk` 接娓娓道来。
 
 0.19.1 把“置顶”从“一起看”里独立出来：聊天窗右上角的图钉可随时让桌宠悬浮在其他窗口上方，不需要开启一起看；置顶状态会保存，右键“暂时隐藏”仍保持隐藏。
 

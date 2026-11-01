@@ -4,6 +4,12 @@
 
 本页记录项目的功能演进；版本号不代表已创建同名 GitHub Release 或提供安装器。当前使用方法见[项目 README](../README.md)，实现细节见[维护指南](maintenance-guide.md)。
 
+## 0.19.2：原生表演字段收紧
+
+- `avatar_reply` 的 intent/emotion/gesture/bodyAnimation/combination/expressionCues 改为真实枚举，自造的 `hand_on_chest`、`wave` 等名称会被拒绝。
+- 修正“害羞抚胸”：`gesture: chest` 不再落到只换脸的 `shy` 组合，而是自动使用作者预设 `reassure` 抚胸组合；后续 `bodyAnimation: talk` 接娓娓道来。
+- 工具描述加入明确映射：抚胸 = combination `reassure` 或 gesture `chest`；娓娓道来 = bodyAnimation `talk`。新增回归测试。
+
 ## 0.19.1：独立置顶
 
 - “置顶”从“一起看”中独立，聊天窗右上角图钉随时开启/关闭，不需要开启一起看。

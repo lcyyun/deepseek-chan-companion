@@ -65,6 +65,10 @@ B. 新建独立的桌宠会话
 ## 原生模式要求
 
 - DSH 已安装并能调用 MCP 的 `avatar_reply` 工具
+- 字段必须使用 `avatar_capabilities` 里的真实 ID；不要写 `hand_on_chest`、`wave` 等自造名字
+- **抚胸**使用 `combination: reassure`（或 `gesture: chest`）；只写 `combination: shy` 只会换脸
+- **娓娓道来**使用后续段的 `bodyAnimation: talk`
+- “害羞抚胸，接着娓娓道来”应为：第一段 `combination: reassure` + `emotion: shy` + 抚胸；第二段 `combination: none` + `bodyAnimation: talk`
 - `native: true` 时，桥只允许 `avatar_reply` 这类角色工具；终端、文件、其他角色工具仍被阻止
 - 智能体正常说话；需要表演时调用一次 `avatar_reply`
 - 不要把整段 JSON 表演规范再写回聊天；表演规范由工具 schema 承担
