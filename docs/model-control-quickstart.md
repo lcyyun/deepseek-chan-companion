@@ -47,3 +47,5 @@ HTTP 使用同一内容，在 `POST /api/command` 请求体加 `"type":"speak"`�
 有开场时，`expressionCues.at` 指组合结束后剩余语音的进度；没有开场或被跳过时指整段。后续段落的 `combination` 填 `none`。`auto` 交给现有本地规划；明确指定 `bodyAnimation` 时不会自动附加组合，要两者就像示例一样都明确填写。安静口播可用 `emotion:neutral, bodyAnimation:none, combination:none`；这不会移除从实际思考状态结束时的短暂“想到了”提示。
 
 语音始终控制口型，左右指画面左右；不发逐帧参数，不把工具已接受当作动作完成。用户摸头、手动预览或停止优先；需要停止时调用 `avatar_stop({})`，不要补播被打断的旧动作。
+
+需要比较智能体表现或复查动画问题时，使用[综合控制测试集](model-control-evaluation.md)：包含 16 组可复制场景、人工交互步骤、评分记录和当前能力边界。

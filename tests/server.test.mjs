@@ -12,8 +12,9 @@ import { createService } from '../server/service.mjs';
 import { CAPABILITIES, RESPONSE_SCHEMA, normalizeReply, makeMessages, normalizeCommand } from '../server/protocol.mjs';
 import { apiChat, endpoint } from '../server/adapters.mjs';
 import { attachChatBridge } from '../integrations/dsh/live2d-bridge.mjs';
+import { createSettingsStore } from '../server/settings.mjs';
 
-async function fixture(t, options = {}) {
+async function fixture(t, { selectedProvider, ...options } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'l2d-server-test-'));
   const model = join(root, 'model'); await mkdir(join(model, 'Exp3'), { recursive: true });
   await writeFile(join(model, '大肥鱼.model3.json'), JSON.stringify({ Version: 3, FileReferences: { Moc: 'fish.moc3', Textures: [] } }));
@@ -22,8 +23,62 @@ async function fixture(t, options = {}) {
   const service = await createService({ port: 0, dataDir: join(root, 'data'), modelRoot: model, ...options });
   t.after(async () => { await service.close(); await rm(root, { recursive: true, force: true }); });
   const request = (path, init = {}) => fetch(`${service.url}${path}`, { ...init, headers: { Authorization: `Bearer ${service.token}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } });
+  if (selectedProvider) assert.equal((await request('/api/settings', { method: 'PUT', body: JSON.stringify({ provider: selectedProvider }) })).status, 200);
   return { root, service, request };
 }
+
+test('fresh profiles reject chat before starting a provider, while local avatar control stays usable', async t => {
+  const calls = [];
+  const { service, request } = await fixture(t, { chatAdapters: { codex: async options => {
+    calls.push(options);
+    return { segments: [{ text: '配置完成。', intent: 'neutral', emotion: 'neutral', gesture: 'none' }], details: '', sources: [] };
+  } } });
+  assert.equal((await (await request('/api/settings')).json()).provider, 'unconfigured');
+  const events = [];
+  service.events.on('event', event => events.push(event));
+  for (const mode of ['chat', 'watch']) {
+    const response = await request('/api/chat', { method: 'POST', body: JSON.stringify({ text: '尚未配置时的问题', mode }) });
+    assert.equal(response.status, 409);
+    const body = await response.json();
+    assert.equal(body.code, 'PROVIDER_NOT_CONFIGURED');
+    assert.match(body.error, /智能体完成接入/);
+  }
+  assert.equal(calls.length, 0);
+  assert.deepEqual(events, []);
+  assert.equal(service.getState().state, 'idle');
+  assert.equal(service.getState().busy, false);
+  assert.equal(service.getState().requestId, null);
+  assert.equal(service.getState().latestReply, null);
+  assert.equal((await request('/api/capabilities')).status, 200);
+  const preview = await request('/api/command', { method: 'POST', body: JSON.stringify({ type: 'expression', emotion: 'happy' }) });
+  assert.equal(preview.status, 202);
+  assert.equal((await preview.json()).accepted, true);
+  assert.equal((await request('/api/settings', { method: 'PUT', body: JSON.stringify({ provider: 'codex' }) })).status, 200);
+  assert.equal((await request('/api/chat', { method: 'POST', body: JSON.stringify({ text: '开始聊天' }) })).status, 200);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].history, [], 'Rejected unconfigured prompts never enter conversation history');
+  assert.equal((await request('/api/settings', { method: 'PUT', body: JSON.stringify({ provider: 'unconfigured' }) })).status, 200);
+  assert.equal(service.settings.provider, 'unconfigured');
+});
+
+test('upgrades preserve saved provider choices and missing or unknown choices remain unconfigured', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'l2d-provider-settings-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const [index, provider] of ['api', 'codex', 'dsh', 'unconfigured', undefined, 'unknown'].entries()) {
+    const dataDir = join(root, String(index));
+    await mkdir(dataDir);
+    await writeFile(join(dataDir, 'settings.json'), JSON.stringify({ settings: { ...(provider === undefined ? {} : { provider }), model: 'configured-model', baseUrl: 'https://example.com' } }));
+    const store = await createSettingsStore({ dataDir });
+    assert.equal(store.get().provider, ['api', 'codex', 'dsh'].includes(provider) ? provider : 'unconfigured');
+    assert.equal(store.get().model, 'configured-model');
+    await store.update({ provider: 'unconfigured' });
+    const restored = await createSettingsStore({ dataDir });
+    assert.equal(restored.get().provider, 'unconfigured');
+    assert.equal(restored.get().model, 'configured-model');
+    assert.equal(restored.get().baseUrl, 'https://example.com');
+    await assert.rejects(restored.update({ provider: 'made-up-provider' }), /provider/);
+  }
+});
 
 test('requires pairing for API and model; rejects foreign origin despite a valid token', async t => {
   const { service, request } = await fixture(t);
@@ -204,7 +259,7 @@ test('websocket requires authentication before accepting commands', async t => {
 test('stop aborts generation without emitting a stale reply', async t => {
   let started;
   const ready = new Promise(r => { started = r; });
-  const { request, service } = await fixture(t, { chatAdapters: { codex: ({ signal }) => new Promise((resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); }) } });
+  const { request, service } = await fixture(t, { selectedProvider: 'codex', chatAdapters: { codex: ({ signal }) => new Promise((resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }); }) } });
   let replies = 0; service.events.on('chat', () => replies++);
   const response = request('/api/chat', { method: 'POST', body: JSON.stringify({ text: '你好', mode: 'chat' }) });
   await ready;
@@ -215,7 +270,7 @@ test('stop aborts generation without emitting a stale reply', async t => {
 
 test('superseded requests cannot emit late progress, repair work or replies on the WebSocket', async t => {
   const calls = [], started = new EventEmitter();
-  const { request, service } = await fixture(t, { chatAdapters: { codex: options => new Promise(resolve => {
+  const { request, service } = await fixture(t, { selectedProvider: 'codex', chatAdapters: { codex: options => new Promise(resolve => {
     calls.push({ ...options, resolve }); started.emit('call');
   }) } });
   const wire = [];
@@ -267,7 +322,7 @@ test('superseded requests cannot emit late progress, repair work or replies on t
 test('stop rejects late adapter results and progress even if the adapter ignores abort', async t => {
   let finish, progress, started;
   const ready = new Promise(resolve => { started = resolve; });
-  const { request, service } = await fixture(t, { chatAdapters: { codex: ({ onProgress }) => new Promise(resolve => {
+  const { request, service } = await fixture(t, { selectedProvider: 'codex', chatAdapters: { codex: ({ onProgress }) => new Promise(resolve => {
     finish = resolve; progress = onProgress; started();
   }) } });
   const events = [];
@@ -287,7 +342,7 @@ test('stop rejects late adapter results and progress even if the adapter ignores
 test('spoken budget repairs semantically once and preserves full detail', async t => {
   let calls = 0;
   const longText = '这是需要完整保留的解释。'.repeat(24);
-  const { request } = await fixture(t, { chatAdapters: { codex: async () => {
+  const { request } = await fixture(t, { selectedProvider: 'codex', chatAdapters: { codex: async () => {
     calls++;
     return { id: `reply-${calls}`, segments: [{ text: calls === 1 ? longText : '关键是让角色按意图协调动作。', intent: 'explain', emotion: 'neutral', gesture: 'pointer' }], details: '原来的详细步骤。', sources: [], searchUsed: false };
   } } });
@@ -333,6 +388,7 @@ test('DSH plugin uses native session API and returns the correlated turn through
   attachChatBridge(ctx, { baseUrl: service.url, token: service.token, chatCwd: join(root, 'dsh-chat') });
   t.after(() => { cleanup.forEach(dispose => dispose?.()); bus.removeAllListeners(); });
   await connected;
+  assert.equal(service.settings.provider, 'unconfigured', 'Connecting a DSH bridge does not choose the chat provider');
   await request('/api/settings', { method: 'PUT', body: JSON.stringify({ provider: 'dsh' }) });
   const response = await request('/api/chat', { method: 'POST', body: JSON.stringify({ text: '你好' }) });
   assert.equal(response.status, 200);
@@ -345,7 +401,7 @@ test('DSH plugin uses native session API and returns the correlated turn through
 
 test('changing page while watch generation runs cancels the old reply', async t => {
   let started; const ready = new Promise(resolve => { started = resolve; });
-  const { service, request } = await fixture(t, { chatAdapters: { codex: ({ signal }) => new Promise((resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }); }) } });
+  const { service, request } = await fixture(t, { selectedProvider: 'codex', chatAdapters: { codex: ({ signal }) => new Promise((resolve, reject) => { started(); signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }); }) } });
   let replies = 0; service.events.on('chat', () => replies++);
   await request('/api/watch', { method: 'PUT', body: JSON.stringify({ enabled: true }) });
   const submit = url => request('/api/watch/context', { method: 'POST', body: JSON.stringify({ url, title: 'page', text: 'content' }) });

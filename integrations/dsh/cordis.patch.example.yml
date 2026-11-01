@@ -1,5 +1,6 @@
 # Replace the plugin's absolute path with your checkout path.
 # Set L2D_BRIDGE_TOKEN in the DSH process environment; never commit a real token.
+# Set DSH_HOME before starting DSH to isolate its profile and companion workspace.
 - insert:
     - id: live2d-mcp
       name: '@deepseek-ai/dsh-mcp-client'
@@ -14,6 +15,10 @@
       config:
         baseUrl: http://127.0.0.1:39181
         chat: true
+        # Default: <DSH_HOME>/live2d-companion; without DSH_HOME: ~/.dsh/live2d-companion.
+        # Optional explicit overrides (normally leave unset for profile isolation):
+        # dshHome: C:/path/to/isolated-dsh-home
+        # chatCwd: C:/path/to/explicit-companion-workspace
         # Optional: use a specific existing companion session instead of creating one.
         # chatSessionId: your-companion-session-id
         # Exact names of trusted, installed read-only web tools. Empty means no web search.

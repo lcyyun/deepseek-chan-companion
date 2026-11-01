@@ -1,0 +1,9 @@
+.voice-choices{border:0;padding:0;margin:14px 0 12px;min-width:0}
+.voice-choices legend{font-size:11px;color:#687f9b;margin-bottom:9px;padding:0}
+.settings-group .voice-choice{display:flex;flex-direction:row;align-items:center;gap:11px;margin:0 0 8px;padding:12px;border:1px solid #dce6f2;border-radius:10px;background:#fff;cursor:pointer}
+.settings-group .voice-choice.selected{border-color:#8eb5eb;background:#eef5ff}
+.settings-group .voice-choice input[type=radio]{appearance:auto;accent-color:#4c89df;flex:0 0 14px;width:14px;height:14px;padding:0;margin:0;border:0;box-shadow:none}
+.voice-choice span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.voice-choice strong{font-size:11px;font-weight:600;color:#46658c}
+.voice-choice small{font-size:10px;color:#8b9bb0;line-height:1.5}
+.voice-choice:focus-within{outline:2px solid #8eb5eb;outline-offset:2px}

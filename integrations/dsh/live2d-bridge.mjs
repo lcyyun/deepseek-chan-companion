@@ -1,8 +1,7 @@
 /** Optional DeepSeek Harness Cordis plugin. It observes committed session events only. */
 import { mkdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { WebSocket } from 'ws';
+import { resolveCompanionChatCwd } from './home-paths.mjs';
 
 export const name = 'deepseek-chan-bridge';
 export const inject = ['sessionController', 'tools'];
@@ -61,6 +60,9 @@ export function apply(ctx, config = {}) {
 /** Host API contract: sessionController.create/prompt/cancel plus committed session/event. */
 export function attachChatBridge(ctx, config) {
   if (!ctx.sessionController?.create || !ctx.sessionController?.prompt || !ctx.sessionController?.cancel || !ctx.tools?.guard) throw new Error('This DSH version lacks the required Session Controller or tool guard API. Update DSH or set chat:false.');
+  // Bind this bridge to its launch profile before an asynchronous chat arrives.
+  // Reusing a session never creates a companion workspace.
+  const chatCwd = config.chatSessionId ? undefined : resolveCompanionChatCwd(config);
   const pending = new Map(), turns = new Map(), ownedSessions = new Set();
   let ws, reconnect, disposed = false, sessionPromise;
   const availableTools = new Set((ctx.tools.definitions?.() || []).map(t => t.name || t.schema?.name).filter(Boolean));
@@ -79,9 +81,8 @@ export function attachChatBridge(ctx, config) {
   async function session() {
     if (config.chatSessionId) return String(config.chatSessionId);
     if (!sessionPromise) sessionPromise = (async () => {
-      const cwd = resolve(config.chatCwd || join(homedir(), '.dsh', 'live2d-companion'));
-      await mkdir(cwd, { recursive: true });
-      const result = await ctx.sessionController.create({ cwd, ...(config.agentPreset ? { agentPreset: config.agentPreset } : {}) });
+      await mkdir(chatCwd, { recursive: true });
+      const result = await ctx.sessionController.create({ cwd: chatCwd, ...(config.agentPreset ? { agentPreset: config.agentPreset } : {}) });
       ownedSessions.add(String(result.sessionId));
       return String(result.sessionId);
     })().catch(err => { sessionPromise = null; throw err; });

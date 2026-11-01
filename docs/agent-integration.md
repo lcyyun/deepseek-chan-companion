@@ -1,10 +1,14 @@
 # 智能体与语音接入
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.14.0。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.17.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
 ## Codex 与 DeepSeek Harness 共用角色
+
+首次安装的 `provider` 为 `unconfigured`，不自动选择任何对话宿主。外部智能体仍可连接 MCP 并直接使用角色工具；只有要从桌宠聊天窗口发起模型对话时，才需要配置来源。接入智能体在用户要求安装／接入的授权范围内，可通过带配对码的 `PUT /api/settings` 设置 `{"provider":"dsh"}`、`{"provider":"codex"}`，或配置 `provider:"api"` 及对应地址、模型、密钥。切回 `{"provider":"unconfigured"}` 保留已有配置字段。DSH 桥注册不会自动替用户切换来源；已有来源的升级安装不重置选择。
+
+未配置时调用 `/api/chat` 返回 HTTP 409、`PROVIDER_NOT_CONFIGURED`，不进入思考、不启动提供方、不追加历史。界面显示“待接入”，保留输入草稿；保存来源或收到智能体的配置更新后自动刷新。配对码、密钥不应写入示例或日志。
 
 两者连接同一个 `/mcp`，不需要各启动一份角色。工具包括 `avatar_capabilities`、`avatar_state`、`avatar_perform`、`avatar_expression`、`avatar_body`、`avatar_speak`、`avatar_set_state`、`avatar_stop`、`avatar_reset`、`avatar_watch_context`。动作工具立即返回接受状态；桌宠窗口负责实际动画和逐段朗读。
 
@@ -58,9 +62,9 @@ DeepSeek Harness 的示例在 `integrations/dsh/cordis.patch.example.yml`。校�
 
 DSH接入依据官方 [MCP客户端](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)、[插件加载](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md) 和 [事件接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/framework/events.md)。DSH仍在快速迭代，首次接入需使用你安装的版本验证。
 
-插件的`chat:true`开启双向聊天桥（当前插件默认启用，`chat:false`关闭）。它调用官方`ctx.sessionController.create/prompt/cancel`，默认在`~/.dsh/live2d-companion`创建独立桌宠会话；也可配置`chatSessionId`指定专门会话。`sessionId`仅过滤状态观察来源，不能代替`chatSessionId`。服务通过认证WebSocket发送问题，插件以内部`requestId`关联用户消息及同一回合的最终助手回复，返回真实结果；停止会取消该回合。桥未连接时明确报错，不伪造回复。契约依据[官方Session Controller](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/api/session-controller/src/index.ts)。
+插件的`chat:true`开启双向聊天桥（当前插件默认启用，`chat:false`关闭）。它调用官方`ctx.sessionController.create/prompt/cancel`，在 DSH home 下的 `live2d-companion` 创建独立桌宠会话。目录优先级为显式 `chatCwd` → `dshHome/live2d-companion` → `$DSH_HOME/live2d-companion` → `~/.dsh/live2d-companion`；支持 `~` 展开，桥加载时固定路径，自定义 home 不会写入默认 home。也可配置`chatSessionId`复用专门会话，此时不创建目录。`sessionId`仅过滤状态观察来源，不能代替`chatSessionId`。服务通过认证WebSocket发送问题，插件以内部`requestId`关联用户消息及同一回合的最终助手回复，返回真实结果；停止会取消该回合。桥未连接时明确报错，不伪造回复。契约依据[官方Session Controller](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/api/session-controller/src/index.ts)及[DSH home-paths](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md)。
 
-桌宠会话的工具守卫默认禁止执行命令、访问文件和调用角色工具。需要联网时，在`searchTools`里填写已安装的可信只读网页检索工具**精确名称**；插件会检查工具存在。默认空列表表示没有网页搜索，界面不会显示伪造来源。DSH使用程序化工具模式时，通用`run_code`仍被禁止，建议该专用会话使用原生工具模式。守卫仅影响桌宠会话，不影响其他DSH会话。接口已通过原生方法契约及真实WebSocket传输测试；尚未取得并连接本机DSH地址，未做真实账户端到端验证，具体版本仍需连接后验证。
+桌宠会话的工具守卫默认禁止执行命令、访问文件和调用角色工具。需要联网时，在`searchTools`里填写已安装的可信只读网页检索工具**精确名称**；插件会检查工具存在。默认空列表表示没有网页搜索，界面不会显示伪造来源。DSH使用程序化工具模式时，通用`run_code`仍被禁止，建议该专用会话使用原生工具模式。守卫仅影响桌宠会话，不影响其他DSH会话。用户已在 DSH `0.2.1-rc.2` 全新 profile 中完成 MCP 十个工具、状态桥、双向聊天和真实模型渲染的端到端验证；自动测试另行覆盖契约及真实 WebSocket 传输，其他版本与插件配置仍需连接后验证。
 
 ## 桌宠内聊天
 
@@ -72,9 +76,11 @@ API密钥仅在服务端使用。有Electron系统加密回调时加密保存；
 
 ## 语音与口型
 
-`POST /api/tts {"text":"你好"}` 默认使用Windows System.Speech生成真实WAV音频。中文文本优先选中文系统嗓音；未安装中文语音时明确报错，可在系统里安装中文语音或配置TTS API。`GET /api/voices`列出系统可用嗓音；设置`tts.systemVoice`可指定。
+`POST /api/tts {"text":"你好"}` 按 `tts.provider` 选择语音来源，默认 `edge` 使用“大肥鱼 · 晓伊”（`zh-CN-XiaoyiNeural`，语速 `+3%`、音调 `+8Hz`）生成真实 MP3。此来源需要联网，会向微软语音服务发送待朗读文字，无需 API Key。
 
-开启`tts.enabled`后，独立的语音API配置调用兼容的`/audio/speech`端点，返回MP3。语音API的密钥与聊天API密钥分开。播放器使用实际音频振幅驱动嘴部，属于音量同步，不宣称精确音素对齐；中断应同时停止音频、清空播放队列并收口。
+`tts.provider: "system"` 使用 Windows System.Speech 在本机生成 WAV。中文文本优先选中文系统嗓音；未安装时明确报错。`GET /api/voices` 列出系统可用嗓音；`tts.systemVoice` 可指定。
+
+`tts.provider: "api"` 使用独立语音 API 配置调用兼容的 `/audio/speech` 端点，返回 MP3；旧的 `tts.enabled` 字段仍兼容，API 模式为 `true`。语音 API 密钥与聊天 API 密钥分开。切换来源不会清除配置，失败也不会静默切换。播放器使用实际音频振幅驱动嘴部，属于音量同步，不宣称精确音素对齐；中断应同时停止音频、清空播放队列并收口。
 
 ## 一起看网页
 

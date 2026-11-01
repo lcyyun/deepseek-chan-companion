@@ -1,6 +1,10 @@
 # 大肥鱼 · 项目维护与代码导读
 
-本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.14.0 实现以 Windows x64 和这份 DeepSeek-chan 模型为目标，版本差异见第 15–18 节。
+本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.17.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
+
+0.17 首次启动使用 `provider:unconfigured`，服务在进入思考／取消旧请求／记录历史之前拒绝未配置的 `/api/chat`，不回退到 Codex。已有保存来源继续保留；外部 MCP 操控和本地互动不依赖聊天来源。界面监听 `settings` 广播后刷新来源与发送状态，未配置时保留输入草稿。回归见 `server.test.mjs` 与 `desktop-provider.test.mjs`。
+
+悬浮球右键通过只允许 toggle 窗口使用的 `toggle-menu` IPC 打开主进程原生菜单，避免菜单被小透明窗口裁切。打开前取消旧拖动和指针捕获；“退出大肥鱼”调用 `app.quit()`，统一走 `before-quit` 保存位置、停止观察器、注销快捷键及关闭服务，三个窗口随应用退出。右键退出与端口释放由 `desktop-toggle.test.mjs` 验证。
 
 ## 1. 先理解四层结构
 
@@ -19,7 +23,7 @@ flowchart LR
   Runtime --> SDK[官方 Cubism Core + Framework]
   SDK --> Canvas[透明 WebGL 画布]
   Pet -->|TTS 请求| Service
-  Service --> Speech[Windows TTS / 语音 API]
+  Service --> Speech[晓伊在线语音 / Windows TTS / 语音 API]
   Speech --> Audio[AudioContext 音频与进度]
   Audio --> Pet
   Main[Electron 主进程] <-->|受限 IPC| UI
@@ -41,7 +45,8 @@ flowchart LR
 | [desktop/mouse-input.cjs](../desktop/mouse-input.cjs)、[MouseButtons.cs](../desktop/native/MouseButtons.cs) | 物理鼠标左键观察、辅助程序编译、心跳、退出和故障时释放状态 |
 | [server/service.mjs](../server/service.mjs) | 本地 HTTP/WS、配对、模型清单、请求取消、事件广播、网页上下文 |
 | [server/protocol.mjs](../server/protocol.mjs) | 能力清单、命令和回复校验、模型提示、口播长度预算 |
-| [server/adapters.mjs](../server/adapters.mjs) | OpenAI 兼容聊天/语音接口、Codex CLI、Windows TTS |
+| [server/adapters.mjs](../server/adapters.mjs) | OpenAI 兼容聊天/语音接口、Codex CLI、语音来源路由及 Windows TTS |
+| [server/edge-tts.mjs](../server/edge-tts.mjs) | 默认晓伊在线语音合成、取消及有界音频收集 |
 | [server/settings.mjs](../server/settings.mjs) | API/TTS 配置、密钥加密、公开设置视图和原子写入 |
 | [server/mcp.mjs](../server/mcp.mjs)、[server/dsh-manager.mjs](../server/dsh-manager.mjs) | MCP 工具和 DSH 请求桥接 |
 | [src/renderer/main.tsx](../src/renderer/main.tsx) | 页面入口；回复编排、触摸、输入取消、窗口事件和设置下发 |
@@ -235,7 +240,9 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 
 ## 8. 声音与口型
 
-语音请求返回实际音频：未启用 API TTS 时使用 Windows 系统语音生成 WAV；启用时请求兼容 `/audio/speech` 的接口。渲染器统一解码成 AudioBuffer，播放路径一致。
+语音请求按 `tts.provider` 返回实际音频：默认 `edge` 使用晓伊（`zh-CN-XiaoyiNeural`，语速 `+3%`、音调 `+8Hz`）在线合成 MP3；`system` 使用 Windows 系统语音生成 WAV；`api` 请求兼容 `/audio/speech` 的接口。渲染器统一解码成 AudioBuffer，播放路径一致。晓伊会将待朗读文字发给微软语音服务，UI 与 README 均明确标注。在线服务不可用时报告错误，不静默切换来源。
+
+`tts.enabled` 是旧 API 模式的兼容字段，`provider: "api"` 时为 `true`。旧配置的启用 API 保留为 `api`，显式指定的系统嗓音保留为 `system`，其他未指定声音的配置迁移为默认 `edge`。切换来源只改变选择，不删除原 API 地址、模型、音色和密钥。
 
 `SpeechPlayer.level()` 使用 analyser 的实际波形计算 RMS，过滤静音后转为口型包络；每帧先 `setAudioLevel()` 再 `update()`。结束、停止和沉默必须归零。不能用字幕长度、正弦波或 TTS 请求耗时冒充真实口型。五元音参数暂不作为默认可靠功能，缺少可见效果校准时维持关闭。
 
@@ -337,6 +344,12 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 
 ## 12. 测试与发布
 
+0.16 将自动测试入口分为 `npm test` / `npm run test:ci`、`npm run test:desktop`、`npm run test:all`。`scripts/test.mjs` 使用 Node 的 `run({isolation:'none', concurrency:1})`，CI 不为每个测试文件 fork 子进程，并禁止 `child_process` 的启动 API。测试用 TypeScript 的进程内转换加载时间轴与音效代码，不调用 esbuild。新增无需桌面的 `.test.mjs` 自动进入 CI；需要 Electron 或原生辅助程序的检查必须显式列入 desktop 集合，避免权限错误被误报为业务回归。
+
+CI 保留真实回环 MCP/WebSocket、DSH Session Controller 测试宿主、配置、行为和假鼠标管道故障释放检查。`mouse-input-native.test.mjs` 单独运行真实 .NET 观察器，原 `mouse-input.test.mjs` 只验证注入进程的协议。桌面进程启动和父 PID 读取失败不能通过取消存活校验掩盖；CI 成功也不证明真实鼠标或模型画面成功。
+
+受限构建入口是 `npm run setup:live2d:restricted` 和 `npm run build:restricted`：`scripts/build-in-process.mjs` 在当前进程用 Rollup + TypeScript 打包，fflate 解压官方校验后的 SDK，保留许可。`scripts/assert-no-subprocess.mjs` 可在验证时拒绝子进程与 Worker；原 Vite/esbuild 构建及便携包生成仍保留。此路径不做 JS 压缩，暂不支持 CSS URL/@import，遇到这些输入会明确失败。
+
 ### 自动检查的层次
 
 | 检查 | 命令或文件 | 能证明什么 |
@@ -346,7 +359,8 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 | 选择指南 | `performance-guide.test.mjs` | 25/12/12 目录完整匹配、推荐 ID 有效、常用显示名、不可变元数据和紧凑文本预算；不证明实模姿态正确 |
 | 服务生产边界 | `server.test.mjs`、`production-events.test.mjs` | 真实 HTTP/WS、鉴权、事件、manifest 名称到资源的链路 |
 | 桌面 IPC/UI | `desktop-tuning.test.mjs`、`desktop-toggle.test.mjs`、`expression-menu.test.mjs` | 独立 profile 的真实 Electron/React 事件、持久化及菜单边界；依赖先构建 dist |
-| 几何和辅助进程 | `pet-input.test.mjs`、`mouse-input.test.mjs` | 缩放、命中形状、边界和鼠标观察故障释放 |
+| 几何和辅助进程 | `pet-input.test.mjs`、`mouse-input.test.mjs`；桌面入口的 `mouse-input-native.test.mjs` | 缩放、命中形状、边界和假管道故障释放；另行验证真实辅助进程 |
+| DSH home 与受限构建 | `dsh-home.test.mjs`、`restricted-build.test.mjs` | 自定义 home、显式 cwd、已有会话复用；进程内打包、CSS 顺序与 ZIP 边界 |
 | 悬浮球采样 | `toggle-drag.test.mjs`、`desktop-toggle.test.mjs` | 注入物理源验证无 renderer move 仍跟随、抓取偏移、取消、迟到事件及轻点分流；不冒充系统鼠标实测 |
 | 桌宠触摸恢复 | `pet-pointer.test.mjs`、`pet-pointer-session.test.mjs`、`desktop-pointer.test.mjs` | 生产 React 的三类触摸、捕获异常、丢失松手、旧会话隔离、系统确认时序及主进程隐藏/显示/退出移动模式后的可激活状态 |
 | 音效 | `basin-audio.test.mjs`、`basin-sound.test.mjs` | 重叠上限、取消、静音、音色切换与解码生命周期 |
@@ -375,7 +389,7 @@ npm run package
 
 悬浮球使用完整的 DeepSeek 官方 SVG，窗口/托盘/EXE 使用独立头像 PNG/ICO。它们作为明确的 UI 资产随源码提供，构建不依赖图像生成缓存；来源、品牌规范与衍生素材边界见 [icon-sources.md](icon-sources.md)。
 
-输出目录有生成标记，只有确认属于当前工作区生成的旧包才会替换；失败保留/恢复旧包。打包还有依赖 import、Codex 可执行文件和禁止模型资产混入的检查。发布前仍需启动新便携包验证：模型加载、系统语音、一次聊天、停止、设置重启、悬浮球与显示器恢复。
+输出目录有生成标记，只有确认属于当前工作区生成的旧包才会替换；失败保留/恢复旧包。打包还有依赖 import、Codex 可执行文件和禁止模型资产混入的检查。发布前仍需启动新便携包验证：模型加载、默认晓伊语音、一次聊天、停止、设置重启、悬浮球与显示器恢复；涉及系统语音时额外验证 Windows 嗓音。
 
 修改版本号应同步 `package.json` 和锁文件。只把源代码推到 GitHub 不会自动构建发行包；仓库的可见性、源码授权、SDK 许可和模型授权是不同事项。
 
@@ -396,7 +410,7 @@ npm run package
 | 重置微调后又出现旧值 | 完整快照是否错误地按 patch merge、nested null 删除语义 | 不靠重复发 reset 掩盖所有权问题 |
 | 下拉选择器越出窗口 | portal 测量、viewport clamp、最大高度、滚动与 no-drag | 不退回会被系统放大的原生 select |
 | 更新后设置“丢失” | userData 路径/品牌迁移、JSON 校验、实际启动的是哪个版本 | 不先删除用户配置 |
-| API 正常但无中文语音 | 系统 voice 列表、Windows 中文语音、TTS enabled/base/model | 聊天 API 不必然包含语音服务 |
+| API 正常但无中文语音 | TTS provider；晓伊联网状态；Windows voice 列表；自定义 TTS base/model | 聊天 API 不必然包含语音服务 |
 
 ## 14. 当前局限与后续方向
 
@@ -405,7 +419,7 @@ npm run package
 - 原生输入、系统语音和打包按 Windows 实现；不能把前端可运行等同于 macOS/Linux 桌宠支持。
 - 这份模型的手、眼、盆、胸部物理和命中部件经过专用适配；新增模型应抽出可选的模型 profile，重新校准后再启用这些增强。
 - 口型是实际音量驱动，不是音素识别；语音当前整段生成并解码后播放，不是低延迟流式音频。
-- 外部 API 的兼容性取决于实际供应商；DSH/Codex 还依赖本机可用账号与配置。模拟桥接通过不代表用户账号的端到端请求已经验证。
+- 外部 API 的兼容性取决于实际供应商；DSH/Codex 还依赖本机可用账号与配置。用户已在 DSH `0.2.1-rc.2` 干净 profile 完成 MCP 十工具、状态桥、双向聊天和真实模型渲染验收；自动桥测试仍属于契约验证，不能代替其他版本或账号的实机请求。
 - 浏览器扩展、示例配对和默认端口需要保持一致；更改端口时检查所有接入点。
 - 单个 `.mjs` 行为模块和 `main.tsx` 已承担较多逻辑。后续拆分优先保持现有接口，逐步抽离 presentation、pointer interaction、设置面板和模型 profile，避免同时重写所有权与渲染时序。
 - `public/audio/metal-pipe-falling.mp3` 的来源与明确授权现状见 [音频来源](audio-sources.md)。模型和 Cubism SDK 不在源码仓库内；发布方式改变时重新核对这些第三方资产的条件。

@@ -4,6 +4,8 @@ import { join, dirname, delimiter, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { RESPONSE_SCHEMA, makeMessages, normalizeReply } from './protocol.mjs';
+import { edgeSpeech } from './edge-tts.mjs';
+import { getTtsProvider } from './tts-settings.mjs';
 
 function failure(message, code, status = 502) { return Object.assign(new Error(message), { code, status }); }
 export function endpoint(baseUrl, suffix) {
@@ -153,11 +155,14 @@ export async function codexChat({ settings, request, history, signal, dataDir, o
   });
 }
 
-export async function generateSpeech({ settings, text, signal, fetchImpl = fetch }) {
-  const tts = settings.tts;
+export async function generateSpeech({ settings, text, signal, fetchImpl = fetch, edgeSpeechImpl = edgeSpeech, systemSpeechImpl = systemSpeech }) {
+  const tts = settings.tts || {};
   if (typeof text !== 'string' || !text.trim() || text.length > 6000) throw failure('朗读文本无效或过长。', 'INVALID_TEXT', 400);
-  if (!tts.enabled) return systemSpeech({ text, voice: tts.systemVoice || '', signal });
-  if (!tts.baseUrl || !tts.model) throw failure('请填写语音API地址和模型，或关闭API语音使用Windows语音。', 'TTS_NOT_CONFIGURED', 409);
+  if (signal?.aborted) throw failure('语音已取消。', 'CANCELLED', 499);
+  const provider = getTtsProvider(tts);
+  if (provider === 'edge') return edgeSpeechImpl({ text, signal });
+  if (provider === 'system') return systemSpeechImpl({ text, voice: tts.systemVoice || '', signal });
+  if (!tts.baseUrl || !tts.model) throw failure('请填写语音API地址和模型，或在声音设置中选择晓伊或Windows语音。', 'TTS_NOT_CONFIGURED', 409);
   const response = await fetchImpl(endpoint(tts.baseUrl, '/audio/speech'), {
     method: 'POST', signal,
     headers: { 'Content-Type': 'application/json', ...(tts.apiKey ? { Authorization: `Bearer ${tts.apiKey}` } : {}) },

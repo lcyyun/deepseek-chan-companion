@@ -126,6 +126,21 @@ function finishToggleDrag(reason='end',id) {
   return lastToggleDrag;
 }
 function followToggle() {if(toggleGesture)finishToggleDrag('cancel');delete config.togglePosition;layoutTools();saveConfig();return broadcastTogglePlacement();}
+function showToggleMenu() {
+  if (!toggle || toggle.isDestroyed() || quitting) return;
+  // A native menu can extend beyond the small transparent ball window.
+  // Cancel capture before opening so closing a menu cannot complete an old tap.
+  if (toggleGesture) finishToggleDrag('cancel');
+  petPointer.clear(); suppressTracking();
+  pet?.webContents.send('desktop-event', { type: 'input-cancel' });
+  const visible = pet && !pet.isDestroyed() && pet.isVisible();
+  Menu.buildFromTemplate([
+    { label: '打开聊天', click: () => { if(!chat || chat.isDestroyed())return; if(!chat.isVisible())showChat(); else {raiseTools();chat.focus();} } },
+    { label: visible ? '暂时隐藏桌宠' : '显示桌宠', click: () => { if (pet && !pet.isDestroyed()) { if (visible) pet.hide(); else pet.showInactive(); } } },
+    { type: 'separator' },
+    { label: '退出大肥鱼', click: () => app.quit() },
+  ]).popup({ window: toggle });
+}
 function dragToggle(data) {
   if(!data||!['start','move','end'].includes(data.phase))throw new Error('悬浮球拖动阶段无效');
   if(data.id!==undefined&&(typeof data.id!=='string'||data.id.length>100))throw new Error('悬浮球拖动标识无效');
@@ -326,6 +341,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
   if(!roles.has(event.sender.id))throw new Error('未知窗口');
   switch(action){
     case 'toggle-chat':showChat();break;
+    case 'toggle-menu':if(roles.get(event.sender.id)!=='toggle')throw new Error('仅悬浮球可以打开自身菜单');showToggleMenu();break;
     case 'toggle-drag':if(roles.get(event.sender.id)!=='toggle')throw new Error('仅悬浮球可以移动自身');return dragToggle(data);
     case 'toggle-follow':return followToggle();
     case 'hide-chat':case 'minimize':chat.hide();break;

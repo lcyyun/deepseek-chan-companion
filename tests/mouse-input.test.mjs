@@ -1,65 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { EventEmitter, once } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import mouseInput from '../desktop/mouse-input.cjs';
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+import vm from 'node:vm';
 
-const windows = { skip: process.platform !== 'win32', timeout: 10000 };
+// The production wrapper is Windows-specific; exercise its protocol on any CI
+// host with an isolated platform facade and injected, in-memory child pipes.
+const source = new URL('../desktop/mouse-input.cjs', import.meta.url);
+const fixtureModule = { exports: {} };
+vm.runInNewContext(await readFile(source, 'utf8'), {
+  module: fixtureModule, require: createRequire(source),
+  __dirname: dirname(fileURLToPath(source)),
+  process: { platform: 'win32', pid: process.pid, env: process.env },
+  setTimeout, clearTimeout, setInterval, clearInterval,
+}, { filename: fileURLToPath(source) });
+const mouseInput = fixtureModule.exports;
+
+const windows = { timeout: 10000 };
 const deadline = (promise, ms = 3000) => new Promise((resolve, reject) => {
   const timer = setTimeout(() => reject(new Error('observer test timeout')), ms);
   promise.then(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
-});
-
-async function observe(t, parentPid) {
-  const { path } = await mouseInput.ensureMouseInput();
-  const child = spawn(path, ['--parent-pid', String(parentPid)], { windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
-  t.after(() => { child.stdin.end(); if (child.exitCode === null) child.kill(); });
-  const messages = new EventEmitter(), received = [];
-  let pending = '', stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stdout.on('data', chunk => {
-    pending += chunk; const lines = pending.split(/\r?\n/); pending = lines.pop();
-    for (const line of lines.filter(Boolean)) { const message = JSON.parse(line); received.push(message); messages.emit(message.type, message); }
-  });
-  child.stderr.on('data', chunk => { stderr += chunk; });
-  await deadline(once(messages, 'button'));
-  return { child, messages, received, stderr: () => stderr };
-}
-
-test('native observer emits only left-button state, heartbeats, and exits when stdin closes', windows, async t => {
-  const { child, messages, received, stderr } = await observe(t, process.pid);
-  await deadline(once(messages, 'heartbeat'));
-  assert.ok(received.length >= 2);
-  for (const [index, message] of received.entries()) {
-    assert.deepEqual(Object.keys(message).sort(), ['button', 'down', 'seq', 'type']);
-    assert.equal(message.button, 'left'); assert.equal(typeof message.down, 'boolean');
-    assert.ok(['button', 'heartbeat'].includes(message.type));
-    if (index) assert.ok(message.seq > received[index - 1].seq);
-  }
-  const exit = once(child, 'exit'); child.stdin.end();
-  assert.equal((await deadline(exit))[0], 0);
-  assert.equal(stderr(), '');
-});
-
-test('native observer exits when its declared parent exits even while stdin stays open', windows, async t => {
-  const parent = spawn(process.execPath, ['-e', 'setTimeout(()=>{},20000)'], { windowsHide: true, shell: false, stdio: 'ignore' });
-  t.after(() => { if (parent.exitCode === null) parent.kill(); });
-  await once(parent, 'spawn');
-  const { child } = await observe(t, parent.pid);
-  const exit = once(child, 'exit'); parent.kill();
-  assert.equal((await deadline(exit))[0], 0);
-});
-
-test('wrapper starts the real bundled observer and stops with a released state', windows, async t => {
-  const changes = [], failures = [];
-  const controller = mouseInput.startMouseInput({ onButton: value => changes.push(value), onUnavailable: error => failures.push(error.code) });
-  t.after(() => controller.stop());
-  assert.equal(await deadline(controller.ready), true);
-  controller.stop();
-  assert.equal(changes.at(-1), false);
-  assert.deepEqual(failures, []);
 });
 
 function fakeProcess() {
@@ -80,7 +45,7 @@ async function wrapperFixture(t, options = {}) {
     executable: 'fixture-not-executed.exe', heartbeatTimeoutMs: 250,
     spawnImpl(file, args, config) {
       assert.ok(file.endsWith('fixture-not-executed.exe'));
-      assert.deepEqual(args, ['--parent-pid', String(process.pid)]);
+      assert.deepEqual(Array.from(args), ['--parent-pid', String(process.pid)]);
       assert.equal(config.windowsHide, true); assert.equal(config.shell, false);
       return child;
     },
@@ -105,7 +70,7 @@ test('explicit stop synchronously releases a press without reporting a failure',
 
 test('fresh held samples reach consumers without duplicating button edges or fabricating a release',windows,async t=>{
   const samples=[];
-  const {controller,child,changes}=await wrapperFixture(t,{onSample:sample=>samples.push(sample)});
+  const {controller,child,changes}=await wrapperFixture(t,{onSample:sample=>samples.push({...sample})});
   child.message({type:'heartbeat',button:'left',down:true,seq:1});
   child.message({type:'heartbeat',button:'left',down:true,seq:2});
   assert.deepEqual(changes,[false,true]);

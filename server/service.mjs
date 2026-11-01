@@ -138,6 +138,9 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   async function runChat(payload) {
     if (typeof payload.text !== 'string' || !payload.text.trim() || payload.text.length > 12000) throw error('请输入有效问题（最多12000字符）。');
     const settings = store.get();
+    const adapters = { api: apiChat, codex: codexChat, dsh: dsh.chat };
+    if (!Object.hasOwn(adapters, settings.provider)) throw error('尚未配置对话来源。请让你的智能体完成接入，或在设置中选择 API、Codex 或 DeepSeek Harness。', 'PROVIDER_NOT_CONFIGURED', 409);
+    const adapter = chatAdapters?.[settings.provider] || adapters[settings.provider];
     const mode = payload.mode || 'chat';
     if (!['chat', 'watch'].includes(mode)) throw error('不支持的对话模式。');
     const context = mode === 'watch' ? freshContext() : null;
@@ -151,7 +154,6 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     currentState = 'thinking';
     emit('state', { state: getState() });
     const request = { text: payload.text.trim(), mode, verbosity: payload.verbosity || settings.verbosity, context };
-    const adapter = chatAdapters?.[settings.provider] || (settings.provider === 'api' ? apiChat : settings.provider === 'dsh' ? dsh.chat : codexChat);
     const timeout = setTimeout(() => controller.abort(), 185000);
     timeout.unref?.();
     const isCurrent = () => activeRequest === controller && !controller.signal.aborted;
@@ -230,8 +232,10 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
       if (path === '/api/tts' && req.method === 'POST') {
         const payload = await body(req); const controller = new AbortController(); ttsControllers.add(controller);
         const timer = setTimeout(() => controller.abort(), 90000); timer.unref?.();
+        const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+        res.once('close', disconnected);
         try { const audio = await generateSpeech({ settings: store.get(), text: payload.text, signal: controller.signal }); res.writeHead(200, { 'Content-Type': audio.contentType, 'Cache-Control': 'no-store', 'Content-Length': audio.buffer.length }); return res.end(audio.buffer); }
-        finally { clearTimeout(timer); ttsControllers.delete(controller); }
+        finally { clearTimeout(timer); res.removeListener('close', disconnected); ttsControllers.delete(controller); }
       }
       if (path === '/api/watch' && req.method === 'PUT') {
         const payload = await body(req);

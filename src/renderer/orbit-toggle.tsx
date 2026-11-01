@@ -55,7 +55,7 @@ export function OrbitToggle() {
     return () => { cancel(); off(); offDesktop?.(); window.removeEventListener('blur', cancel); document.removeEventListener('visibilitychange', visibility); };
   }, []);
   return <button ref={button} type="button" className={`orbit-switch ${state}${dragging ? ' orbit-dragging' : ''}`}
-    title={error || '轻点聊天 · 拖动悬浮球 · Ctrl+Alt+Space'} aria-label="打开便携聊天窗口，可拖动位置"
+    title={error || '轻点聊天 · 拖动悬浮球 · 右键菜单可退出 · Ctrl+Alt+Space'} aria-label="打开便携聊天窗口，可拖动位置，右键打开桌宠菜单"
     onPointerDown={e => {
       if (e.button !== 0 || held.current) return;
       e.preventDefault(); setError('');
@@ -68,6 +68,7 @@ export function OrbitToggle() {
     onPointerUp={e => { if (held.current?.id === e.pointerId) { move(e); end(true); } }}
     onPointerCancel={() => end()} onLostPointerCapture={() => end()}
     onClick={e => { e.preventDefault(); if (e.detail === 0) send('toggle-chat'); }}
+    onContextMenu={e => { e.preventDefault(); epoch.current++; end(); setError(''); send('toggle-menu'); }}
     onDragStart={e => e.preventDefault()}>
     <img className="orbit-logo" width="38" height="30" src="/icons/deepseek.svg" alt="DeepSeek" draggable={false}/>
     <span className="switch-dot"/>

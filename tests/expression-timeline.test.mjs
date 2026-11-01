@@ -1,10 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import { transform } from 'esbuild';
-
-const { code } = await transform(await fs.readFile(new URL('../src/renderer/expression-timeline.ts', import.meta.url), 'utf8'), { loader: 'ts', format: 'esm' });
-const { createExpressionTimeline } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+import { importTypeScript } from './helpers/import-typescript.mjs';
+const { createExpressionTimeline } = await importTypeScript(new URL('../src/renderer/expression-timeline.ts', import.meta.url));
 const cues = ['puzzled', 'curious', 'happy', 'joyful'].map((emotion, i) => ({ at: i * .25, emotion, intensity: .8 }));
 
 test('expression score stays dormant until actual playback progress arrives', () => {

@@ -1,6 +1,6 @@
 {
   "name": "deepseek-chan-companion",
-  "version": "0.14.0",
+  "version": "0.17.0",
   "private": true,
   "description": "大肥鱼 · DeepSeek-chan 本地桌面伙伴",
   "main": "desktop/main.cjs",
@@ -8,9 +8,14 @@
     "build": "vite build",
     "start": "electron .",
     "dev": "npm run build && electron .",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node scripts/test.mjs ci",
     "package": "node scripts/package.mjs",
-    "setup:live2d": "node scripts/setup-live2d.mjs"
+    "setup:live2d": "node scripts/setup-live2d.mjs",
+    "test:ci": "node scripts/test.mjs ci",
+    "test:desktop": "node scripts/test.mjs desktop",
+    "test:all": "node scripts/test.mjs all",
+    "build:restricted": "node scripts/build-restricted.mjs",
+    "setup:live2d:restricted": "node scripts/setup-live2d.mjs --restricted"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -19,13 +24,17 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.3",
+    "@rollup/plugin-node-resolve": "^16.0.3",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "electron": "^39.0.0",
     "esbuild": "^0.25.0",
+    "fflate": "^0.8.3",
     "rcedit": "^5.0.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "rollup": "^4.67.3",
     "typescript": "^5.9.0",
     "vite": "^7.0.0"
   },

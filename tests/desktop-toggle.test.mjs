@@ -22,3 +22,19 @@ test('production toggle IPC and renderer separate tap/drag, persist independent 
     assert.equal(result.ok,true);if(mode==='update'){assert.equal(result.windowsHidden,true);assert.equal(result.clicked,true);assert.equal(result.dragged,true);assert.equal(result.nativeSampling,true);}
   }
 });
+
+test('floating ball native menu exits the whole companion and releases its service', {skip:process.platform!=='win32',timeout:60000}, async t=>{
+  try{await access(resolve('dist/index.html'));}catch{t.skip('Build the UI before the native menu integration test');return;}
+  const directory=await mkdtemp(join(tmpdir(),'l2d-toggle-exit-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  await writeFile(join(directory,'desktop.json'),JSON.stringify({modelRoot:join(directory,'no-model'),mouseTracking:false}));
+  const port=await availablePort(),env={...process.env,COMPANION_PORT:String(port)};delete env.ELECTRON_RUN_AS_NODE;
+  try{await run(require('electron'),[resolve('tests/desktop-toggle-fixture.cjs'),directory,'exit'],{cwd:resolve('.'),windowsHide:true,timeout:40000,env,maxBuffer:1024*1024});}
+  catch(error){let detail;try{detail=JSON.parse(await readFile(join(directory,'toggle-exit.json'),'utf8')).error;}catch{}throw new Error(detail||error.message,{cause:error});}
+  const result=JSON.parse(await readFile(join(directory,'toggle-exit.json'),'utf8'));
+  assert.equal(result.ok,true);assert.equal(result.rightClickNotChat,true);assert.equal(result.captureCancelled,true);
+  assert.equal(result.quitThroughMenu,true);assert.equal(result.windowsDestroyed,true);assert.equal(result.helperStopped,true);
+  const probe=net.createServer();
+  await new Promise((done,reject)=>{probe.once('error',reject);probe.listen(port,'127.0.0.1',done);});
+  await new Promise(done=>probe.close(done));
+});

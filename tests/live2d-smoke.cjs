@@ -9,6 +9,7 @@ const { build } = require('esbuild');
 const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'vendor', 'runtime-smoke');
 const extended = process.argv.includes('--extended');
+const useDefaultVoice = process.argv.includes('--voice=edge');
 const modelRoot = path.resolve(process.argv.slice(2).find(arg => !arg.startsWith('--')) || process.env.L2D_MODEL_ROOT || path.join(root, 'models', 'DeepSeek'));
 app.setPath('userData', path.join(output, 'electron-profile'));
 app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -23,12 +24,13 @@ const mime = { '.js': 'text/javascript', '.json': 'application/json', '.png': 'i
   const actualIndex = await fs.readFile(path.join(root, 'index.html'), 'utf8');
   const cspMeta = actualIndex.match(/<meta[^>]+http-equiv="Content-Security-Policy"[^>]*>/i)?.[0];
   if (!cspMeta) throw new Error('Actual index.html does not declare its CSP.');
-  let realWav;
+  let realAudio, audioType;
   if (extended) {
-    const { systemSpeech } = await import(pathToFileURL(path.join(root, 'server/adapters.mjs')).href);
-    const speech = await systemSpeech({ text: '你好，我是大肥鱼。这是一段测试语音。现在，说完了。' });
-    realWav = speech.buffer;
-    await fs.writeFile(path.join(output, 'speech.wav'), realWav);
+    const { systemSpeech, generateSpeech } = await import(pathToFileURL(path.join(root, 'server/adapters.mjs')).href);
+    const text = '你好，我是大肥鱼。这是一段测试语音。现在，说完了。';
+    const speech = useDefaultVoice ? await generateSpeech({ settings: { tts: { provider: 'edge' } }, text }) : await systemSpeech({ text });
+    realAudio = speech.buffer; audioType = speech.contentType;
+    await fs.writeFile(path.join(output, useDefaultVoice ? 'speech-default.mp3' : 'speech.wav'), realAudio);
     const source = `export {SpeechPlayer} from ${JSON.stringify(path.join(root,'src/renderer/audio.ts').replaceAll('\\','/'))};
       export {initialize} from ${JSON.stringify(path.join(root,'src/renderer/api.ts').replaceAll('\\','/'))};
       export {BehaviorController} from ${JSON.stringify(path.join(root,'src/shared/behavior.mjs').replaceAll('\\','/'))};`;
@@ -60,7 +62,7 @@ const mime = { '.js': 'text/javascript', '.json': 'application/json', '.png': 'i
       if (url.pathname === '/') { response.setHeader('Content-Type', 'text/html'); response.end(`<html><head>${cspMeta}</head><body style="margin:0;background:transparent"><canvas style="width:900px;height:900px" id="avatar"></canvas><script type="module" src="/smoke-entry.js"></script></body></html>`); return; }
       if (url.pathname === '/api/tts' && extended) {
         if(request.headers.authorization !== `Bearer ${token}`) {response.writeHead(401).end();return;}
-        response.writeHead(200,{'Content-Type':'audio/wav'});response.end(realWav);return;
+        response.writeHead(200,{'Content-Type':audioType});response.end(realAudio);return;
       }
       if (url.pathname.startsWith('/model/') && request.headers.authorization !== `Bearer ${token}`) { response.writeHead(401).end(); return; }
       let requested, allowedRoot;
@@ -146,7 +148,7 @@ const mime = { '.js': 'text/javascript', '.json': 'application/json', '.png': 'i
       speaker.destroy();behavior.destroy();window.speaker=null;window.behavior=null;return data;
     })()`);
     await fs.writeFile(path.join(output,'extended-result.json'),JSON.stringify(result,null,2));
-    if(result.audio.peakMouth<.1||result.audio.peakLevel<.1||result.audio.finalMouth>.001||result.audio.finalLevel!==0)throw new Error(`Real WAV lipsync verification failed: ${JSON.stringify({...result.audio,samples:result.audio.samples.length})}`);
+    if(result.audio.peakMouth<.1||result.audio.peakLevel<.1||result.audio.finalMouth>.001||result.audio.finalLevel!==0)throw new Error(`Real audio lipsync verification failed: ${JSON.stringify({...result.audio,samples:result.audio.samples.length})}`);
   }
   if (result.parameterCount < 10 || visiblePixels < 10000 || result.resetKey !== 0 || result.errors.length || result.cspViolations.length || errors.length) throw new Error(`Runtime verification failed: ${JSON.stringify(result)}`);
   await fs.writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));

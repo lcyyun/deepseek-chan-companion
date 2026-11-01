@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
-const bundle = await build({ entryPoints: [fileURLToPath(new URL('../src/renderer/basin-audio.ts', import.meta.url))], bundle: true, write: false, format: 'esm', platform: 'node' });
-const { BasinSound } = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+import { importTypeScript } from './helpers/import-typescript.mjs';
+const { BasinSound } = await importTypeScript(new URL('../src/renderer/basin-audio.ts', import.meta.url));
 
 function audioFixture(t, suspended = false) {
   const previous = globalThis.AudioContext;

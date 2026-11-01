@@ -1,6 +1,6 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-适用于本仓库当前 0.14.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
+适用于本仓库当前 0.17.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
 
 ## 1. 先确定你使用哪条通路
 
@@ -11,7 +11,9 @@
 
 这两条通路可以连接同一个桌宠进程，但职责不同。MCP 连接成功不代表 DSH 聊天桥已经连接；`bridges` 中出现 DSH 心跳，也不代表 `dsh.connected` 为真。
 
-**验证范围：** 仓库测试已覆盖真实 MCP 握手和工具调用、真实 WebSocket 传输，以及用测试宿主模拟 DSH 原生 Session Controller 的回合关联。尚未取得并接通用户本机 Harness 实例地址／安装配置，不能声称真实 DSH 账户端到端已经跑通。桌宠本身、HTTP 服务和其他聊天适配器的验证不能替代这一步。
+首次安装的聊天来源是 `unconfigured`，界面显示“待接入”；不会默认启动 Codex。外部 DSH 会话通过 MCP 操控角色无需修改来源。用户要求接通桌宠双向聊天时，完成桥接后按第 8 节设置 `provider:"dsh"`；桥连接本身不会自动改设置。未配置的 `/api/chat` 返回 `PROVIDER_NOT_CONFIGURED`，本地互动和角色工具仍可用。升级保留已选择的提供方。
+
+**验证范围：** 用户已在 **DSH `0.2.1-rc.2` 全新 profile** 中完成真实端到端验证：MCP 十个工具、状态桥、双向聊天和真实模型渲染均已打通。这是用户反馈的实机结果；仓库自动测试另外覆盖 MCP 握手、WebSocket 传输、Session Controller 契约与会话目录隔离，不将模拟宿主当作实机验证。其他版本、账号、搜索插件仍需相应验收。准备步骤与已知作业环境边界见[干净 profile 接入指南](dsh-clean-profile.md)。
 
 ## 2. 可直接给外部智能体的工作约定
 
@@ -318,7 +320,8 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 | `sessionId` | 可选，仅过滤**状态观察**来源，不等于聊天目标会话 |
 | `chat` | 默认启用；`false` 关闭双向聊天桥，只保留状态观察部分 |
 | `chatSessionId` | 可选，指定桌宠聊天专用的既有会话 |
-| `chatCwd` | 自动创建会话时的目录，默认 `~/.dsh/live2d-companion` |
+| `chatCwd` | 显式指定会话目录，优先于其他 home 设置；支持 `~` 展开 |
+| `dshHome` | 可选的 DSH home 覆盖；未指定时读 `DSH_HOME`，再回退 `~/.dsh`。默认会话目录为该 home 下的 `live2d-companion` |
 | `agentPreset` | 自动创建会话时传入的 DSH 预设；名称必须在本机存在 |
 | `searchTools` | 默认 `[]`，已安装且可信的只读检索工具**精确名称** |
 | `timeZone` | 聊天 prompt 的时区，默认本机时区 |
@@ -474,7 +477,7 @@ Invoke-RestMethod "$bridgeBase/api/stop" -Method Post -Headers $bridgeHeaders `
 | `INVALID_MODEL_OUTPUT` / `EMPTY_MODEL_OUTPUT` | 专用会话输出纯 JSON，包含必需字段；检查是否误返回工具说明、围栏或空内容 |
 | `WATCH_DISABLED` / `WATCH_SESSION_CHANGED` / `WATCH_CONTEXT_MISSING` | 由用户重新开启／分享页面，使用新 sessionId；不要自动恢复已关闭分享 |
 | `CANCELLED` | 用户停止、新请求替换、页面切换或超时；丢弃旧结果，不循环重试 |
-| 有表情无声音 | 检查“朗读简短回复”、Windows 中文嗓音或独立 TTS API 配置；动作接受结果不能证明音频已播放 |
+| 有表情无声音 | 检查“朗读简短回复”和所选声音来源：默认晓伊需要联网，Windows 模式需要中文嗓音，自定义 API 需正确配置；动作接受结果不能证明音频已播放 |
 | `searchAvailable=false` | 不声称搜索成功；核对精确 searchTools 名称和 webSearch 开关，不放宽成任意工具执行 |
 
 采集故障材料时只保留：版本、工具名、错误码、脱敏的连接状态、是否配置搜索。用户问题、模型回复、网页内容、令牌及原始环境变量都不应出现在默认诊断附件里。

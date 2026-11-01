@@ -1,10 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import { transform } from 'esbuild';
-
-const { code } = await transform(await fs.readFile(new URL('../src/renderer/gesture-timeline.ts', import.meta.url), 'utf8'), { loader: 'ts', format: 'esm' });
-const { createGestureTimeline } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+import { importTypeScript } from './helpers/import-typescript.mjs';
+const { createGestureTimeline } = await importTypeScript(new URL('../src/renderer/gesture-timeline.ts', import.meta.url));
 const cue = (at = 0, gesture = 'pointer') => ({ at, id: 'explain', gesture, intensity: .55 });
 function fixture(cues = [cue()], options) {
   const seen = [], cleared = [];

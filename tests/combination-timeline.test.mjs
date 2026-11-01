@@ -1,10 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import { transform } from 'esbuild';
-
-const { code } = await transform(await fs.readFile(new URL('../src/renderer/combination-timeline.ts', import.meta.url), 'utf8'), { loader: 'ts', format: 'esm' });
-const { createCombinationTimeline } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+import { importTypeScript } from './helpers/import-typescript.mjs';
+const { createCombinationTimeline } = await importTypeScript(new URL('../src/renderer/combination-timeline.ts', import.meta.url));
 const preset = { id: 'reassure', durationMs: 4000, command: { intent: 'reassure', gesture: 'chest', emotion: 'gentle' } };
 function fixture(combination = preset) {
   const samples = [], clears = [];

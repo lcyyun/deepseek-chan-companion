@@ -1,12 +1,16 @@
 // Actual production main/preload with isolated hidden windows. Input events here
 // exercise Chromium/React; they are not evidence of OS-native pointer routing.
-const {app,dialog,screen}=require('electron');
+const {app,dialog,screen,Menu}=require('electron');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const directory=process.argv[2],mode=process.argv[3];
-if(!directory||!['update','reload'].includes(mode))throw Error('Missing fixture arguments');
+if(!directory||!['update','reload','exit'].includes(mode))throw Error('Missing fixture arguments');
 app.setPath('userData',directory);
 app.disableHardwareAcceleration();
 const windows=new Map(),shown=new Map();let running=false,timer;
+const popupRequests=[];let helperStopped=false,quitResult;
+// Keep native menus hidden in the fixture, but inspect the real main-process
+// menu and execute its actual exit item after exercising the React event path.
+Menu.prototype.popup=function(options){popupRequests.push({menu:this,options});};
 // Inject only the physical input source. Main IPC/window movement and the
 // production renderer stay real; this does not claim OS-native mouse routing.
 let injectedCursor=null,reportButton=()=>{};
@@ -15,11 +19,16 @@ app.on('ready',()=>{
   screen.getCursorScreenPoint=()=>injectedCursor||realCursor();
 });
 require('../desktop/mouse-input.cjs').startMouseInput=({onButton})=>{
-  reportButton=onButton;onButton(false);return{ready:Promise.resolve(true),stop:()=>onButton(false)};
+  reportButton=onButton;onButton(false);return{ready:Promise.resolve(true),stop:()=>{helperStopped=true;onButton(false);}};
 };
 const output=path.join(directory,`toggle-${mode}.json`);
 function fail(error){fs.writeFileSync(output,JSON.stringify({ok:false,error:String(error?.stack||error)}));app.exit(1);}
 dialog.showErrorBox=(_title,message)=>fail(new Error(message));
+app.on('quit',()=>{
+  if(!quitResult)return;
+  const destroyed=[...windows.values()].every(win=>win.isDestroyed());
+  fs.writeFileSync(output,JSON.stringify({...quitResult,ok:destroyed&&helperStopped,windowsDestroyed:destroyed,helperStopped}));
+});
 process.stdout?.on('error',()=>{});process.stderr?.on('error',()=>{});
 app.on('browser-window-created',(_event,win)=>{
   win.show=()=>{shown.set(win.id,(shown.get(win.id)||0)+1);};win.showInactive=()=>{};
@@ -35,6 +44,29 @@ async function verify(){
   const ball=windows.get('toggle'),chat=windows.get('chat');
   await until(()=>ball.webContents.executeJavaScript('!!document.querySelector(".orbit-switch")'));
   const boot=await ball.webContents.executeJavaScript('window.companion.bootstrap().then(({togglePlacement})=>togglePlacement)');
+  if(mode==='exit'){
+    await assert.rejects(invoke('chat','toggle-menu'),/仅悬浮球/);
+    await assert.rejects(invoke('pet','toggle-menu'),/仅悬浮球/);
+    const baseline=shown.get(chat.id)||0,before=ball.getBounds();
+    for(const type of ['mouseDown','mouseUp'])ball.webContents.sendInputEvent({type,x:29,y:29,button:'right',clickCount:1});
+    await until(()=>popupRequests.length===1);
+    assert.equal(popupRequests[0].options.window,ball);
+    assert.deepEqual(popupRequests[0].menu.items.filter(item=>item.type!=='separator').map(item=>item.label),['打开聊天','显示桌宠','退出大肥鱼']);
+    assert.equal(shown.get(chat.id)||0,baseline,'right click must not open chat');
+    assert.deepEqual(ball.getBounds(),before,'right click must not move the ball');
+    assert.equal(await ball.webContents.executeJavaScript('document.querySelector(".orbit-switch").hasPointerCapture(1)'),false);
+    ball.webContents.sendInputEvent({type:'mouseDown',x:29,y:29,button:'left',clickCount:1});
+    await until(()=>ball.webContents.executeJavaScript('document.querySelector(".orbit-switch").hasPointerCapture(1)'));
+    await ball.webContents.executeJavaScript('document.querySelector(".orbit-switch").dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2}));void 0;');
+    await until(()=>popupRequests.length===2);
+    await until(()=>ball.webContents.executeJavaScript('!document.querySelector(".orbit-switch").hasPointerCapture(1)&&!document.querySelector(".orbit-dragging")'));
+    assert.equal(shown.get(chat.id)||0,baseline,'menu cancellation must not complete a previous tap');
+    assert.match(await ball.webContents.executeJavaScript('document.querySelector(".orbit-switch").title'),/右键/);
+    quitResult={mode,menuOpened:true,rightClickNotChat:true,captureCancelled:true,quitThroughMenu:true};
+    clearTimeout(timer);
+    popupRequests.at(-1).menu.items.find(item=>item.label==='退出大肥鱼').click();
+    return;
+  }
   if(mode==='reload'){
     const saved=JSON.parse(fs.readFileSync(path.join(directory,'expected-toggle.json'),'utf8'));
     assert.equal(boot.manual,true);await until(()=>JSON.stringify(ball.getBounds())===JSON.stringify(saved));
