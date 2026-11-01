@@ -97,3 +97,14 @@ Live2D 建模：霓虹猫_NeonNeko
 - 用“支持 Chrome / Edge 主动分享页面”，不写“自动看见整个屏幕”。
 - 用“可连接智能体和语音服务”，不写“整套 AI 无需网络或完全免费”。本地摸头和敲盆无需大模型请求，对话和语音取决于配置。
 - 当前代码仓库为私有，未改变可见性前不要写“已经开源、任何人可下载”。公开代码也不代表可以重新分发模型素材。
+
+## 已制作的增补段落
+
+制作工程位于本机被忽略的 `output/video014/`；成片、模型、配音权重和私人环境数据不随源码推送。
+
+- `final-v2`：在摸头之后加入轻点彩蛋，完整展示三轮反应、摸头安抚、心动及重置。`scripts/extend-promo-easter.py` 复用旧片段，按实际句组音频加入必要展示停顿。
+- `final-v3`：在日常桌面操作之后加入悬浮球右键菜单：打开聊天、暂时隐藏／显示、退出大肥鱼，说明收起窗口与退出程序的区别。沿用诗歌剧配音，保留彩蛋章节。
+
+菜单段使用真实悬浮球截图和明确标注的放大操作示意，未将其宣称为原生菜单实录。原生菜单截图在录制环境出现 DPI／窗口边界异常，因此没有采用。`scripts/record-menu-promo.cjs --verify-only` 在隔离 profile 验证实际生产菜单的隐藏、显示、退出回调及窗口销毁；`scripts/video-menu-panels.py` 生成标有“菜单操作示意”的面板，`scripts/video-menu-graphics.py` 生成章节图文，`scripts/extend-promo-menu.py` 生成新时间线，再由 `scripts/assemble-promo.py --assemble --tag final-v3 --reuse` 合成。
+
+每次增补都保留旧成片，并重算 SRT 和章节偏移。新增解说由独立的 `narration-easter`／`narration-menu` 配音清单提供，不重新生成已经验收的旧旁白。
