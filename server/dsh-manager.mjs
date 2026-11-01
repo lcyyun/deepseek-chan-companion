@@ -54,7 +54,9 @@ export function createDshManager(onChange = () => {}) {
     if (message.type !== 'chat-result') return;
     if (message.error) return entry.finish(remoteFailure(message));
     try {
-      const reply = normalizeReply(message.reply);
+      const reply = normalizeReply(message.nativeMode === true
+        ? { segments: [{ text: String(message.reply || '……'), intent: 'neutral', emotion: 'neutral', gesture: 'none', bodyAnimation: 'none', combination: 'none' }], details: '', sources: [], nativePerformed: message.nativePerformed === true }
+        : message.reply);
       const searchUsed = message.searchUsed === true;
       entry.finish(null, { ...reply, sources: searchUsed ? reply.sources : [], provider: 'dsh', searchAvailable: info?.searchAvailable === true, searchAttempted: message.searchAttempted === true, searchUsed });
     } catch { entry.finish(remoteFailure({ code: 'DSH_INVALID_REPLY' })); }

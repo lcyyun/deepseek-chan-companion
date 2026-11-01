@@ -117,6 +117,26 @@ test('real MCP activity and state heartbeat are separate; DSH MCP alone cannot s
   assert.equal(service.getState().performance.dshConnected, true, 'Known-client tool activity refreshes its lease');
 });
 
+test('native avatar_reply emits one atomic performance plan', async t => {
+  const { service } = await fixture(t);
+  const client = new Client({ name: 'native-pet', version: '1' });
+  t.after(() => client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(service.url + '/mcp'), { requestInit: { headers: { Authorization: `Bearer ${service.token}` } } }));
+  let event;
+  service.events.on('chat', value => { event = value; });
+  const response = await client.callTool({ name: 'avatar_reply', arguments: { segments: [
+    { text: '第一段。', intent: 'agree', emotion: 'happy', gesture: 'none', bodyAnimation: 'auto', combination: 'agree' },
+    { text: '第二段。', intent: 'explain', emotion: 'gentle', gesture: 'none', bodyAnimation: 'talk', combination: 'none' },
+  ], details: '完整说明' } });
+  const accepted = JSON.parse(response.content[0].text);
+  assert.equal(accepted.accepted, true);
+  assert.equal(event.nativeTool, true);
+  assert.equal(event.reply.nativeTool, true);
+  assert.equal(event.reply.segments.length, 2);
+  assert.equal(event.reply.segments[1].bodyAnimation, 'talk');
+  assert.equal(event.reply.details, '完整说明');
+});
+
 test('DSH bridge thinking updates status without inventing a chat command or request id', async t => {
   const { service, request } = await fixture(t);
   const emitted = [];

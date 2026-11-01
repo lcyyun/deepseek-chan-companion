@@ -251,6 +251,7 @@ function Pet(){
     held.x=e.screenX;held.y=e.screenY;held.at=now;
   }
   function say(reply:Reply){
+    if((reply as any).nativePerformed)return;
     const requestId=(reply as any).requestId||(thinking.current.pending?thinking.current.requestId:null);
     if(!reply.segments?.length||reply.id&&acceptedReplies.current.has(reply.id)||requestId&&discardedRequests.current.has(requestId))return;
     if(requestId&&thinking.current.pending&&thinking.current.requestId&&requestId!==thinking.current.requestId)return;
@@ -440,7 +441,7 @@ function Chat(){
     previousConnection.current={providerEffective:connection.providerEffective,chatAvailable:connection.chatAvailable};
   },[connection?.providerEffective,connection?.providerSource,connection?.chatAvailable]);
   useEffect(()=>{refresh();const off=events(e=>{
-    if(e.type==='chat'){const r=e.reply||e.data||e;if(r.segments){const id=r.id||String(Date.now());if(!seen.current.has(id)){seen.current.add(id);setMessages(m=>[...m,{id,role:'assistant',text:r.segments.map((s:any)=>s.text).join('\n'),details:r.details,sources:r.sources}]);}setBusy(false);setState('idle');}}
+    if(e.type==='chat'){const r=e.reply||e.data||e;if(r.nativeTool)return;if(r.segments){const id=r.id||String(Date.now());if(!seen.current.has(id)){seen.current.add(id);setMessages(m=>[...m,{id,role:'assistant',text:r.segments.map((s:any)=>s.text).join('\n'),details:r.details,sources:r.sources}]);}setBusy(false);setState('idle');}}
     if(e.type==='state'){if(e.state&&typeof e.state==='object'&&'providerEffective'in e.state)setConnection(e.state);const s=typeof e.state==='string'?e.state:e.state?.avatarState||e.state?.state;if(s){setState(s);if(s==='thinking')setBusy(true);if(s==='idle'||s==='listening'||s==='error')setBusy(false);}}
     if(e.type==='watch-context')setPage(e.context||e.data);
     if(e.type==='watch'){const enabled=!!e.watch?.enabled;setWatch(enabled);setWatchPin(enabled);window.companion?.control('watch-pin',enabled).catch(()=>{});if(!enabled)setPage(null);}

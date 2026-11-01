@@ -77,7 +77,8 @@ export function attachChatBridge(ctx, config) {
     const operation = matching(id);
     if (!operation && !ownedSessions.has(id)) return;
     if (operation?.searchAllowed && searchNames.has(exec.name)) return;
-    return 'Desktop companion chat only permits its configured web search tools. Do not run code, access files, modify anything, or call avatar tools; return the requested JSON answer.';
+    if (config.native === true && /(^|__)avatar_reply$/i.test(String(exec.name || ''))) return;
+    return 'Desktop companion chat only permits its configured search tools and, in native mode, avatar_reply. Do not run code, access files, modify anything, or call other avatar tools.';
   });
   async function session() {
     if (config.chatSessionId) return String(config.chatSessionId);
@@ -92,7 +93,7 @@ export function attachChatBridge(ctx, config) {
   function finish(operation, problem) {
     if (!pending.has(operation.requestId)) return;
     pending.delete(operation.requestId); clearTimeout(operation.timer);
-    send({ type: 'chat-result', requestId: operation.requestId, ...(problem ? dshWireFailure(problem) : { reply: operation.text, searchAttempted: operation.searchAttempted, searchUsed: operation.searchUsed }) });
+    send({ type: 'chat-result', requestId: operation.requestId, ...(problem ? dshWireFailure(problem) : { reply: operation.text, nativeMode: config.native === true, nativePerformed: operation.nativeTool === true, searchAttempted: operation.searchAttempted, searchUsed: operation.searchUsed }) });
   }
   async function cancel(operation, code = 'DSH_TURN_CANCELLED') {
     operation.failureCode = code;
@@ -103,13 +104,17 @@ export function attachChatBridge(ctx, config) {
   async function receive(message) {
     if (message.type === 'chat-cancel') { const operation = pending.get(message.requestId); if (operation) await cancel(operation); return; }
     if (message.type !== 'chat-request') return;
-    const operation = { requestId: message.requestId, controller: new AbortController(), sessionId: '', turn: null, text: '', searchAllowed: message.searchAllowed === true, searchAttempted: false, searchUsed: false, searchCalls: new Set() };
+    const operation = { requestId: message.requestId, controller: new AbortController(), sessionId: '', turn: null, text: '', nativeTool: false, searchAllowed: message.searchAllowed === true, searchAttempted: false, searchUsed: false, searchCalls: new Set() };
     pending.set(operation.requestId, operation);
     operation.timer = setTimeout(() => void cancel(operation, 'DSH_TURN_TIMEOUT'), 175000); operation.timer.unref?.();
     try {
       operation.sessionId = await session();
       if (operation.controller.signal.aborted) return;
-      const prompt = message.messages.map(m => `${String(m.role).toUpperCase()}:\n${m.content}`).join('\n\n');
+      const native = config.native === true;
+      const transcript = message.messages.filter(m => !native || m.role !== 'system').map(m => `${String(m.role).toUpperCase()}:\n${m.content}`).join('\n\n');
+      const prompt = native
+        ? `NATIVE PET MODE: reply normally. When you want the character to speak or perform, call avatar_reply once with the complete segments plan; do not repeat that performance in your text. Do not run code or access files.\n\n${transcript}`
+        : transcript;
       // Register pending state before prompt: events can arrive before its acknowledgement.
       await ctx.sessionController.prompt({ requestId: operation.requestId, sessionId: operation.sessionId, mode: 'queue', content: [{ type: 'text', text: prompt }], clientTimeZone: config.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone }, operation.controller.signal);
     } catch (error) { finish(operation, operation.controller.signal.aborted ? { code: operation.failureCode || 'DSH_TURN_CANCELLED' } : error); }
@@ -125,6 +130,8 @@ export function attachChatBridge(ctx, config) {
       const content = event.data.message?.content || [];
       const text = content.filter(block => block.type === 'text').map(block => block.text).join('');
       if (text.trim()) operation.text = text;
+    } else if (event.type === 'tool/call' && /avatar_reply/i.test(String(event.data?.name || ''))) {
+      operation.nativeTool = true;
     } else if (event.type === 'tool/call' && searchNames.has(event.data.name)) {
       operation.searchCalls.add(event.data.callId); operation.searchAttempted = true;
       send({ type: 'chat-progress', requestId: operation.requestId, stage: 'searching' });

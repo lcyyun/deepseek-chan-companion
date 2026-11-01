@@ -15,12 +15,17 @@
       config:
         baseUrl: http://127.0.0.1:39181
         chat: true
+        # Native tool mode. The agent chats normally and calls avatar_reply once
+        # per turn when performance is wanted; no long JSON prompt is injected.
+        native: true
+        # Ask the user first: A = existing conversation, B = new dedicated pet.
+        # A: put the selected existing session here.
+        # B: omit this, let DSH create the companion, then save the generated ID here.
+        # chatSessionId: your-conversation-session-id
         # Default: <DSH_HOME>/live2d-companion; without DSH_HOME: ~/.dsh/live2d-companion.
         # Optional explicit overrides (normally leave unset for profile isolation):
         # dshHome: C:/path/to/isolated-dsh-home
         # chatCwd: C:/path/to/explicit-companion-workspace
-        # Optional: use a specific existing companion session instead of creating one.
-        # chatSessionId: your-companion-session-id
         # Exact names of trusted, installed read-only web tools. Empty means no web search.
         searchTools: []
         # Optional: restrict the shared pet to one DSH session.

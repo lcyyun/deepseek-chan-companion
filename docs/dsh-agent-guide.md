@@ -1,8 +1,8 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-最近校对：2026-11-01，按应用 0.18.1 的实现核对。返回[文档目录](README.md)。这是现行操作手册；文中的旧版兼容说明不改变当前默认行为。
+最近校对：2026-11-02，按应用 0.19.0 的实现核对。返回[文档目录](README.md)。这是现行操作手册；文中的旧版兼容说明不改变当前默认行为。
 
-适用于本仓库当前 0.18.1 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
+适用于本仓库当前 0.19.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
 
 ## 1. 先确定你使用哪条通路
 
@@ -15,7 +15,7 @@
 
 首次安装使用 `providerSource:"auto"`；聊天桥就绪后有效来源自动为 DSH，输入框显示“和 DeepSeek Harness 说点什么…”。只连 MCP 时明确提示聊天桥未启用并禁用发送；没有 DSH 时保持未连接。Codex 只手动选择，DSH 断线后保持来源并等待重连。外部 DSH 会话通过 MCP 操控角色无需聊天桥。`provider` 是保存值，实际显示与发送应读取 `providerEffective` 和 `chatAvailable`。升级保留旧保存来源，旧 Codex 用户可在设置中切换一次自动模式。
 
-**验证范围：** 用户已在 **DSH `0.2.1-rc.2` 全新 profile** 中完成真实端到端验证：MCP 十个工具、状态桥、双向聊天和真实模型渲染均已打通。这是用户反馈的实机结果；仓库自动测试另外覆盖 MCP 握手、WebSocket 传输、Session Controller 契约与会话目录隔离，不将模拟宿主当作实机验证。其他版本、账号、搜索插件仍需相应验收。准备步骤与已知作业环境边界见[干净 profile 接入指南](dsh-clean-profile.md)。
+**验证范围：** 用户已在 **DSH `0.2.1-rc.2` 全新 profile** 中完成真实端到端验证：MCP 十一个工具、状态桥、双向聊天和真实模型渲染均已打通。这是用户反馈的实机结果；仓库自动测试另外覆盖 MCP 握手、WebSocket 传输、Session Controller 契约与会话目录隔离，不将模拟宿主当作实机验证。其他版本、账号、搜索插件仍需相应验收。准备步骤与已知作业环境边界见[干净 profile 接入指南](dsh-clean-profile.md)。
 
 ## 2. 可直接给外部智能体的工作约定
 
@@ -117,7 +117,7 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 
 ## 4. 完整 MCP 工具契约
 
-工具的实际名称以 DSH 的工具发现结果为准，宿主可能附加服务名前缀。下表是本服务注册的十个工具名。未标“必填”的参数均可省略；无参工具传 `{}`。
+工具的实际名称以 DSH 的工具发现结果为准，宿主可能附加服务名前缀。下表是本服务注册的十一个工具名。未标“必填”的参数均可省略；无参工具传 `{}`。安装前先读[DSH 安装模式](dsh-install-modes.md)，询问用户选 A/B，不设默认。
 
 | 工具 | 参数与限制 | 结果与用途 |
 | --- | --- | --- |
@@ -127,6 +127,7 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 | `avatar_expression` | `emotion?`、`active?`、`intensity?` 0–1、`durationMs?` 200–20000；active 默认 true，此时 emotion 必填 | 只预览脸，不切换手臂；active:false 只结束面部预览 |
 | `avatar_body` | `animation?`、`active?`、`intensity?` 0–1、`durationMs?` 2000–20000；active 默认 true，此时 animation 必填 | 独立肢体动画，保持表情；active:false 只结束肢体预览 |
 | `avatar_speak` | **`text` 必填**，1–6000 字符；`intent?`、`emotion?`、`gesture?`；`bodyAnimation?`：`auto/none` 或具体动画 ID；`combination?`：`auto/none` 或组合 ID；`expressionCues?`：最多 4 项，每项 `{at, emotion, intensity}`，三字段必填；`at` 0–0.9、`intensity` 0–1、emotion 字符串最长 80 | 提交一句朗读、可选开场组合及后续独立的面部、肢体编排。此工具没有 `gaze`、顶层 `intensity` 或 `durationMs` 参数 |
+| `avatar_reply` | **`segments` 必填**：1–3 段，每段 `text` 1–1200 字符，可选 `intent/emotion/gesture/bodyAnimation/combination/expressionCues`；`details?`、`sources?` | 原生桌宠模式的一次原子整轮表演。正常助手文本只展示，不重复朗读；同一轮最多调用一次。低层 `avatar_speak` 等不应在聊天桥中重复调用 |
 | `avatar_set_state` | **`state` 必填**：`idle/thinking/listening/speaking/error` | 更新可见活动状态。设置 speaking 本身不会合成语音 |
 | `avatar_stop` | `{}` | 取消当前聊天生成、正在合成的语音，并广播停止，由桌宠取消播放／动作 |
 | `avatar_reset` | `{}` | 同样取消生成和语音，并让桌宠恢复基础姿态。不是清空用户设置或删除模型 |
@@ -502,7 +503,7 @@ Invoke-RestMethod "$bridgeBase/api/stop" -Method Post -Headers $bridgeHeaders `
 
 ## 12. 明确未开放的控制能力
 
-当前外部智能体使用的是上述十个 MCP 工具和共用 HTTP 命令。没有开放任意 Cubism 参数写入、胸部参数调节、窗口坐标操作、拖动悬浮球、修改表情微调、切换敲击音色或模拟触摸的 MCP／HTTP 控制 API。
+当前外部智能体使用的是上述十一个 MCP 工具和共用 HTTP 命令。没有开放任意 Cubism 参数写入、胸部参数调节、窗口坐标操作、拖动悬浮球、修改表情微调、切换敲击音色或模拟触摸的 MCP／HTTP 控制 API。
 
 本机触摸区域和新增的第四类局部反应由本地指针交互触发，不是新增 LLM 参数接口。敲盆及两种音效是用户本地道具设置。不要捏造 `touch`、`knock`、`setParameter` 等命令，也不要绕过工具接口改模型资源文件。
 
@@ -510,7 +511,7 @@ Invoke-RestMethod "$bridgeBase/api/stop" -Method Post -Headers $bridgeHeaders `
 
 | 源文件 | 核对内容 |
 | --- | --- |
-| [server/mcp.mjs](../server/mcp.mjs) | 十个工具的实际 schema 和 Streamable HTTP 处理 |
+| [server/mcp.mjs](../server/mcp.mjs) | 十一个工具的实际 schema 和 Streamable HTTP 处理 |
 | [server/protocol.mjs](../server/protocol.mjs) | 能力、命令规范化、短答预算和 JSON 输出格式 |
 | [server/service.mjs](../server/service.mjs) | HTTP 鉴权、状态、取消、watch 会话与事件 |
 | [server/dsh-manager.mjs](../server/dsh-manager.mjs) | DSH 桥注册、请求关联、搜索标志、断线处理 |

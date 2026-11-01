@@ -92,7 +92,9 @@ export function normalizeReply(value) {
   const segments = all.slice(0, 3);
   if (segments.some(s => s.text.length > 1200)) throw Object.assign(new Error('模型的朗读段落过长，请选择简短回复后重试。'), { code: 'INVALID_MODEL_OUTPUT' });
   const sources = Array.isArray(value.sources) ? value.sources.filter(s => typeof s?.url === 'string' && /^https?:\/\//i.test(s.url)).slice(0, 20).map(s => ({ title: String(s.title || s.url).slice(0, 300), url: s.url })) : [];
-  return { id: randomUUID(), segments, details, sources };
+  return { id: randomUUID(), segments, details, sources,
+    ...(value.nativePerformed === true ? { nativePerformed: true } : {}),
+    ...(value.nativeTool === true ? { nativeTool: true } : {}) };
 }
 
 export function normalizeCommand(input) {

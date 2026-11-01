@@ -1,8 +1,8 @@
 # 智能体与语音接入
 
-最近校对：2026-11-01，按应用 0.18.1 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
+最近校对：2026-11-02，按应用 0.19.0 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.18.1；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十一个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.19.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
@@ -74,9 +74,11 @@ DeepSeek Harness 的示例在 `integrations/dsh/cordis.patch.example.yml`。校�
 
 DSH接入依据官方 [MCP客户端](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)、[插件加载](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md) 和 [事件接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/framework/events.md)。DSH仍在快速迭代，首次接入需使用你安装的版本验证。
 
+安装前先按[DSH 安装模式](dsh-install-modes.md)询问用户选 A“接到已有会话”还是 B“新建独立桌宠会话”；不要默认。A 还要让用户选择具体会话。两种模式都推荐 `native: true`，由智能体在正常聊天中按需调用一次 `avatar_reply`，不再把长 JSON 表演规范作为每轮用户消息注入会话。
+
 插件的`chat:true`开启双向聊天桥（当前插件默认启用，`chat:false`关闭）。它调用官方`ctx.sessionController.create/prompt/cancel`，在 DSH home 下的 `live2d-companion` 创建独立桌宠会话。目录优先级为显式 `chatCwd` → `dshHome/live2d-companion` → `$DSH_HOME/live2d-companion` → `~/.dsh/live2d-companion`；支持 `~` 展开，桥加载时固定路径，自定义 home 不会写入默认 home。也可配置`chatSessionId`复用专门会话，此时不创建目录。`sessionId`仅过滤状态观察来源，不能代替`chatSessionId`。服务通过认证WebSocket发送问题，插件以内部`requestId`关联用户消息及同一回合的最终助手回复，返回真实结果；停止会取消该回合。桥未连接时明确报错，不伪造回复。契约依据[官方Session Controller](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/api/session-controller/src/index.ts)及[DSH home-paths](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md)。
 
-桌宠会话的工具守卫默认禁止执行命令、访问文件和调用角色工具。需要联网时，在`searchTools`里填写已安装的可信只读网页检索工具**精确名称**；插件会检查工具存在。默认空列表表示没有网页搜索，界面不会显示伪造来源。DSH使用程序化工具模式时，通用`run_code`仍被禁止，建议该专用会话使用原生工具模式。守卫仅影响桌宠会话，不影响其他DSH会话。用户已在 DSH `0.2.1-rc.2` 全新 profile 中完成 MCP 十个工具、状态桥、双向聊天和真实模型渲染的端到端验证；自动测试另行覆盖契约及真实 WebSocket 传输，其他版本与插件配置仍需连接后验证。
+桌宠会话的工具守卫默认禁止执行命令、访问文件和调用角色工具。`native: true`时额外允许 `avatar_reply` 这一个原子表演工具：它一次接收最多三段完整计划，负责朗读和动作，普通助手文本只用于聊天窗展示，不会重复朗读；`avatar_speak` 等低层工具不会在聊天桥里开放。需要联网时，在`searchTools`里填写已安装的可信只读网页检索工具**精确名称**；插件会检查工具存在。默认空列表表示没有网页搜索，界面不会显示伪造来源。DSH使用程序化工具模式时，通用`run_code`仍被禁止，建议该专用会话使用原生工具模式。守卫仅影响桌宠会话，不影响其他DSH会话。用户已在 DSH `0.2.1-rc.2` 全新 profile 中完成 MCP 十一个工具、状态桥、双向聊天和真实模型渲染的端到端验证；自动测试另行覆盖契约及真实 WebSocket 传输，其他版本与插件配置仍需连接后验证。
 
 ## 桌宠内聊天
 
