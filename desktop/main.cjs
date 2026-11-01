@@ -15,7 +15,7 @@ const defaultProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-
 if (path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
   require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
 }
-let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, watchPinned = false;
+let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;
 let config = {}, dataDir, configFile, failures = [], lastSaved = 0;
 let sanitizeModelTuning;
 const roles = new Map();
@@ -82,7 +82,7 @@ function syncPetTopmost() {
   if (!pet || pet.isDestroyed()) return;
   const focused = BrowserWindow.getFocusedWindow();
   const role = focused ? roles.get(focused.webContents.id) : null;
-  setPetTopmost(petTopmostForFocus(role, watchPinned));
+  setPetTopmost(petTopmostForFocus(role, petPinned));
 }
 
 function updateInputShape(options) {
@@ -307,6 +307,7 @@ else {
     try{config=JSON.parse(fs.readFileSync(configFile,'utf8'));}catch{}
     ({sanitizeModelTuning}=await import(pathToFileURL(path.join(ROOT,'src/shared/model-tuning.mjs')).href));
     config.modelTuning=sanitizeModelTuning(config.modelTuning);
+    petPinned=config.petPinned===true;
     const {createService}=await import(pathToFileURL(path.join(ROOT,'server/index.mjs')).href);
     service=await createService({port:Number(process.env.COMPANION_PORT)||39181,modelRoot:config.modelRoot||DEFAULT_MODEL,dataDir,staticRoot:path.join(ROOT,'dist'),
       encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Windows凭据加密不可用，暂时无法保存密钥');return safeStorage.encryptString(value);},
@@ -361,7 +362,7 @@ else {
     if(process.env.COMPANION_SHOW_CHAT==='1')chat.once('ready-to-show',()=>chat.show());
   }).catch(error=>{console.error(error);dialog.showErrorBox('大肥鱼启动失败',String(error.message||error));app.quit();});
 }
-ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,modelTuning:config.modelTuning};});
+ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,modelTuning:config.modelTuning};});
 ipcMain.handle('window-control',async(event,action,data)=>{
   if(!roles.has(event.sender.id))throw new Error('未知窗口');
   switch(action){
@@ -388,11 +389,13 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
     case 'basin-enabled':config.basinEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'basin-enabled',enabled:config.basinEnabled});return config.basinEnabled;
-    case 'watch-pin':{
+    case 'pet-pin':{
       const next = data === true;
-      // Show once when watch pinning turns on; a later manual hide must stay hidden.
-      if (next && !watchPinned && pet && !pet.isDestroyed() && !pet.isVisible()) pet.showInactive();
-      watchPinned = next;syncPetTopmost();return watchPinned;
+      // Show once when pinning turns on; a later manual hide must stay hidden.
+      if (next && !petPinned && pet && !pet.isDestroyed() && !pet.isVisible()) pet.showInactive();
+      petPinned = next;config.petPinned = next;saveConfig();syncPetTopmost();
+      for (const win of [pet, chat]) if (win && !win.isDestroyed()) win.webContents.send('desktop-event', { type: 'pet-pin', enabled: petPinned });
+      return petPinned;
     }
     case 'glasses-enabled':config.glassesEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'});return {enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'};
     case 'glasses-style':config.glassesStyle=data==='monocle'?'monocle':'black';saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled===true,style:config.glassesStyle});return config.glassesStyle;
@@ -407,7 +410,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'open-url':openSafe(data);break;
     case 'copy-pairing':clipboard.writeText(service.token);return true;
     case 'reset-position':resetPosition();break;
-    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
+    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
     case 'quit':app.quit();break;
     default:throw new Error('不支持的操作');
   }

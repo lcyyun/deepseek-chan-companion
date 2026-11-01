@@ -1,5 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const allowed = new Set(['toggle-chat', 'toggle-menu', 'toggle-drag', 'toggle-follow', 'hide-chat', 'hide-pet', 'show-pet', 'drag-mode', 'resize-pet', 'move-pet', 'choose-model', 'open-extension', 'open-url', 'copy-pairing', 'minimize', 'quit', 'reset-position', 'diagnostics', 'pet-hit-regions', 'pet-pointer-lock', 'pet-input-mode', 'pet-runtime-error', 'mouse-tracking', 'suspend-tracking', 'basin-enabled', 'glasses-enabled', 'glasses-style', 'small-form-enabled', 'watch-pin', 'chest-reaction', 'model-tuning']);
+const allowed = new Set(['toggle-chat', 'toggle-menu', 'toggle-drag', 'toggle-follow', 'hide-chat', 'hide-pet', 'show-pet', 'drag-mode', 'resize-pet', 'move-pet', 'choose-model', 'open-extension', 'open-url', 'copy-pairing', 'minimize', 'quit', 'reset-position', 'diagnostics', 'pet-hit-regions', 'pet-pointer-lock', 'pet-input-mode', 'pet-runtime-error', 'mouse-tracking', 'suspend-tracking', 'basin-enabled', 'glasses-enabled', 'glasses-style', 'small-form-enabled', 'pet-pin', 'chest-reaction', 'model-tuning']);
 contextBridge.exposeInMainWorld('companion', {
   bootstrap: () => ipcRenderer.invoke('bootstrap'),
   control: (action, data) => {
