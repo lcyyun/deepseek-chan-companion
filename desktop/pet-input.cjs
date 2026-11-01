@@ -29,6 +29,12 @@ function subtractRegions(regions, exclusions) {
   return result;
 }
 
+function petTopmostForFocus(role) {
+  // Keep the pet above the desktop, but never above another app the user is
+  // actively working in. The pet re-pins itself when it receives focus.
+  return role === 'pet';
+}
+
 function buildInputShape({ regions, width, height, fullWindow = false, exclusions = [], padding = 18, fallbackRegions }) {
   const protectedRegions = fullWindow ? [{ x: 0, y: 0, width, height }] : normalizeRegions(regions, width, height, padding);
   if (!protectedRegions.length) protectedRegions.push(...(fallbackRegions ? normalizeRegions(fallbackRegions, width, height, padding) : [{ x: 0, y: 0, width, height }]));
@@ -138,4 +144,4 @@ function createToolAnchor() {
   };
 }
 
-module.exports = { normalizeRegions, subtractRegions, buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, validRect, REFERENCE_SIZE };
+module.exports = { normalizeRegions, subtractRegions, buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, petTopmostForFocus, validRect, REFERENCE_SIZE };

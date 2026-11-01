@@ -3,7 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const zlib = require('node:zlib');
-const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, validRect } = require('./pet-input.cjs');
+const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, petTopmostForFocus, validRect } = require('./pet-input.cjs');
 const { startMouseInput } = require('./mouse-input.cjs');
 const { createToggleDragSession } = require('./toggle-drag.cjs');
 const { createPetPointerSession } = require('./pet-pointer-session.cjs');
@@ -15,7 +15,7 @@ const defaultProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-
 if (path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
   require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
 }
-let service, pet, toggle, chat, tray, quitting = false, dragMode = false;
+let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false;
 let config = {}, dataDir, configFile, failures = [], lastSaved = 0;
 let sanitizeModelTuning;
 const roles = new Map();
@@ -70,6 +70,20 @@ function scheduleToggleShape() {
   toggleShapeTimer=setTimeout(()=>{toggleShapeTimer=undefined;updateInputShape({duringToggle:true});},48);
   toggleShapeTimer.unref?.();
 }
+function setPetTopmost(next) {
+  if (!pet || pet.isDestroyed()) return;
+  const value = next === true;
+  if (petTopmost === value) return;
+  petTopmost = value;
+  pet.setAlwaysOnTop(value, 'screen-saver');
+}
+function syncPetTopmost() {
+  if (!pet || pet.isDestroyed()) return;
+  const focused = BrowserWindow.getFocusedWindow();
+  const role = focused ? roles.get(focused.webContents.id) : null;
+  setPetTopmost(petTopmostForFocus(role));
+}
+
 function updateInputShape(options) {
   if(toggleGesture&&!options?.duringToggle){scheduleToggleShape();return;}
   if (!pet || pet.isDestroyed()) return;
@@ -86,7 +100,7 @@ function updateInputShape(options) {
   pet.setIgnoreMouseEvents(passthrough || rects.length===0, {forward:true});
   const key=JSON.stringify(rects);
   const changed=key!==shapeKey;
-  if (changed) { try { pet.setShape(rects); shapeKey=key;pet.setAlwaysOnTop(true,'screen-saver'); } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
+  if (changed) { try { pet.setShape(rects); shapeKey=key; if(petTopmost) pet.setAlwaysOnTop(true,'screen-saver'); } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
   if(!toggleGesture||changed)raiseTools();
 }
 
@@ -302,7 +316,7 @@ else {
     config.petScale=initialZoom.scale;config.petPosition=initialZoom.position;config.petLayoutVersion=2;delete config.petView;
     // Windows/Chromium can discard mouse-down on an inactive non-focusable
     // TYPE_WINDOW. Show without activating; let an actual pet click activate it.
-    pet=makeWindow('pet',{...initialZoom.bounds,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:true});
+    pet=makeWindow('pet',{...initialZoom.bounds,transparent:true,alwaysOnTop:false,skipTaskbar:true,resizable:false,focusable:true});
     toggle=makeWindow('toggle',{width:58,height:58,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
     chat=makeWindow('chat',{width:420,height:560,transparent:false,backgroundColor:'#f7f9fc',alwaysOnTop:true,skipTaskbar:true,resizable:false});
     updateInputShape();
@@ -310,7 +324,7 @@ else {
     pet.webContents.on('render-process-gone',()=>{petPointer.clear();pointerLocked=false;updateInputShape();});
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
     pet.on('hide',()=>{suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'input-cancel'});});
-    pet.once('ready-to-show',()=>{pet.showInactive();pet.setAlwaysOnTop(true,'screen-saver');layoutTools();broadcastScale();});
+    pet.once('ready-to-show',()=>{pet.showInactive();syncPetTopmost();layoutTools();broadcastScale();});
     toggle.once('ready-to-show',()=>{layoutTools();toggle.showInactive();toggle.setAlwaysOnTop(true,'screen-saver');});
     toggle.webContents.on('did-start-loading',()=>{if(toggleGesture)finishToggleDrag('cancel');});
     toggle.webContents.on('render-process-gone',()=>{if(toggleGesture)finishToggleDrag('cancel');});
@@ -320,8 +334,16 @@ else {
       for(const name of ['show','hide','move','resize'])win.on(name,updateInputShape);
     }
     pet.on('show',()=>{
-      pet.setAlwaysOnTop(true,'screen-saver');shapeKey='';updateInputShape();
+      syncPetTopmost();shapeKey='';updateInputShape();
     });
+    for(const win of [pet,chat,toggle]){
+      win.on('focus',syncPetTopmost);
+      win.on('blur',syncPetTopmost);
+    }
+    app.on('browser-window-focus',syncPetTopmost);
+    app.on('browser-window-blur',syncPetTopmost);
+    const topmostTimer=setInterval(syncPetTopmost,500);
+    topmostTimer.unref?.();
     chat.on('close',event=>{if(!quitting){event.preventDefault();chat.hide();}});
     chat.on('blur',()=>{if(!quitting)updateInputShape();});
     chat.on('move',rememberChatPlacement);
