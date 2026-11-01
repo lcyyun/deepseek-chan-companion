@@ -426,12 +426,12 @@ function Pet(){
 
 interface Message {id:string;role:'user'|'assistant'|'system';text:string;details?:string;sources?:any[];automatic?:boolean;}
 function Chat(){
-  const desktop=useDesktop(),[tab,setTab]=useState('chat'),[messages,setMessages]=useState<Message[]>([]),[input,setInput]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[settings,setSettings]=useState<any>(null),[watch,setWatch]=useState(false),[page,setPage]=useState<any>(null),[state,setState]=useState('idle'),[notice,setNotice]=useState('');
+  const desktop=useDesktop(),[tab,setTab]=useState('chat'),[messages,setMessages]=useState<Message[]>([]),[input,setInput]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[settings,setSettings]=useState<any>(null),[watch,setWatch]=useState(false),[watchPin,setWatchPin]=useState(false),[page,setPage]=useState<any>(null),[state,setState]=useState('idle'),[notice,setNotice]=useState('');
   const inputRef=useRef<HTMLTextAreaElement>(null),bottom=useRef<HTMLDivElement>(null),seen=useRef(new Set<string>());
   const [connection,setConnection]=useState<any>(null),previousConnection=useRef<any>(null),effectiveRef=useRef('unconfigured'),autoDshNotified=useRef(false);
   const providerEffective=connection?.providerEffective||'unconfigured',providerReady=connection?.chatAvailable===true;
   effectiveRef.current=providerEffective;
-  async function refresh(){try{const s=await api('/api/settings');setSettings(s);setConnection(s);setWatch(!!s.watch?.enabled);}catch(e:any){setError(e.message);}}
+  async function refresh(){try{const s=await api('/api/settings');setSettings(s);setConnection(s);const enabled=!!s.watch?.enabled;setWatch(enabled);setWatchPin(enabled);window.companion?.control('watch-pin',enabled).catch(()=>{});}catch(e:any){setError(e.message);}}
   useEffect(()=>{
     if(!connection)return;const previous=previousConnection.current;
     if(previous&&(previous.providerEffective!==connection.providerEffective||(!previous.chatAvailable&&connection.chatAvailable)))setError('');
@@ -443,20 +443,21 @@ function Chat(){
     if(e.type==='chat'){const r=e.reply||e.data||e;if(r.segments){const id=r.id||String(Date.now());if(!seen.current.has(id)){seen.current.add(id);setMessages(m=>[...m,{id,role:'assistant',text:r.segments.map((s:any)=>s.text).join('\n'),details:r.details,sources:r.sources}]);}setBusy(false);setState('idle');}}
     if(e.type==='state'){if(e.state&&typeof e.state==='object'&&'providerEffective'in e.state)setConnection(e.state);const s=typeof e.state==='string'?e.state:e.state?.avatarState||e.state?.state;if(s){setState(s);if(s==='thinking')setBusy(true);if(s==='idle'||s==='listening'||s==='error')setBusy(false);}}
     if(e.type==='watch-context')setPage(e.context||e.data);
-    if(e.type==='watch'){setWatch(!!e.watch?.enabled);if(!e.watch?.enabled)setPage(null);}
+    if(e.type==='watch'){const enabled=!!e.watch?.enabled;setWatch(enabled);setWatchPin(enabled);window.companion?.control('watch-pin',enabled).catch(()=>{});if(!enabled)setPage(null);}
     if(e.type==='settings')refresh();
     if(e.type==='error'){setError(chatErrorMessage({code:e.code,message:e.message||e.error},effectiveRef.current));setBusy(false);}
   });const od=desktop?.onEvent(e=>{if(e.type==='runtime-error')setError(e.message);if(e.type==='focus-input'){setTab('chat');setTimeout(()=>inputRef.current?.focus(),100);}});const key=(e:KeyboardEvent)=>{if(e.key==='Escape')desktop?.control('hide-chat');};window.addEventListener('keydown',key);return()=>{off();od?.();window.removeEventListener('keydown',key);};},[]);
   useEffect(()=>{bottom.current?.scrollIntoView({behavior:'smooth'});},[messages,busy]);
   async function send(text=input){if(!text.trim()||busy)return;if(!providerReady){setNotice(connectionMessage(connection));return;}const requestProvider=providerEffective,value=text.trim();setInput('');setError('');setBusy(true);setMessages(m=>[...m,{id:crypto.randomUUID(),role:'user',text:value}]);try{const r=await api('/api/chat',{text:value,mode:watch?'watch':'chat',verbosity:settings?.verbosity||'brief'});const reply=r.reply||r;if(reply.segments&&!seen.current.has(reply.id)){seen.current.add(reply.id);setMessages(m=>[...m,{id:reply.id,role:'assistant',text:reply.segments.map((s:any)=>s.text).join('\n'),details:reply.details,sources:reply.sources}]);}}catch(e:any){if(effectiveRef.current===requestProvider)setError(chatErrorMessage(e,requestProvider));}finally{setBusy(false);}}
-  async function toggleWatch(){try{const next=!watch;await api('/api/watch',{enabled:next},'PUT');setWatch(next);if(!next)setPage(null);else setNotice('在浏览器扩展中分享当前页面，就可以一起看了。');}catch(e:any){setError(e.message);}}
+  async function toggleWatch(){try{const next=!watch;await api('/api/watch',{enabled:next},'PUT');setWatch(next);setWatchPin(next);await window.companion?.control('watch-pin',next).catch(()=>{});if(!next)setPage(null);else setNotice('在浏览器扩展中分享当前页面，就可以一起看了。');}catch(e:any){setError(e.message);}}
+  async function toggleWatchPin(){const next=!watchPin;setWatchPin(next);try{await window.companion?.control('watch-pin',next);}catch(e:any){setWatchPin(!next);setError(e.message);}}
   const provider=chatProviderLabel(providerEffective);
   return <div className="chat-shell">
     <header className="window-header"><div className="brand-icon"><AvatarIcon size={26}/></div><div className="brand-title"><strong>大肥鱼</strong><span>DeepSeek-chan · 桌面伙伴</span></div><button className="icon-button" title="收起窗口" aria-label="收起窗口" onClick={()=>desktop?.control('hide-chat')}>−</button></header>
     <ConnectionStatus connection={connection}/>
     <nav className="tabs">{[['chat','聊一会'],['actions','肢体'],['expressions','小表情'],['tuning','调节'],['settings','设置']].map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</nav>
     {tab==='chat'&&<>
-      <div className={'watch-strip '+(watch?'on':'')}><button onClick={toggleWatch}><span className="watch-eye">◉</span>一起看<span className="mini-switch"/></button><span>{watch?(page?.title||'等待分享浏览器页面'):'聊聊你正在看的世界'}</span></div>
+      <div className={'watch-strip '+(watch?'on':'')}><button onClick={toggleWatch}><span className="watch-eye">◉</span>一起看<span className="mini-switch"/></button><span>{watch?(page?.title||'等待分享浏览器页面'):'聊聊你正在看的世界'}</span>{watch&&<button className={'watch-pin '+(watchPin?'on':'')} onClick={toggleWatchPin} title={watchPin?'取消桌宠置顶，让其他窗口可以盖住它':'让桌宠保持在浏览器上方'}>{watchPin?'取消置顶':'置顶桌宠'}</button>}</div>
       {connection&&!providerReady&&<div className="chat-connection-note" role="status">{connectionMessage(connection)}<button onClick={()=>setTab('settings')}>接入设置</button></div>}
       <section className="conversation">
         {!messages.length&&<div className="empty-state"><div className="empty-symbol"><AvatarIcon size={45}/><span>✧</span></div><h1>{providerReady?'今天，想聊点什么？':providerEffective==='dsh'?'等待 DeepSeek Harness':'先连接你的智能体'}</h1>{providerReady?<><p>我就在这里。<br/>短短几句，也可以聊得很开心。</p><div className="suggestions"><button onClick={()=>send('和我打个招呼吧，简单一句就好。')}>打个招呼</button><button onClick={()=>{toggleWatch();}}>一起逛网页 ↗</button></div></>:<><p>{providerEffective==='dsh'?'聊天桥就绪后，这里会自动恢复。':'让你常用的智能体完成接入。'}<br/>本地互动和表情预览随时可用。</p><div className="suggestions"><button onClick={()=>setTab('settings')}>设置对话来源</button><button onClick={()=>setTab('expressions')}>先看看小表情</button></div></>}</div>}

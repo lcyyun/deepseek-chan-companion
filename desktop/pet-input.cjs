@@ -29,10 +29,11 @@ function subtractRegions(regions, exclusions) {
   return result;
 }
 
-function petTopmostForFocus(role) {
+function petTopmostForFocus(role, watchPinned = false) {
   // Keep the pet above the desktop, but never above another app the user is
-  // actively working in. The pet re-pins itself when it receives focus.
-  return role === 'pet';
+  // actively working in. While sharing a browser page, the viewer explicitly
+  // keeps the pet above the browser; the chat window still stays on top.
+  return role === 'pet' || (watchPinned === true && role !== 'chat');
 }
 
 function buildInputShape({ regions, width, height, fullWindow = false, exclusions = [], padding = 18, fallbackRegions }) {

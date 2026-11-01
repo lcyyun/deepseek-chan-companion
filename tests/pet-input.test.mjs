@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import input from '../desktop/pet-input.cjs';
 const {normalizeRegions,subtractRegions,buildInputShape,computePetZoom,createPetPlacement,restorePetPlacement,constrainPosition,referenceBody,transformRegion,clipRegion,layoutToolBounds,createToolAnchor,petTopmostForFocus}=input;
 
-test('pet stays topmost only while it owns focus, so another app can paint above it',()=>{
+test('pet stays topmost only while it owns focus, or while watch deliberately pins it',()=>{
   assert.equal(petTopmostForFocus('pet'),true);
   for(const role of ['chat','toggle',undefined,null])assert.equal(petTopmostForFocus(role),false);
+  assert.equal(petTopmostForFocus('pet',true),true);
+  assert.equal(petTopmostForFocus('chat',true),false);
+  for(const role of ['toggle',undefined,null])assert.equal(petTopmostForFocus(role,true),true);
 });
 test('independent control position survives layout, clamps to either display, and recovers removed monitors',()=>{
   const areas=[{x:0,y:0,width:1280,height:720},{x:-1920,y:-200,width:1920,height:1080}];

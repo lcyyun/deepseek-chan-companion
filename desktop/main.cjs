@@ -15,7 +15,7 @@ const defaultProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-
 if (path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
   require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
 }
-let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false;
+let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, watchPinned = false;
 let config = {}, dataDir, configFile, failures = [], lastSaved = 0;
 let sanitizeModelTuning;
 const roles = new Map();
@@ -81,7 +81,7 @@ function syncPetTopmost() {
   if (!pet || pet.isDestroyed()) return;
   const focused = BrowserWindow.getFocusedWindow();
   const role = focused ? roles.get(focused.webContents.id) : null;
-  setPetTopmost(petTopmostForFocus(role));
+  setPetTopmost(petTopmostForFocus(role, watchPinned));
 }
 
 function updateInputShape(options) {
@@ -385,6 +385,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
     case 'basin-enabled':config.basinEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'basin-enabled',enabled:config.basinEnabled});return config.basinEnabled;
+    case 'watch-pin':watchPinned=data===true;syncPetTopmost();return watchPinned;
     case 'glasses-enabled':config.glassesEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'});return {enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'};
     case 'glasses-style':config.glassesStyle=data==='monocle'?'monocle':'black';saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled===true,style:config.glassesStyle});return config.glassesStyle;
     case 'small-form-enabled':config.smallFormEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'small-form',enabled:config.smallFormEnabled});return config.smallFormEnabled;

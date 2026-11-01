@@ -46,6 +46,8 @@
 .glasses-style-row { display: flex; gap: 8px; margin: 8px 0 0; }
 .glasses-style-row button { border: 1px solid #dce7f5; border-radius: 9px; padding: 5px 10px; background: #fff; color: #617792; font-size: 10px; }
 .glasses-style-row button[aria-pressed=true] { border-color: #79a6e2; background: #edf5ff; color: #315f9d; }
+.watch-strip .watch-pin { margin-left: auto; border: 1px solid #cfe0f5; border-radius: 10px; padding: 3px 8px; background: #fff; color: #4f7fc0; font-size: 10px; }
+.watch-strip .watch-pin.on { background: #e7f1ff; border-color: #8bb4ea; color: #2f64ad; }
 .tabs { gap: 17px; }
 .tuning-heading { display: flex; align-items: flex-start; gap: 10px; }
 .tuning-heading .section-intro { flex: 1; }
