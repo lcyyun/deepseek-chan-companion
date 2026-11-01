@@ -121,6 +121,42 @@ test('semantic replies preserve cuddle, idea and puzzled while unsupported comma
   }
 });
 
+test('independent preview commands enforce channel ownership and expose the six body animations', () => {
+  assert.deepEqual(CAPABILITIES.bodyAnimations.map(item => item.id), ['explain', 'think', 'reassure', 'happy', 'shy', 'listen']);
+  const face = normalizeCommand({ type: 'expression', emotion: 'happy' });
+  assert.equal(face.emotion, 'happy'); assert.equal(face.active, true); assert.equal(face.durationMs, 20000);
+  const body = normalizeCommand({ type: 'body', animation: 'listen' });
+  assert.equal(body.animation, 'listen'); assert.equal(body.durationMs, 6400); assert.equal(body.emotion, undefined);
+  for (const type of ['expression', 'body']) assert.equal(normalizeCommand({ type, active: false }).active, false);
+  for (const value of [
+    { type: 'expression', emotion: 'happy', gesture: 'pointer' },
+    { type: 'expression', emotion: 'happy', intent: 'greet' },
+    { type: 'body', animation: 'happy', emotion: 'happy' },
+    { type: 'body', animation: 'fly' }, { type: 'expression', emotion: 'fly' },
+    { type: 'body', active: 'false' }, { type: 'expression' },
+  ]) assert.throws(() => normalizeCommand(value));
+});
+
+test('MCP independently dispatches body and face previews without changing dialogue state', async t => {
+  const { service } = await fixture(t);
+  const client = new Client({ name: 'preview-agent', version: '1.0.0' });
+  t.after(() => client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${service.url}/mcp`), { requestInit: { headers: { Authorization: `Bearer ${service.token}` } } }));
+  service.dispatch({ type: 'state', state: 'speaking' });
+  for (const [name, args, type] of [
+    ['avatar_body', { animation: 'explain' }, 'body'],
+    ['avatar_expression', { emotion: 'happy' }, 'expression'],
+    ['avatar_expression', { active: false }, 'expression'],
+    ['avatar_body', { active: false }, 'body'],
+  ]) {
+    const response = await client.callTool({ name, arguments: args });
+    assert.equal(response.isError, undefined);
+    assert.equal(JSON.parse(response.content[0].text).accepted, true);
+    assert.equal(service.getState().lastCommand.type, type);
+    assert.equal(service.getState().state, 'speaking');
+  }
+});
+
 test('websocket requires authentication before accepting commands', async t => {
   const { service } = await fixture(t);
   const ws = new WebSocket(service.url.replace('http:', 'ws:') + '/events');

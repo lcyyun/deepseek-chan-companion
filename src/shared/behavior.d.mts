@@ -1,5 +1,15 @@
 import type { ModelTuning } from './model-tuning.mjs';
 export type BehaviorState = 'idle' | 'thinking' | 'listening' | 'speaking';
+export type BodyAnimationId = 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen';
+export interface SpeechGestureCue {
+  id?: BodyAnimationId;
+  intent?: string;
+  key?: string;
+  gesture?: 'pointer' | 'chest' | 'foxtail' | 'none';
+  intensity?: number;
+  durationMs?: number;
+  progress?: number;
+}
 export interface BehaviorRuntime {
   setParameters(parameters: Record<string, number>): void;
   setPoseOverlay?(parameters: Record<string, number>, weight: number): void;
@@ -27,7 +37,11 @@ export interface BehaviorOptions {
 }
 export interface BehaviorCommand {
   id?: string;
-  type: 'perform' | 'speak' | 'stop' | 'reset' | 'state';
+  type: 'perform' | 'speak' | 'stop' | 'reset' | 'state' | 'body' | 'expression';
+  animation?: BodyAnimationId;
+  active?: boolean;
+  /** Local presentation-only marker; never accepted from the public API. */
+  replyIntro?: boolean;
   intent?: string;
   emotion?: string;
   gesture?: string;
@@ -56,6 +70,7 @@ export interface PointerTrackingInput {
   travel?: number;
 }
 export const BEHAVIOR_PRESETS: readonly { id: string; title: string; command: BehaviorCommand }[];
+export const BODY_ANIMATION_PRESETS: readonly { id: BodyAnimationId; title: string; description: string; durationMs: number }[];
 export class BehaviorController {
   constructor(runtime: BehaviorRuntime, options?: BehaviorOptions);
   readonly state: BehaviorState;
@@ -74,6 +89,12 @@ export class BehaviorController {
   setTuning(tuning: Partial<ModelTuning>, options?: { replace?: boolean }): void;
   setExpressionCue(emotion: string, intensity?: number): void;
   clearExpressionCue(): void;
+  previewExpression(emotion: string, options?: { intensity?: number; durationMs?: number }): boolean;
+  clearExpressionPreview(): void;
+  previewBodyAnimation(id: BodyAnimationId, options?: { intensity?: number; durationMs?: number }): boolean;
+  clearBodyAnimation(): void;
+  setSpeechGesture(cue: SpeechGestureCue | null): void;
+  clearSpeechGesture(): void;
   setBasinEnabled(enabled: boolean): void;
   knockBasin(): boolean;
   cancelBasinKnock(): void;

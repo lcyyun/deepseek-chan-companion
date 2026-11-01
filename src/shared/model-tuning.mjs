@@ -4,6 +4,10 @@ import { sanitizeExpressionTuning } from './expression-tuning.mjs';
 export const MODEL_TUNING_LIMITS = Object.freeze({
   chestSoftness: Object.freeze({ min: 0, max: 2, default: 1.15 }),
   bodyMotion: Object.freeze({ min: 0, max: 1.6, default: 1 }),
+  bodyFollow: Object.freeze({ min: 0, max: 1.5, default: 1 }),
+  gestureAmplitude: Object.freeze({ min: 0, max: 1.5, default: 1 }),
+  gestureFrequency: Object.freeze({ min: 0, max: 1.5, default: 1 }),
+  idleActivity: Object.freeze({ min: 0, max: 1.5, default: 1 }),
   gazeStrength: Object.freeze({ min: 0.3, max: 1.5, default: 1 }),
   blushStrength: Object.freeze({ min: 0, max: 1, default: 0.75 }),
   basinShadow: Object.freeze({ min: 0, max: 1, default: 0.35 }),

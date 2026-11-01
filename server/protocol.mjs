@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { EXPRESSION_IDS, EXPRESSION_PRESETS } from '../src/shared/expressions.mjs';
 import { normalizeExpressionCues } from '../src/shared/expression-cues.mjs';
+import { BODY_ANIMATION_PRESETS } from '../src/shared/body-animation.mjs';
 
 export const CAPABILITIES = {
   intents: ['neutral', 'greet', 'agree', 'disagree', 'curious', 'explain', 'reassure', 'shy', 'playful', 'surprised', 'think', 'cuddle', 'idea'],
   emotions: [...EXPRESSION_IDS],
   expressionPresets: EXPRESSION_PRESETS.map(({ id, title, description }) => ({ id, title, description })),
   expressionCues: { command: 'speak', maxItems: 4, at: '0..0.9 of actual spoken progress', intensity: '0..1' },
+  expressionPreview: { command: 'expression', faceOnly: true, stop: { type: 'expression', active: false } },
+  bodyAnimations: BODY_ANIMATION_PRESETS.map(({ id, title, description, durationMs }) => ({ id, title, description, durationMs })),
+  bodyPreview: { command: 'body', faceOnly: false, preservesExpression: true, stop: { type: 'body', active: false } },
+  speechGestures: { timing: 'actual audio progress or silent reading progress', frequency: 'local user setting', shortReplies: 'zero or one emphasis' },
   gestures: ['none', 'pointer', 'chest', 'foxtail'],
   gaze: ['camera', 'left', 'right', 'up', 'down'],
   states: ['idle', 'thinking', 'listening', 'speaking', 'error'],
@@ -83,8 +88,20 @@ export function normalizeReply(value) {
 export function normalizeCommand(input) {
   if (!input || typeof input !== 'object') throw new Error('命令必须是JSON对象。');
   const type = input.type || 'perform';
-  if (!['perform', 'speak', 'stop', 'reset', 'state'].includes(type)) throw new Error('不支持的命令类型。');
+  if (!['perform', 'speak', 'stop', 'reset', 'state', 'expression', 'body'].includes(type)) throw new Error('不支持的命令类型。');
   const command = { id: input.id || randomUUID(), type, at: Date.now() };
+  if (type === 'expression' || type === 'body') {
+    if (input.active !== undefined && typeof input.active !== 'boolean') throw new Error('active必须是布尔值。');
+    command.active = input.active !== false;
+    if (command.active && type === 'expression' && !CAPABILITIES.emotions.includes(input.emotion)) throw new Error('请选择支持的表情。');
+    if (command.active && type === 'body') {
+      if (!CAPABILITIES.bodyAnimations.some(item => item.id === input.animation)) throw new Error('请选择支持的肢体动画。');
+      command.animation = input.animation;
+    }
+    // These are deliberately independent channels: reject cross-channel fields.
+    const forbidden = type === 'expression' ? ['intent', 'gesture', 'gaze', 'animation', 'text', 'state'] : ['intent', 'gesture', 'gaze', 'emotion', 'text', 'state'];
+    if (forbidden.some(key => input[key] !== undefined)) throw new Error('独立预览不能混入其他通道的控制字段。');
+  }
   for (const key of ['intent', 'emotion', 'gesture', 'gaze']) {
     if (input[key] !== undefined) {
       if (typeof input[key] !== 'string' || input[key].length > 80) throw new Error(`${key}格式错误。`);
@@ -101,10 +118,12 @@ export function normalizeCommand(input) {
   }
   if (type === 'speak') command.expressionCues = normalizeExpressionCues(input.expressionCues, command.emotion);
   const intensity = Number(input.intensity ?? 0.55);
-  const durationMs = Number(input.durationMs ?? input.duration_ms ?? 2200);
+  const previewDuration = type === 'expression' ? 20000 : type === 'body' ? CAPABILITIES.bodyAnimations.find(item => item.id === command.animation)?.durationMs : undefined;
+  const durationMs = Number(input.durationMs ?? input.duration_ms ?? previewDuration ?? 2200);
   if (!Number.isFinite(intensity) || !Number.isFinite(durationMs)) throw new Error('动作强度或时长不是数字。');
   command.intensity = Math.max(0, Math.min(1, intensity));
-  command.durationMs = Math.max(100, Math.min(30000, durationMs));
+  command.durationMs = type === 'body' ? Math.max(2000, Math.min(20000, durationMs))
+    : type === 'expression' ? Math.max(200, Math.min(20000, durationMs)) : Math.max(100, Math.min(30000, durationMs));
   if (type === 'state') {
     let state = input.state ?? 'idle';
     if (state === 'working' || state === 'waiting') state = 'thinking';

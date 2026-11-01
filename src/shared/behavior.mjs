@@ -2,6 +2,8 @@ import { sanitizeModelTuning } from './model-tuning.mjs';
 import { EXPRESSION_IDS, EXPRESSION_PRESETS, EXPRESSION_PARAMETER_DEFAULTS, getExpressionPreset } from './expressions.mjs';
 import { sanitizeExpressionTuning } from './expression-tuning.mjs';
 import { CHEST_REACTION_DURATIONS, sampleChestReaction } from './chest-reaction.mjs';
+import { BODY_ANIMATION_PRESETS, bodyAnimationId, sampleBodyAnimation } from './body-animation.mjs';
+export { BODY_ANIMATION_PRESETS } from './body-animation.mjs';
 
 /** Model-specific choreography. All times here are seconds; public durations are ms. */
 export const BEHAVIOR_PRESETS = Object.freeze([
@@ -31,6 +33,8 @@ const GESTURE_ALIASES = { point: 'pointer', point_up: 'pointer', index: 'pointer
 // Calibrated on the actual rig. These are the author's independent animation
 // inputs, not the simulated RArm/RForearm/LArm/LForearm output parameters.
 const ARM_POSES = {
+  chest: { Movement1: 0, Movement2: 1, Movement3: 0, Param40: 0, Param37: 0, Param38: 0, Param36: 0, Param39: 0, Param41: 0, Param42: 0, Param43: 0,
+    Param62: 0.034, Param59: 0.476, Param60: 0.82, Param61: 0.002 },
   cuddle: { Movement1: 0, Movement2: 1, Movement3: 0, Param40: 0, Param37: 0, Param38: 0, Param36: 0, Param39: 0, Param41: 0, Param42: 0, Param43: 0,
     Param62: 0.034, Param59: 0.476, Param60: 0.82, Param61: 0.002 },
   think: { Movement1: 0, Movement2: 0, Movement3: 1, Param40: 1, Param36: 0, Param39: 0.6, Param41: 0.79, Param42: 0, Param43: 0 },
@@ -71,6 +75,14 @@ export class BehaviorController {
     this.currentTuning = { ...this.tuning };
     this.expressionCue = null;
     this.expressionCueWeight = 0;
+    this.expressionPreview = null;
+    this.bodyPreview = null;
+    this.speechGesture = null;
+    this.bodySample = null;
+    this.idlePose = { x: 0, z: 0, lean: 0 };
+    this.idleTarget = { x: 0, z: 0, lean: 0 };
+    this.nextIdleShift = 5;
+    this.idleSide = 1;
     this.eyeStyle = null;
     this.eyeStyleLevel = 0;
     this.random = options.random ?? Math.random;
@@ -190,6 +202,8 @@ export class BehaviorController {
   }
 
   _startChestReaction(stage, preview) {
+    this.bodyPreview = null;
+    if (this.speechGesture) this.speechGesture.blocked = true;
     this.chestReaction = { stage, start: this.time, duration: CHEST_REACTION_DURATIONS[stage - 1], preview };
     this.onEvent({ type: 'chest-reaction-start', id: String(stage) });
     return true;
@@ -226,6 +240,76 @@ export class BehaviorController {
     if (this.expressionCue) this.expressionCue.active = false;
   }
 
+  /** Independent preview: changing a face never starts or cancels an arm. */
+  previewExpression(emotion, { intensity = 1, durationMs = 20000 } = {}) {
+    if (this.destroyed || !EXPRESSION_IDS.includes(emotion)) return false;
+    this.expressionPreview = { emotion, intensity: clamp(intensity), active: true,
+      until: this.time + clamp(finite(durationMs, 20000) / 1000, .2, 60) };
+    return true;
+  }
+
+  clearExpressionPreview() { this.expressionPreview = null; }
+
+  /** Body-only preview; it leaves the active face, voice and dialogue state alone. */
+  previewBodyAnimation(id, { intensity = .8, durationMs } = {}) {
+    if (this.destroyed || !BODY_ANIMATION_PRESETS.some(item => item.id === id) || this._bodyInteractionActive()) return false;
+    const preset = BODY_ANIMATION_PRESETS.find(item => item.id === id);
+    this.bodyPreview = { id, intensity: clamp(intensity), start: this.time,
+      duration: clamp(finite(durationMs, preset.durationMs) / 1000, 2, 20) };
+    this._syncGesture();
+    return true;
+  }
+
+  clearBodyAnimation() { this.bodyPreview = null; this._syncGesture(); }
+
+  /** A progress update from the actual speech clock, not a new motion command. */
+  setSpeechGesture(cue) {
+    if (!cue) { this.clearSpeechGesture(); return; }
+    if (this.destroyed) return;
+    const id = bodyAnimationId(cue.id ?? cue.intent);
+    if (!id) return;
+    const key = cue.key ?? id;
+    const previous = this.speechGesture;
+    const same = previous?.key === key && previous.id === id;
+    // The fixed idea flourish has already introduced the reply. Hand its pose
+    // straight to the first spoken cue without closing and reopening the arm.
+    if (!same && this.action?.intent === 'idea' && this.action.replyIntro) this._cancelTransient(true);
+    this.speechGesture = { id, key, intensity: clamp(finite(cue.intensity, .65)),
+      start: same ? previous.start : this.time,
+      duration: clamp(finite(cue.durationMs, 5000) / 1000, .3, 30),
+      progress: Number.isFinite(cue.progress) ? clamp(cue.progress) : null,
+      // A held local interaction consumes incoming cues rather than replaying them later.
+      blocked: same ? previous.blocked : this._bodyInteractionActive(),
+      gesture: ['pointer', 'chest', 'foxtail', 'none'].includes(cue.gesture) ? cue.gesture : undefined };
+    this._syncGesture();
+  }
+
+  clearSpeechGesture() { this.speechGesture = null; this._syncGesture(); }
+
+  _bodyInteractionActive() {
+    return this.petting.active || this.petContact > .05 || Boolean(this.chestReaction) || this.time - this.knockStarted < .66;
+  }
+
+  _bodyPerformance() {
+    if (this._bodyInteractionActive()) return null;
+    if (this.bodyPreview) return this.bodyPreview;
+    if (this.speechGesture?.blocked || this._state === 'thinking' || this.action?.source === 'command') return null;
+    return this.speechGesture;
+  }
+
+  _sampleBodyPerformance() {
+    if (this.bodyPreview && this.time - this.bodyPreview.start >= this.bodyPreview.duration) this.bodyPreview = null;
+    if (this.speechGesture && this.speechGesture.progress === null && this.time - this.speechGesture.start >= this.speechGesture.duration) this.speechGesture = null;
+    const performance = this._bodyPerformance();
+    if (!performance) return null;
+    const progress = performance.progress ?? clamp((this.time - performance.start) / performance.duration);
+    const sample = sampleBodyAnimation(performance.id, progress, performance.intensity);
+    const seconds = progress * performance.duration;
+    const weight = ease(seconds / .25) * (1 - ease((seconds - performance.duration + Math.min(.85, performance.duration * .3)) / Math.min(.85, performance.duration * .3)));
+    const gesture = performance.gesture ?? sample.gesture;
+    return { ...sample, weight, gesture, pose: gesture === sample.gesture ? sample.pose : null };
+  }
+
   /** A persistent authored prop, independent of a chat turn or short performance. */
   setBasinEnabled(enabled) {
     if (this.destroyed) return;
@@ -241,6 +325,8 @@ export class BehaviorController {
   knockBasin() {
     if (this.destroyed || !this.basinEnabled) return false;
     this.cancelChestReaction();
+    this.bodyPreview = null;
+    if (this.speechGesture) this.speechGesture.blocked = true;
     this.setPetting(false);
     this.knockStarted = this.time;
     this.knockCount++;
@@ -260,6 +346,8 @@ export class BehaviorController {
     if (command.type === 'stop') return this.interrupt();
     if (command.type === 'reset') return this.reset();
     if (command.type === 'state') return this.setState(command.state);
+    if (command.type === 'expression') return command.active === false ? this.clearExpressionPreview() : this.previewExpression(command.emotion, command);
+    if (command.type === 'body') return command.active === false ? this.clearBodyAnimation() : this.previewBodyAnimation(command.animation, command);
     if (command.type === 'speak') {
       this.cancelChestReaction();
       this.setState('speaking');
@@ -289,6 +377,8 @@ export class BehaviorController {
   perform(command = {}) {
     if (this.destroyed) return;
     this.cancelChestReaction();
+    this.bodyPreview = null; this.speechGesture = null;
+    this.clearExpressionPreview();
     this.clearExpressionCue();
     this._cancelTransient(true);
     const duration = clamp(finite(command.durationMs, 2800) / 1000, 0.2, 20);
@@ -301,6 +391,7 @@ export class BehaviorController {
       start: this.time,
       duration,
       source: 'command',
+      replyIntro: command.replyIntro === true,
       gesture: command.gesture ?? (['think', 'idea'].includes(command.intent) ? 'pointer' : 'none'),
     };
     this._setEmotionExpression(emotion);
@@ -324,6 +415,8 @@ export class BehaviorController {
     if (this.basinEnabled) active = false;
     if (active && this.chestReaction) this.cancelChestReaction();
     if (active && (!this.petting.active || input.newContact)) {
+      this.bodyPreview = null;
+      if (this.speechGesture) this.speechGesture.blocked = true;
       this._expireChestSequence();
       this.petStarted = this.time;
       this.chestPetStarted = this.completedChestStage === 3 && !this.chestHeartArmed ? this.time : -Infinity;
@@ -356,6 +449,7 @@ export class BehaviorController {
     if (this.destroyed) return;
     this.cancelChestReaction();
     this.clearExpressionCue();
+    this.expressionPreview = null; this.bodyPreview = null; this.speechGesture = null; this.bodySample = null;
     this._cancelTransient();
     this._state = STATES.has(nextState) ? nextState : 'listening';
     this.cancelBasinKnock();
@@ -399,6 +493,7 @@ export class BehaviorController {
     this._callRuntime('setCuddleHand', 0);
     this.poseWeight = 0;
     this.poseValues = {};
+    this.idlePose = { x: 0, z: 0, lean: 0 }; this.idleTarget = { x: 0, z: 0, lean: 0 }; this.nextIdleShift = this.time + 5;
     this._callRuntime('setPoseOverlay', {}, 0);
     this._closeMouthImmediately();
   }
@@ -419,8 +514,8 @@ export class BehaviorController {
         this.onEvent({ type: 'chest-heart-armed', id: '4' });
       }
     }
-    for (const key of ['bodyMotion', 'gazeStrength', 'blushStrength', 'expressionIntensity']) {
-      this.currentTuning[key] = smooth(this.currentTuning[key], this.tuning[key], smoothingStep, 8);
+    for (const key of ['bodyMotion', 'gazeStrength', 'blushStrength', 'expressionIntensity', 'gestureAmplitude', 'bodyFollow', 'idleActivity']) {
+      this.currentTuning[key] = smooth(finite(this.currentTuning[key], 1), finite(this.tuning[key], 1), smoothingStep, 8);
     }
     this.petWeight = smooth(this.petWeight, this.petting.active ? this.petting.intensity : 0, smoothingStep, 9);
     this.petX = smooth(this.petX, this.petting.x, smoothingStep, 12);
@@ -447,6 +542,7 @@ export class BehaviorController {
     const due = this.pending.filter(item => item.at <= this.time);
     this.pending = this.pending.filter(item => item.at > this.time);
     for (const event of due) if (event.generation === this.generation) event.run();
+    this.bodySample = this._sampleBodyPerformance();
     if (this._state === 'thinking' && !this.action && !this.petting.active && this.petWeight < 0.15 && this.time >= this.nextThought) this._playThought();
     this._syncGesture();
     if (this.queuedGesture && this.queuedGesture.at <= this.time) {
@@ -462,6 +558,8 @@ export class BehaviorController {
     const thinking = this._state === 'thinking' && (!action || action.source === 'thought') || action?.intent === 'think';
     const thinkingWeight = thinking ? (this._state === 'thinking' ? 1 : actionWeight) : 0;
     const ideaWeight = action?.intent === 'idea' ? actionWeight : 0;
+    const bodySample = this.bodySample;
+    const bodyWeight = bodySample?.weight ?? 0;
     const face = this._composeFace(thinking ? 'neutral' : action?.emotion ?? 'neutral',
       thinking ? thinkingWeight : action ? intensity : 1, smoothingStep);
     if (chestReaction) this._blendChestFace(face, chestReaction);
@@ -469,7 +567,7 @@ export class BehaviorController {
     const ideaFace = ideaWeight * (1 - this.expressionCueWeight) * (1 - chestWeight);
     const cuddling = this.petting.active && this.time - this.petStarted >= 2 || action?.intent === 'cuddle';
     // Keep the finger visible through the pose's exit, until it clears the face/chest.
-    const foregroundWeight = Math.max(thinkingWeight, cuddling ? (this.petting.active ? 1 : actionWeight) : 0);
+    const foregroundWeight = Math.max(thinkingWeight, bodySample?.pose === 'think' ? bodyWeight : 0, cuddling ? (this.petting.active ? 1 : actionWeight) : 0);
     this.handForegroundWeight = smooth(this.handForegroundWeight, foregroundWeight, smoothingStep, 5);
     this._callRuntime('setHandForeground', foregroundWeight > 0.001 || this.handForegroundWeight > 0.02 ? 1 : 0);
     this.cuddleWeight = smooth(this.cuddleWeight, cuddling ? (this.petting.active ? 1 : actionWeight) : 0, smoothingStep, 5);
@@ -478,11 +576,13 @@ export class BehaviorController {
     const cuddleFace = this.cuddleWeight * (1 - this.expressionCueWeight * (1 - this.petContact)) * (1 - chestWeight);
     // A queued gesture must finish the previous arm's authored close before its
     // new selector/pose can enter. Facial expression and loading remain live.
-    const armPose = cuddling && this.gesture === 'chest' ? 'cuddle'
-      : this.gesture === 'pointer' ? thinking ? 'think' : action?.intent === 'idea' ? 'idea' : null : null;
-    this._callRuntime('setCuddleHand', this.cuddleWeight, armPose === 'cuddle');
+    const bodyArm = bodySample?.gesture !== 'none' && bodySample?.gesture === this.gesture && bodyWeight > .001 ? bodySample.pose : null;
+    const armPose = bodySample ? bodyArm : (cuddling && this.gesture === 'chest' ? 'cuddle'
+      : this.gesture === 'pointer' ? thinking ? 'think' : action?.intent === 'idea' ? 'idea' : null : null);
+    this._callRuntime('setCuddleHand', bodySample ? 0 : this.cuddleWeight, armPose === 'cuddle');
     this._updateArmPose(armPose,
-      armPose === 'cuddle' || thinking && this._state === 'thinking' ? 1 : actionWeight, smoothingStep);
+      bodyArm ? bodyWeight : armPose === 'cuddle' || thinking && this._state === 'thinking' ? 1 : actionWeight, smoothingStep,
+      bodyArm ? bodySample.armOffsets : null);
     const phase = finite(elapsed, this.time);
     const stateLean = this._state === 'listening' ? -3.5 : 0;
     const stateGaze = this._gaze(this._state === 'thinking' ? 'up' : 'camera');
@@ -516,9 +616,26 @@ export class BehaviorController {
         case 'cuddle': headZ = mix(headZ, -3 + Math.sin(age * 1.8) * 1, actionWeight); lean = mix(lean, -4, actionWeight); break;
       }
     }
-    // Breath and micro-movement use independent, small cycles, not random frame jitter.
-    headX += Math.sin(phase * 0.46) * 0.55;
-    headZ += Math.sin(phase * 0.63 + 0.7) * 0.45;
+    if (bodySample) {
+      headX = mix(headX, bodySample.headX, bodyWeight);
+      headY = mix(headY, bodySample.headY, bodyWeight);
+      headZ = mix(headZ, bodySample.headZ, bodyWeight);
+      lean = mix(lean, bodySample.lean, bodyWeight);
+      gaze.x = mix(gaze.x, bodySample.gazeX, bodyWeight);
+      gaze.y = mix(gaze.y, bodySample.gazeY, bodyWeight);
+    }
+    // A posture settles and rests for several seconds. Tiny breath remains, but
+    // a continuously oscillating torso is not used as a substitute for intent.
+    const idle = !action && !bodySample && ['idle', 'listening'].includes(this._state) && !this._bodyInteractionActive() && this.trackingWeight < .02;
+    if (idle && this.time >= this.nextIdleShift) {
+      this.idleSide *= -1;
+      this.idleTarget = { x: this.idleSide * (.5 + clamp(this.random()) * .65), z: -this.idleSide * (.35 + clamp(this.random()) * .5), lean: -.25 - clamp(this.random()) * .5 };
+      this.nextIdleShift = this.time + 6 + clamp(this.random()) * 7;
+    }
+    for (const key of ['x', 'z', 'lean']) this.idlePose[key] = smooth(this.idlePose[key], idle ? this.idleTarget[key] * this.currentTuning.idleActivity : 0, smoothingStep, 1.5);
+    headX += this.idlePose.x + Math.sin(phase * .46) * .22 * this.currentTuning.idleActivity;
+    headZ += this.idlePose.z + Math.sin(phase * .63 + .7) * .18 * this.currentTuning.idleActivity;
+    lean += this.idlePose.lean;
 
     const track = this.trackingWeight * (1 - chestWeight);
     const follow = this.currentTuning.gazeStrength;
@@ -567,13 +684,21 @@ export class BehaviorController {
     const heartWeight = chestReaction?.stage === 4 ? chestWeight : 0;
     const heartBreath = Math.sin((chestReaction?.age ?? 0) * 3.1);
     const breathGain = heartWeight * clamp(this.currentTuning.bodyMotion);
+    // Eyes respond first; the torso follows the already moving head, rather
+    // than receiving the identical target on the same frame. Touch keeps its
+    // existing timings, and the model's physics remains the only secondary rig.
+    const localResponse = this.petContact > .01 || chestWeight > .001;
+    const torsoHeadX = localResponse ? headX : finite(this.values.AngleX, 0);
+    const torsoHeadY = localResponse ? headY : finite(this.values.AngleY, 0);
+    const torsoHeadZ = localResponse ? headZ : finite(this.values.AngleZ, 0);
+    const torsoFollow = this.currentTuning.bodyFollow;
     const target = {
       AngleX: headX,
       AngleY: headY,
       AngleZ: headZ,
-      PositionX: headX * 0.4 + Math.sin(phase * 1.25) * 2.4 * thinkingWeight * (1 - track) * (1 - this.petContact) + (this.trackingX * 5 + clamp(this.trackingVX, -3, 3) * 1.2) * track * (1 - this.petContact),
-      PositionY: headY * 0.3 - this.trackingY * 3 * track * (1 - this.petContact) + heartBreath * 2.2 * heartWeight,
-      PositionZ: headZ * 0.35 - this.trackingX * 2 * track * (1 - this.petContact),
+      PositionX: torsoHeadX * .4 * torsoFollow + Math.sin(phase * 1.25) * 2.4 * thinkingWeight * (1 - track) * (1 - this.petContact) + (this.trackingX * 5 + clamp(this.trackingVX, -3, 3) * 1.2) * track * (1 - this.petContact) + (bodySample?.bodyX ?? 0) * bodyWeight,
+      PositionY: torsoHeadY * .3 * torsoFollow - this.trackingY * 3 * track * (1 - this.petContact) + heartBreath * 2.2 * heartWeight + (bodySample?.bodyY ?? 0) * bodyWeight,
+      PositionZ: torsoHeadZ * .35 * torsoFollow - this.trackingX * 2 * track * (1 - this.petContact) + (bodySample?.bodyZ ?? 0) * bodyWeight,
       LeanInput: lean + Math.sin((chestReaction?.age ?? 0) * 3.1 + 0.3) * 1.5 * heartWeight,
       ParamEyeBallX: mix(gaze.x * 0.6, this.petX * 0.25, this.petContact),
       ParamEyeBallY: mix(gaze.y * 0.5, 0.15, this.petContact),
@@ -594,7 +719,11 @@ export class BehaviorController {
     };
     for (const [key, value] of Object.entries(face.parameters)) if (key !== 'MouthPuckerWiden' && !SPECIAL_EYE_KEYS.includes(key)) target[key] = value * (1 - this.petContact);
     for (const key of ['PositionX', 'PositionY', 'PositionZ', 'LeanInput']) target[key] *= this.currentTuning.bodyMotion;
-    for (const [id, value] of Object.entries(target)) this.values[id] = smooth(finite(this.values[id], value), value, smoothingStep, 7.5);
+    for (const [id, value] of Object.entries(target)) {
+      const speed = ['ParamEyeBallX', 'ParamEyeBallY'].includes(id) ? 18
+        : !localResponse && ['PositionX', 'PositionY', 'PositionZ', 'LeanInput'].includes(id) ? 4.5 : 7.5;
+      this.values[id] = smooth(finite(this.values[id], value), value, smoothingStep, speed);
+    }
     for (const key of SPECIAL_EYE_KEYS) this.values[key] = key === this.eyeStyle ? this.eyeStyleLevel : 0;
     // Blinks and speech are evaluated after the slow pose smoothing so that their
     // short timing is retained, but still BEFORE the renderer's physics update.
@@ -650,13 +779,15 @@ export class BehaviorController {
 
   _composeFace(id, strength, dt) {
     const base = this._profileFace(id, strength);
-    this.expressionCueWeight = smooth(this.expressionCueWeight, this.expressionCue?.active ? 1 : 0, dt, 11);
-    if (!this.expressionCue || this.expressionCueWeight < .001) {
+    if (this.expressionPreview && this.time >= this.expressionPreview.until) this.expressionPreview = null;
+    const faceCue = this.expressionPreview ?? this.expressionCue;
+    this.expressionCueWeight = smooth(this.expressionCueWeight, faceCue?.active ? 1 : 0, dt, 11);
+    if (!faceCue || this.expressionCueWeight < .001) {
       if (!this.expressionCue?.active) { this.expressionCueWeight = 0; this.expressionCue = null; }
       return base;
     }
     const baseStyle = { ...base.parameters };
-    const cue = this._profileFace(this.expressionCue.emotion, this.expressionCue.intensity);
+    const cue = this._profileFace(faceCue.emotion, faceCue.intensity);
     for (const key of Object.keys(base)) if (key !== 'parameters') base[key] = mix(base[key], cue[key], this.expressionCueWeight);
     for (const key of Object.keys(base.parameters)) base.parameters[key] = mix(base.parameters[key], cue.parameters[key], this.expressionCueWeight);
     // A style switch is sequential, not two overlapping sets of pupils.
@@ -787,14 +918,21 @@ export class BehaviorController {
   }
 
   _desiredGesture() {
-    if (this.petting.active && this.time - this.petStarted >= 2 || this.action?.intent === 'cuddle') return 'chest';
+    if (this.petting.active && this.time - this.petStarted >= 2) return 'chest';
+    const performance = this._bodyPerformance();
+    if (performance) {
+      const progress = performance.progress ?? (this.time - performance.start) / performance.duration;
+      if (progress >= 1) return 'none';
+      return performance.gesture ?? sampleBodyAnimation(performance.id, 0).gesture;
+    }
+    if (this.action?.intent === 'cuddle') return 'chest';
     if (this.action?.source === 'command') return GESTURE_ALIASES[this.action.gesture] ?? this.action.gesture ?? 'none';
     return this._state === 'thinking' ? 'pointer' : 'none';
   }
 
   _syncGesture() { this._setGesture(this._desiredGesture()); }
 
-  _updateArmPose(name, strength, dt) {
+  _updateArmPose(name, strength, dt, offsets = null) {
     const pose = ARM_POSES[name];
     const targetWeight = pose ? clamp(strength) : 0;
     this.poseWeight = smooth(this.poseWeight, targetWeight, dt, 5);
@@ -803,10 +941,13 @@ export class BehaviorController {
       this._callRuntime('setPoseOverlay', {}, 0); return;
     }
     if (pose) for (const id of ARM_IDS) {
-      const to = pose[id] ?? 0;
+      const adjustment = ARM_SELECTORS.has(id) ? 0 : finite(offsets?.[id]) * this.currentTuning.gestureAmplitude;
+      const to = (pose[id] ?? 0) + adjustment;
       // Initial entrance blends against the currently authored motion in runtime;
       // subsequent pose changes interpolate the same input set continuously.
-      this.poseValues[id] = smooth(finite(this.poseValues[id], to), to, dt, 7);
+      // A completed close hands selectors to the new mesh immediately. Blending
+      // stale selectors would briefly expose both replacement hands at once.
+      this.poseValues[id] = ARM_SELECTORS.has(id) ? to : smooth(finite(this.poseValues[id], to), to, dt, 7);
     }
     // During an authored close, selector curves alone decide which mesh is
     // present. Even a 3% stale selector reveals a second translucent hand.

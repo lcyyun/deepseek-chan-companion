@@ -16,5 +16,5 @@ test('production expression picker remains inside the client and supports keyboa
   try { await run(require('electron'), [resolve('tests/expression-menu-fixture.cjs'), directory], { cwd: resolve('.'), env, windowsHide: true, timeout: 35000 }); }
   catch (error) { const result = JSON.parse(await readFile(join(directory, 'result.json'), 'utf8').catch(() => '{}')); throw Error(result.error || error.message); }
   const result = JSON.parse(await readFile(join(directory, 'result.json'), 'utf8'));
-  assert.equal(result.ok, true); assert.equal(result.checks.length, 12);
+  assert.equal(result.ok, true); assert.equal(result.checks.length, 15);
 });

@@ -1,12 +1,14 @@
 # 智能体与语音接入
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括八个 MCP 工具、25 种表情、朗读表情节奏、双向聊天桥和诊断流程。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、独立肢体预览、朗读节奏、双向聊天桥和诊断流程。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
 ## Codex 与 DeepSeek Harness 共用角色
 
-两者连接同一个 `/mcp`，不需要各启动一份角色。工具包括 `avatar_capabilities`、`avatar_state`、`avatar_perform`、`avatar_speak`、`avatar_set_state`、`avatar_stop`、`avatar_reset`、`avatar_watch_context`。动作工具立即返回接受状态；桌宠窗口负责实际动画和逐段朗读。
+两者连接同一个 `/mcp`，不需要各启动一份角色。工具包括 `avatar_capabilities`、`avatar_state`、`avatar_perform`、`avatar_expression`、`avatar_body`、`avatar_speak`、`avatar_set_state`、`avatar_stop`、`avatar_reset`、`avatar_watch_context`。动作工具立即返回接受状态；桌宠窗口负责实际动画和逐段朗读。
+
+只换表情用 `avatar_expression({emotion:"happy"})`，只做肢体用 `avatar_body({animation:"explain"})`；分别传 `{active:false}` 结束对应预览，不停止另一通道或说话。HTTP 使用同字段，另加 `type:"expression"` 或 `type:"body"`。身体动画 ID 以 `bodyAnimations` 能力清单为准。常规 `avatar_speak` 会利用已有 intent/gesture 自动安排肢体，不必同时重复发送身体指令。
 
 先把 `L2D_BRIDGE_TOKEN` 放入启动智能体的进程环境。Codex 配置示例在 `integrations/codex/config.example.toml`；追加该节到已有配置即可，不要覆盖原配置。连接后让智能体先查询 `avatar_capabilities`。
 
@@ -54,7 +56,7 @@ API密钥仅在服务端使用。有Electron系统加密回调时加密保存；
 | GET `/api/capabilities` | 支持的意图、情绪、动作 |
 | GET/PUT `/api/settings` | 读取脱敏配置、保存配置 |
 | GET `/api/model-manifest` | 模型地址、表情与动作相对路径 |
-| POST `/api/command` | `type: perform/speak/state/stop/reset` |
+| POST `/api/command` | `type: perform/speak/state/stop/reset/expression/body` |
 | POST `/api/chat` | `{text,mode,verbosity}` → `{id,requestId,segments,details,sources}` |
 | POST `/api/stop` | 取消生成和语音，广播停止 |
 | POST `/api/tts` | 返回WAV或MP3音频 |

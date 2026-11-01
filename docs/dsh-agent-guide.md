@@ -1,6 +1,6 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-适用于本仓库当前 0.10.1 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。
+适用于本仓库当前 0.11.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。
 
 ## 1. 先确定你使用哪条通路
 
@@ -97,13 +97,15 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 
 ## 4. 完整 MCP 工具契约
 
-工具的实际名称以 DSH 的工具发现结果为准，宿主可能附加服务名前缀。下表是本服务注册的八个工具名。未标“必填”的参数均可省略；无参工具传 `{}`。
+工具的实际名称以 DSH 的工具发现结果为准，宿主可能附加服务名前缀。下表是本服务注册的十个工具名。未标“必填”的参数均可省略；无参工具传 `{}`。
 
 | 工具 | 参数与限制 | 结果与用途 |
 | --- | --- | --- |
 | `avatar_capabilities` | `{}` | 支持的 intents、25 种 emotions、表情描述、gestures、gaze、states 和 cue 限制 |
 | `avatar_state` | `{}` | 当前状态、生成 busy、模型状态、桥状态、watch 状态等 |
 | `avatar_perform` | `intent?`、`emotion?`、`gesture?`、`gaze?`：字符串，最长 80；`intensity?`：0–1；`durationMs?`：100–30000 | 接受一次短表演，不等待表演结束。名称还会经能力白名单校验 |
+| `avatar_expression` | `emotion?`、`active?`、`intensity?` 0–1、`durationMs?` 200–20000；active 默认 true，此时 emotion 必填 | 只预览脸，不切换手臂；active:false 只结束面部预览 |
+| `avatar_body` | `animation?`、`active?`、`intensity?` 0–1、`durationMs?` 2000–20000；active 默认 true，此时 animation 必填 | 独立肢体动画，保持表情；active:false 只结束肢体预览 |
 | `avatar_speak` | **`text` 必填**，1–6000 字符；`intent?`、`emotion?`、`gesture?`；`expressionCues?`：最多 4 项，每项 `{at, emotion, intensity}`，三字段必填；`at` 0–0.9、`intensity` 0–1、emotion 字符串最长 80 | 提交一句朗读及其面部节奏。此工具没有 `gaze`、顶层 `intensity` 或 `durationMs` 参数 |
 | `avatar_set_state` | **`state` 必填**：`idle/thinking/listening/speaking/error` | 更新可见活动状态。设置 speaking 本身不会合成语音 |
 | `avatar_stop` | `{}` | 取消当前聊天生成、正在合成的语音，并广播停止，由桌宠取消播放／动作 |
@@ -111,6 +113,8 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 | `avatar_watch_context` | `{}` | `{context: 页面对象或null}`；只读取用户已开启并分享、且尚未过期的页面 |
 
 MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
+
+`avatar_capabilities.bodyAnimations` 返回当前支持的 `animation` ID：`explain / think / reassure / happy / shy / listen`。仅想切换脸时优先 `avatar_expression`；要展示肢体时用 `avatar_body`；有意组合脸和肢体时仍可用原 `avatar_perform`。不要把手势字段放入独立表情命令。`avatar_speak` 的既有 intent/gesture 会被本地编排为说话动作，通常无需再额外调用 body，以免覆盖自动节奏。gesture:none 不举手，但可保留对应意图的头部和身体动作。
 
 ```json
 {"accepted":true,"id":"生成的命令ID","state":"speaking"}
@@ -384,7 +388,7 @@ Invoke-RestMethod "$bridgeBase/api/stop" -Method Post -Headers $bridgeHeaders `
 
 ## 12. 明确未开放的控制能力
 
-当前外部智能体使用的是上述八个 MCP 工具和共用 HTTP 命令。没有开放任意 Cubism 参数写入、胸部参数调节、窗口坐标操作、拖动悬浮球、修改表情微调、切换敲击音色或模拟触摸的 MCP／HTTP 控制 API。
+当前外部智能体使用的是上述十个 MCP 工具和共用 HTTP 命令。没有开放任意 Cubism 参数写入、胸部参数调节、窗口坐标操作、拖动悬浮球、修改表情微调、切换敲击音色或模拟触摸的 MCP／HTTP 控制 API。
 
 本机触摸区域和新增的第四类局部反应由本地指针交互触发，不是新增 LLM 参数接口。敲盆及两种音效是用户本地道具设置。不要捏造 `touch`、`knock`、`setParameter` 等命令，也不要绕过工具接口改模型资源文件。
 
@@ -392,7 +396,7 @@ Invoke-RestMethod "$bridgeBase/api/stop" -Method Post -Headers $bridgeHeaders `
 
 | 源文件 | 核对内容 |
 | --- | --- |
-| [server/mcp.mjs](../server/mcp.mjs) | 八个工具的实际 schema 和 Streamable HTTP 处理 |
+| [server/mcp.mjs](../server/mcp.mjs) | 十个工具的实际 schema 和 Streamable HTTP 处理 |
 | [server/protocol.mjs](../server/protocol.mjs) | 能力、命令规范化、短答预算和 JSON 输出格式 |
 | [server/service.mjs](../server/service.mjs) | HTTP 鉴权、状态、取消、watch 会话与事件 |
 | [server/dsh-manager.mjs](../server/dsh-manager.mjs) | DSH 桥注册、请求关联、搜索标志、断线处理 |

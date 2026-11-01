@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BehaviorController, BEHAVIOR_PRESETS } from '../src/shared/behavior.mjs';
+import { BehaviorController, BEHAVIOR_PRESETS, BODY_ANIMATION_PRESETS } from '../src/shared/behavior.mjs';
 import { EXPRESSION_PRESETS } from '../src/shared/expressions.mjs';
 import { sanitizeModelTuning } from '../src/shared/model-tuning.mjs';
 import { CHEST_REACTION_DURATIONS, sampleChestReaction } from '../src/shared/chest-reaction.mjs';
+import { sampleBodyAnimation } from '../src/shared/body-animation.mjs';
 
 // Names emitted by the production model-manifest scan (without JSON suffixes).
 const motionNames = new Set(['竖手指切出来动画', '竖手指切回默认', '默认手切举手', '举手切默认手', '狗尾草切换出来', '狗尾草切回默认手']);
@@ -1086,4 +1087,189 @@ test('heart sampler has an exact five-second boundary and rejects invalid stages
   assert.ok(sampleChestReaction(4, 4.9).weight < .1);
   assert.equal(sampleChestReaction(4, 5), null);
   for (const stage of [0, 5, 1.5, NaN, Infinity]) assert.equal(sampleChestReaction(stage, 1), null);
+});
+
+test('six body previews leave every facial recipe and speech mouth independent', () => {
+  assert.equal(BODY_ANIMATION_PRESETS.length, 6);
+  for (const preset of BODY_ANIMATION_PRESETS) {
+    const active = fixture(), control = fixture();
+    for (const f of [active, control]) {
+      f.behavior.setState('speaking'); f.behavior.setExpressionCue('happy', .8); f.behavior.setAudioLevel(.4);
+      f.advance(.5);
+    }
+    assert.equal(active.behavior.previewBodyAnimation(preset.id), true);
+    const faceIds = ['ParamMouthForm', 'ParamMouthOpenY', 'JawOpen', 'key7', 'ParamBrowLY', 'ParamBrowRY', 'ParamEyeLOpen', 'EyeSmile'];
+    let previous, moved = false;
+    for (let frame = 0; frame < 420; frame++) {
+      active.behavior.update(1 / 60); control.behavior.update(1 / 60);
+      for (const id of faceIds) assert.ok(Math.abs(active.runtime.params[id] - control.runtime.params[id]) < 1e-9, `${preset.id} cannot control ${id}`);
+      const overlay = active.runtime.overlay?.values ?? {};
+      if (previous && Object.keys(overlay).some(id => !id.startsWith('Movement') && Math.abs(overlay[id] - (previous[id] ?? 0)) > .00005)) moved = true;
+      previous = { ...overlay };
+    }
+    assert.equal(active.behavior.bodyPreview, null);
+    assert.equal(active.behavior.gesture, 'none');
+    assert.equal(active.behavior.state, 'speaking');
+    if (preset.id !== 'listen') assert.ok(moved, `${preset.id} has a continuous hand adjustment`);
+    assert.equal(active.calls.some(c => c[0] === 'expression' && c[1] === '加载' && c[2]), false, 'thinking preview owns no loading expression');
+  }
+});
+
+test('face preview overlays latest speech face without cancelling a body or restarting its hand', () => {
+  const { behavior, runtime, calls, advance } = fixture();
+  behavior.setExpressionCue('cold', .8);
+  behavior.previewBodyAnimation('reassure', { durationMs: 10000 }); advance(1.5);
+  const body = behavior.bodyPreview, gesture = behavior.gesture;
+  const motionCount = calls.filter(c => c[0] === 'motion' || c[0] === 'stopMotion').length;
+  behavior.applyCommand({ type: 'expression', emotion: 'happy', intensity: 1, durationMs: 1500 }); advance(.5);
+  assert.ok(runtime.params.ParamMouthForm > .2);
+  behavior.setExpressionCue('puzzled', 1);
+  assert.equal(behavior.bodyPreview, body); assert.equal(behavior.gesture, gesture);
+  assert.equal(calls.filter(c => c[0] === 'motion' || c[0] === 'stopMotion').length, motionCount);
+  advance(2);
+  assert.equal(behavior.expressionPreview, null);
+  assert.equal(behavior.expressionCue.emotion, 'puzzled');
+  assert.ok(runtime.params.ParamBrowRY < 0);
+  behavior.applyCommand({ type: 'body', active: false });
+  assert.equal(behavior.bodyPreview, null); assert.equal(behavior.expressionCue.emotion, 'puzzled');
+});
+
+test('speech progress changes hand emphasis without replaying the authored entrance', () => {
+  const { behavior, runtime, calls, advance } = fixture();
+  behavior.perform({ intent: 'idea', gesture: 'pointer', durationMs: 2000, replyIntro: true }); advance(1.8);
+  const openings = () => calls.filter(c => c[0] === 'motion' && c[1] === '竖手指切出来动画').length;
+  for (let frame = 0; frame < 120; frame++) {
+    behavior.setSpeechGesture({ id: 'explain', key: 'a:0', intensity: .8, durationMs: 5000, progress: .2 + frame / 300 });
+    behavior.update(1 / 60);
+  }
+  assert.equal(behavior.action, null, 'reply consumes the preceding idea flourish');
+  assert.equal(openings(), 1);
+  const pose = runtime.overlay.values.Param41;
+  behavior.setSpeechGesture({ id: 'happy', key: 'b:0', intensity: .8, durationMs: 5000, progress: .28 }); advance(.3);
+  assert.equal(openings(), 1, 'a new segment can keep the same hand raised');
+  assert.ok(Math.abs(runtime.overlay.values.Param41 - pose) > .001);
+  behavior.clearSpeechGesture(); advance(2);
+  assert.equal(behavior.gesture, 'none');
+  assert.ok(calls.some(c => c[0] === 'motion' && c[1] === '竖手指切回默认'));
+});
+
+test('explicit speech gesture none never leaks a pose selector or opens a hand', () => {
+  const { behavior, runtime, calls, advance } = fixture();
+  behavior.setSpeechGesture({ id: 'explain', key: 'none', gesture: 'none', progress: .4, durationMs: 4000 });
+  advance(1);
+  assert.equal(behavior.gesture, 'none');
+  assert.equal(calls.some(c => c[0] === 'motion'), false);
+  assert.equal(runtime.overlay.weight, 0);
+  assert.ok(runtime.params.LeanInput < -.5, 'the head and body can still express the cue');
+});
+
+test('touch consumes an active speech cue and repeated progress cannot take ownership back', () => {
+  const { behavior, calls, advance } = fixture();
+  const cue = { id: 'explain', key: 'old', gesture: 'pointer', durationMs: 10000, progress: .3 };
+  behavior.setSpeechGesture(cue); advance(1.5);
+  behavior.setPetting(true, { newContact: true });
+  for (let i = 0; i < 150; i++) { behavior.setSpeechGesture(cue); behavior.update(1 / 60); }
+  assert.equal(behavior.gesture, 'chest', 'sustained touch owns the cuddle');
+  behavior.setPetting(false); advance(2);
+  const openings = calls.filter(c => c[0] === 'motion' && c[1] === '竖手指切出来动画').length;
+  behavior.setSpeechGesture(cue); advance(1);
+  assert.equal(behavior.gesture, 'none', 'an old cue is not replayed after touch');
+  assert.equal(calls.filter(c => c[0] === 'motion' && c[1] === '竖手指切出来动画').length, openings);
+  behavior.setSpeechGesture({ ...cue, key: 'new' }); advance(.1);
+  assert.equal(behavior.gesture, 'pointer', 'a genuinely new cue can resume naturally');
+});
+
+test('body preview wins over ongoing speech progress, stop and reset clear each lane safely', () => {
+  const { behavior, runtime, advance } = fixture();
+  behavior.previewBodyAnimation('reassure');
+  for (let i = 0; i < 120; i++) { behavior.setSpeechGesture({ id: 'explain', key: 'a', progress: .4 }); behavior.update(1 / 60); }
+  assert.equal(behavior.gesture, 'chest');
+  behavior.previewExpression('love');
+  behavior.interrupt('idle'); advance(2);
+  for (const key of ['bodyPreview', 'speechGesture', 'expressionPreview']) assert.equal(behavior[key], null);
+  assert.equal(behavior.gesture, 'none'); assert.ok(runtime.overlay.weight < .001);
+  behavior.previewBodyAnimation('think'); behavior.previewExpression('happy'); behavior.reset();
+  for (const key of ['bodyPreview', 'speechGesture', 'expressionPreview']) assert.equal(behavior[key], null);
+});
+
+test('body preview supersedes an older scripted cuddle body while retaining its face', () => {
+  const { behavior, runtime, advance } = fixture();
+  behavior.perform({ intent: 'cuddle', emotion: 'happy', durationMs: 15000 }); advance(2);
+  assert.equal(behavior.gesture, 'chest');
+  const oldAction = behavior.action;
+  behavior.previewBodyAnimation('explain', { durationMs: 7000 }); advance(1.8);
+  assert.equal(behavior.action, oldAction, 'the existing facial expression is independent');
+  assert.equal(behavior.gesture, 'pointer');
+  assert.equal(runtime.cuddleActive, false);
+  assert.equal(runtime.overlay.values.Movement3, 1);
+  assert.equal(runtime.overlay.values.Movement2, 0);
+});
+
+test('eyes lead the head and torso; authored body outputs are never directly overwritten', () => {
+  const { behavior, runtime, advance } = fixture({ tuning: { idleActivity: 0 } });
+  advance(.5);
+  behavior.perform({ gaze: 'right', durationMs: 5000 }); advance(.2);
+  const eye = runtime.params.ParamEyeBallX / .48, head = runtime.params.AngleX / 8, body = runtime.params.PositionX / 3.2;
+  assert.ok(eye > head && head > body, `progress eye=${eye}, head=${head}, body=${body}`);
+  for (const id of ['ParamAngleX', 'RArm', 'LArm', 'RForearm', 'LForearm', 'ChestX1', 'ChestY1']) assert.equal(id in runtime.params, false);
+});
+
+test('deliberate body motion has rest sections and bounded, selector-free emphasis offsets', () => {
+  for (const preset of BODY_ANIMATION_PRESETS) {
+    let last;
+    for (let i = 0; i <= 300; i++) {
+      const sample = sampleBodyAnimation(preset.id, i / 300, 1);
+      for (const [id, value] of Object.entries(sample.armOffsets)) {
+        assert.ok(!id.startsWith('Movement')); assert.ok(Math.abs(value) <= .041);
+        if (last?.armOffsets[id] !== undefined) assert.ok(Math.abs(value - last.armOffsets[id]) < .01);
+      }
+      last = sample;
+    }
+  }
+  assert.deepEqual(sampleBodyAnimation('think', .28), sampleBodyAnimation('think', .38), 'thought pose rests instead of oscillating forever');
+  assert.equal(sampleBodyAnimation('missing', .5), null);
+});
+
+test('new body controls alter continuous motion while retaining valid hand selection', () => {
+  const quiet = fixture({ tuning: { gestureAmplitude: 0, bodyFollow: 0, idleActivity: 0 } });
+  const expressive = fixture({ tuning: { gestureAmplitude: 1.5, bodyFollow: 1.5, idleActivity: 0 } });
+  for (const f of [quiet, expressive]) {
+    f.behavior.setSpeechGesture({ id: 'explain', key: 'amplitude', intensity: 1, progress: .38, durationMs: 5000 }); f.advance(1.5);
+  }
+  assert.ok(expressive.runtime.overlay.values.Param41 > quiet.runtime.overlay.values.Param41 + .05);
+  for (const id of ['Movement1', 'Movement2', 'Movement3', 'Param40']) assert.equal(expressive.runtime.overlay.values[id], quiet.runtime.overlay.values[id]);
+  for (const f of [quiet, expressive]) { f.behavior.clearSpeechGesture(); f.behavior.perform({ gaze: 'right', durationMs: 4000 }); f.advance(1.5); }
+  assert.equal(quiet.runtime.params.PositionX, 0);
+  assert.ok(expressive.runtime.params.PositionX > 4);
+});
+
+test('explicit performances end face previews and own the body over automatic speech progress', () => {
+  const { behavior, runtime, advance } = fixture();
+  behavior.setExpressionCue('cold', .7);
+  behavior.previewExpression('love', { durationMs: 20000 }); advance(.6);
+  assert.ok(runtime.params.key4 > .8);
+  behavior.perform({ intent: 'reassure', emotion: 'gentle', gesture: 'chest', durationMs: 4000 });
+  const manual = behavior.action;
+  for (let i = 0; i < 120; i++) {
+    behavior.setSpeechGesture({ id: 'explain', key: 'chat:1', progress: .4, durationMs: 6000 });
+    behavior.update(1 / 60);
+  }
+  assert.equal(behavior.expressionPreview, null);
+  assert.ok(runtime.params.key4 < .01);
+  assert.equal(behavior.action, manual);
+  assert.equal(behavior.gesture, 'chest');
+  assert.equal(behavior.bodySample, null, 'automatic head/body motion cannot cover a manual performance');
+  advance(3.5);
+  assert.equal(behavior.action, null);
+  assert.equal(behavior.gesture, 'pointer', 'only the latest still-active cue resumes after the manual action');
+});
+
+test('automatic speech never consumes a manually requested idea action', () => {
+  const { behavior, advance } = fixture();
+  behavior.perform({ intent: 'idea', emotion: 'happy', gesture: 'pointer', durationMs: 4000 }); advance(.2);
+  const manualIdea = behavior.action;
+  behavior.setSpeechGesture({ id: 'reassure', key: 'chat:manual', progress: .4, durationMs: 5000 }); advance(.8);
+  assert.equal(behavior.action, manualIdea);
+  assert.equal(behavior.gesture, 'pointer');
+  assert.equal(behavior.bodySample, null);
 });

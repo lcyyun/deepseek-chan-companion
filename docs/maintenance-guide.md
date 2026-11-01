@@ -47,6 +47,8 @@ flowchart LR
 | [src/renderer/main.tsx](../src/renderer/main.tsx) | 页面入口；回复编排、触摸、输入取消、窗口事件和设置下发 |
 | [src/renderer/live2d.ts](../src/renderer/live2d.ts) | SDK 与模型加载、每帧组合、动作资源、物理、绘图、模型命中区域 |
 | [src/shared/behavior.mjs](../src/shared/behavior.mjs) | 与 DOM 无关的行为状态机：动作、表情、视线、摸头、敲盆和局部反应 |
+| [src/shared/body-animation.mjs](../src/shared/body-animation.mjs)、[renderer/body-animations.tsx](../src/renderer/body-animations.tsx) | 六组独立肢体关键姿态、中文目录和预览入口 |
+| [src/shared/gesture-cues.mjs](../src/shared/gesture-cues.mjs)、[renderer/gesture-timeline.ts](../src/renderer/gesture-timeline.ts) | 由段落意图生成手势节点，并按实际播放进度执行、跨段保持和取消 |
 | [src/shared/behavior.d.mts](../src/shared/behavior.d.mts)、[renderer/behavior.ts](../src/renderer/behavior.ts) | 行为接口类型和渲染端导出；改公开方法时同步维护 |
 | [src/shared/expressions.mjs](../src/shared/expressions.mjs) | 表情目录、中文文案、基础脸部姿态、趣味眼型等参数 |
 | [src/renderer/expression-panel.tsx](../src/renderer/expression-panel.tsx)、[expression-select.tsx](../src/renderer/expression-select.tsx) | 表情预览、单项微调和窗口内选择器 |
@@ -257,6 +259,10 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 | --- | --- | --- |
 | `chestSoftness` | 0–2 / 1.15 | 两组胸部物理弹簧 |
 | `bodyMotion` | 0–1.6 / 1 | 身体跟随、摇摆与敲击轻颤；不等同于所有头部表演总开关 |
+| `bodyFollow` | 0–1.5 / 1 | 头部带动躯干的系数；躯干读取上一帧已平滑头姿，降低同步转动感 |
+| `gestureAmplitude` | 0–1.5 / 1 | 安全手姿附近的连续参数增量；不改变手型选择器和基础抬手位置 |
+| `gestureFrequency` | 0–1.5 / 1 | 本地说话手势规划密度；每轮回复开始时读取，0 禁用自动手势 |
+| `idleActivity` | 0–1.5 / 1 | 待机重心与微小头姿的幅度；0 不取消基本呼吸、眨眼 |
 | `gazeStrength` | 0.3–1.5 / 1 | 按住跟随的视线和头部幅度 |
 | `blushStrength` | 0–1 / 0.75 | 摸头/撒娇脸红浓度 |
 | `basinShadow` | 0–1 / 0.35 | 盆投在脸上的阴影 |
@@ -390,6 +396,8 @@ npm run package
 
 ## 14. 当前局限与后续方向
 
+0.11 的独立预览与说话编排实现见下节。语义重点目前按文本子句比例映射到真实音频进度，不是单字级或声学重音对齐。
+
 - 原生输入、系统语音和打包按 Windows 实现；不能把前端可运行等同于 macOS/Linux 桌宠支持。
 - 这份模型的手、眼、盆、胸部物理和命中部件经过专用适配；新增模型应抽出可选的模型 profile，重新校准后再启用这些增强。
 - 口型是实际音量驱动，不是音素识别；语音当前整段生成并解码后播放，不是低延迟流式音频。
@@ -399,3 +407,27 @@ npm run package
 - `public/audio/metal-pipe-falling.mp3` 的来源与明确授权现状见 [音频来源](audio-sources.md)。模型和 Cubism SDK 不在源码仓库内；发布方式改变时重新核对这些第三方资产的条件。
 
 维护时最可靠的工作顺序是：先确认负责该状态的层，修改最小边界，运行对应自动测试，再对涉及模型姿态、声音或原生输入的变化做相应实测。将“事件到达”“参数生效”“画面正确”“原生输入正确”分别验证，能显著减少仅靠单层测试漏掉的问题。
+
+## 15. 0.11 的独立预览与说话肢体编排
+
+### 通道与生命周期
+
+`expression` 与 `body` 是独立命令类型。前者调用 `previewExpression`，建立有截止时间的 `expressionPreview`；不会调用 `perform`、收手、修改对话状态或停止声音。到期后恢复最新的 `expressionCue`。后者调用 `previewBodyAnimation`，控制手臂、视线、头部和躯干，不选择脸部情绪。两个通道都接受 `active:false`，只清理自己的预览。旧 `perform` 仍表示完整情境表演。
+
+实际触摸、敲盆和胸前反应优先；被触摸打断的说话节点会标记为已消费，松手后不能重放。同一身体预览可以搭配不同小表情，正文口型仍由实际声音独占。添加表情时不要把小表情卡片接回 `perform`，也不要在停止表情预览时调用全局 `/api/stop`。
+
+### 从回复到手势
+
+`planGestureCues(segment,{frequency})` 读取既有的 `intent/gesture/text`，不增加大模型必填字段。短句最多一个节点，长解释可在语义子句处增加少量强调；显式 `gesture:'none'` 不举手。频率小于 1 时用文本稳定散列选取较少的句子，不依赖逐帧随机数，不改变动作幅度。文字比例只决定节点在语音中的相对位置，真实时长来自 `SpeechPlayer` 的 AudioContext 时钟。
+
+`createGestureTimeline` 与面部时间线在同一个播放回调中更新。无声模式由阅读进度驱动。过短音频省略完整抬手，迟到帧跳过错过的手势，暂停时不推进。相邻相同身体/手型通过 `holdLast` / `continueFirst` 续接；正常段末调用 `finish()`，停止和换轮调用 `cancel()`。回调同时检查回复轮次与当前时间线实例，旧 Promise 的 finally 不能清除新一轮。
+
+每帧 `setSpeechGesture` 更新同一节点的 `progress`，不会每帧调用 `perform` 或重播 motion。节点 `key` 标识本轮本段本次强调。第一节点可以接管已经完成主体表演的 idea，不额外收手再举手。没有节点时保留正常呼吸、眨眼与基础姿态。
+
+### 调整身体动画
+
+`body-animation.mjs` 中每组动画由 0–1 的关键帧组成，包含停留、强调与返回。新增姿态时优先改这里，不把一串 setTimeout 放进 React。当前只在已校准的 `Param36/39/41/59/60` 附近叠加有限增量，手型选择器保持明确的 0/1；姿态之间只平滑角度，关闭阶段把选择器完全交回对应作者 motion。
+
+普通视线、头和躯干分别采用较快、中等、较慢的平滑速度（18/7.5/4.5）；躯干读取上一帧已经平滑的头姿。触摸和胸前反应保留原响应速度。待机每隔约 6–13 秒更新一次小重心目标，中间停留；原 Cubism 物理负责头发、衣服等后续运动，不在行为层覆盖物理输出。
+
+相关验证：`tests/gesture-cues.test.mjs`、`tests/gesture-timeline.test.mjs`、`tests/speech-body.test.mjs`、`tests/behavior.test.mjs`，以及独立运行的 `tests/body-production.cjs`。最后一个需要 `L2D_MODEL_ROOT` 指向完整原模型，用隔离服务与隐藏窗口记录真实 Cubism 过程截图，不连接用户正在运行的实例。

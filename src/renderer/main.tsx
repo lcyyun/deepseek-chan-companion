@@ -6,7 +6,10 @@ import { BasinSound } from './basin-audio';
 import { BasinSoundChoice } from './basin-sound-choice';
 import { OrbitToggle } from './orbit-toggle';
 import { ExpressionPanel } from './expression-panel';
+import { BodyAnimationPreviews } from './body-animations';
 import { createExpressionTimeline } from './expression-timeline';
+import { createGestureTimeline } from './gesture-timeline';
+import { planGestureCues, canContinueGesture } from '../shared/gesture-cues.mjs';
 import { normalizeExpressionCues } from '../shared/expression-cues.mjs';
 import { createLive2D } from './live2d';
 import { BehaviorController } from './behavior';
@@ -42,6 +45,10 @@ function TuningPanel({onError}:{onError:(message:string)=>void}){
   const controls:{key:keyof typeof MODEL_TUNING_LIMITS;label:string;description:string}[]=[
     {key:'chestSoftness',label:'胸部柔软度',description:'100% 为原模型，115% 为轻柔回弹'},
     {key:'bodyMotion',label:'身体动作幅度',description:'身体跟随、思考摇摆和敲盆轻颤'},
+    {key:'bodyFollow',label:'身体跟随程度',description:'转头时躯干稍晚跟上的程度，0% 时不随头转动'},
+    {key:'gestureAmplitude',label:'手势幅度',description:'说话与肢体预览中手臂起伏的幅度'},
+    {key:'gestureFrequency',label:'说话手势频率',description:'0% 关闭自动说话手势，下次回复生效；独立预览不受影响'},
+    {key:'idleActivity',label:'待机活跃度',description:'安静站立时换重心和轻微活动的程度'},
     {key:'gazeStrength',label:'鼠标跟随幅度',description:'按住左键时的视线和头部转动'},
     {key:'blushStrength',label:'摸头脸红浓度',description:'短摸轻红，持续撒娇达到设定浓度'},
     {key:'basinShadow',label:'盆下阴影',description:'戴盆时脸部阴影的深浅'},
@@ -67,6 +74,7 @@ function Pet(){
   const presentationWait=useRef<{timer:ReturnType<typeof setTimeout>;resolve:(valid:boolean)=>void}|null>(null);
   const speakingPage=useRef('');
   const faceTimeline=useRef<ReturnType<typeof createExpressionTimeline>|null>(null),faceFrame=useRef<number|undefined>(undefined);
+  const gestureTimeline=useRef<ReturnType<typeof createGestureTimeline>|null>(null);
   const stage=useRef<HTMLElement>(null), pointer=useRef<{id:number;session:string;captured:boolean;pat:boolean;chest:boolean;x:number;y:number;startX:number;startY:number;startClientX:number;startClientY:number;travel:number;at:number;started:number}|null>(null);
   const patEnd=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const petView=useRef({scale:1,offsetX:0,offsetY:0});
@@ -90,16 +98,20 @@ function Pet(){
     if(faceFrame.current!==undefined)cancelAnimationFrame(faceFrame.current);faceFrame.current=undefined;
     faceTimeline.current?.cancel();faceTimeline.current=null;behavior.current?.clearExpressionCue();
   }
-  async function readWithExpressions(ms:number,turn:number,timeline:ReturnType<typeof createExpressionTimeline>){
+  function clearGestureTimeline(expected?:ReturnType<typeof createGestureTimeline>){
+    if(expected&&gestureTimeline.current!==expected)return;
+    gestureTimeline.current?.cancel();gestureTimeline.current=null;behavior.current?.clearSpeechGesture();
+  }
+  async function readWithExpressions(ms:number,turn:number,timeline:ReturnType<typeof createExpressionTimeline>,bodyTimeline:ReturnType<typeof createGestureTimeline>){
     const started=performance.now();
-    const frame=()=>{if(turn!==sequence.current||faceTimeline.current!==timeline)return;timeline.update(Math.min(ms,performance.now()-started)/1000,ms/1000);faceFrame.current=requestAnimationFrame(frame);};
+    const frame=()=>{if(turn!==sequence.current||faceTimeline.current!==timeline)return;const elapsed=Math.min(ms,performance.now()-started)/1000;timeline.update(elapsed,ms/1000);if(gestureTimeline.current===bodyTimeline)bodyTimeline.update(elapsed,ms/1000);faceFrame.current=requestAnimationFrame(frame);};
     frame();const complete=await waitForPresentation(ms,turn);
     if(faceTimeline.current===timeline&&faceFrame.current!==undefined){cancelAnimationFrame(faceFrame.current);faceFrame.current=undefined;}
     return complete;
   }
   function stop(){
     remember(discardedRequests.current,thinking.current.requestId);remember(discardedRequests.current,presentation.current.requestId);
-    thinking.current={requestId:null,pending:false};presentation.current={phase:'idle',requestId:null};cancelPresentationWait();clearFaceTimeline();
+    thinking.current={requestId:null,pending:false};presentation.current={phase:'idle',requestId:null};cancelPresentationWait();clearFaceTimeline();clearGestureTimeline();
     trackingBlocked.current=true;behavior.current?.setPointerTracking(false);window.companion?.control('suspend-tracking').catch(()=>{});endPointer(true);sequence.current++;speakingPage.current='';pendingReply.current=null;pendingCommand.current=null;speaker.current.stop();basinSound.current.stop();behavior.current?.interrupt();setBubble('');setState('listening');
   }
   function beginThinking(requestId?:string){
@@ -204,7 +216,7 @@ function Pet(){
     remember(acceptedReplies.current,reply.id);
     const reveal=thinking.current.pending;
     thinking.current.pending=false;
-    cancelPresentationWait();clearFaceTimeline();speaker.current.stop();
+    cancelPresentationWait();clearFaceTimeline();clearGestureTimeline();behavior.current?.clearExpressionPreview();speaker.current.stop();
     const item={reply,turn:++sequence.current,reveal,requestId};
     presentation.current={phase:reveal?'idea':'reply',requestId};speakingPage.current=(reply as any).contextUrl||'';
     if(!behavior.current){pendingReply.current=item;return;}
@@ -216,28 +228,41 @@ function Pet(){
     if(reveal){
       // Leave a small choreography overlap so the first spoken gesture can take
       // over before an animation-frame completion callback closes the same hand.
-      behavior.current?.applyCommand({type:'perform',intent:'idea',emotion:'happy',gesture:'pointer',intensity:.7,durationMs:2000});
+      behavior.current?.applyCommand({type:'perform',intent:'idea',emotion:'happy',gesture:'pointer',intensity:.7,durationMs:2000,replyIntro:true});
       setState('idle');setStatus('想到了');setBubble('想到了！');
       if(!await waitForPresentation(1800,turn))return;
     }
     const settings=await settingsPromise;if(turn!==sequence.current)return;
     presentation.current={phase:'reply',requestId};
-    for(const segment of reply.segments||[]){
+    const scores=reply.segments.map(segment=>planGestureCues(segment,{frequency:modelTuning.current.gestureFrequency}));
+    for(const [index,segment] of reply.segments.entries()){
       if(turn!==sequence.current)return;
       setBubble(segment.text);clearFaceTimeline();
       const timeline=createExpressionTimeline(normalizeExpressionCues(segment.expressionCues,segment.emotion,.55),cue=>{if(turn===sequence.current)behavior.current?.setExpressionCue(cue.emotion,cue.intensity);});
       faceTimeline.current=timeline;
-      const startSegment=(voiced:boolean)=>{if(turn!==sequence.current)return;setState(voiced?'speaking':'idle');behavior.current?.applyCommand({type:'perform',...segment,intensity:.55,durationMs:Math.min(12000,Math.max(2600,segment.text.length*200))});};
+      const bodyTimeline=createGestureTimeline(scores[index],cue=>{
+        if(turn===sequence.current&&gestureTimeline.current===bodyTimeline)behavior.current?.setSpeechGesture(cue);
+      },()=>{if(turn===sequence.current&&gestureTimeline.current===bodyTimeline)behavior.current?.clearSpeechGesture();},{
+        key:`${turn}:${index}`,holdLast:canContinueGesture(scores[index].at(-1),scores[index+1]?.[0]),
+        continueFirst:canContinueGesture(scores[index-1]?.at(-1),scores[index][0]),
+      });
+      gestureTimeline.current=bodyTimeline;
+      const startSegment=(voiced:boolean)=>{if(turn===sequence.current)setState(voiced?'speaking':'idle');};
+      let completed=false;
       try {
-        if(settings?.voiceEnabled===false){startSegment(false);if(!await readWithExpressions(Math.min(10000,Math.max(2200,segment.text.length*150)),turn,timeline))return;}
+        if(settings?.voiceEnabled===false){startSegment(false);if(!await readWithExpressions(Math.min(10000,Math.max(2200,segment.text.length*150)),turn,timeline,bodyTimeline))return;}
         else {
-          try { await speaker.current.speak(segment.text,()=>{if(turn===sequence.current){startSegment(true);api('/api/command',{type:'state',state:'speaking'}).catch(()=>{});}},progress=>{if(turn===sequence.current&&faceTimeline.current===timeline)timeline.update(progress.elapsed,progress.duration);}); }
-          catch(e:any){if(e.name==='AbortError'||turn!==sequence.current)return;setError('语音未播放：'+e.message);startSegment(false);if(!await readWithExpressions(2500,turn,timeline))return;}
+          try { await speaker.current.speak(segment.text,()=>{if(turn===sequence.current){startSegment(true);api('/api/command',{type:'state',state:'speaking'}).catch(()=>{});}},progress=>{if(turn===sequence.current&&faceTimeline.current===timeline){timeline.update(progress.elapsed,progress.duration);if(gestureTimeline.current===bodyTimeline)bodyTimeline.update(progress.elapsed,progress.duration);}}); }
+          catch(e:any){if(e.name==='AbortError'||turn!==sequence.current)return;setError('语音未播放：'+e.message);startSegment(false);if(!await readWithExpressions(Math.min(10000,Math.max(2200,segment.text.length*150)),turn,timeline,bodyTimeline))return;}
         }
-      } finally { clearFaceTimeline(timeline); }
+        completed=turn===sequence.current;
+      } finally {
+        clearFaceTimeline(timeline);
+        if(gestureTimeline.current===bodyTimeline){if(completed){bodyTimeline.finish();gestureTimeline.current=null;}else clearGestureTimeline(bodyTimeline);}
+      }
       if(turn!==sequence.current)return;
     }
-    if(turn===sequence.current){presentation.current={phase:'idle',requestId};setState('idle');api('/api/command',{type:'state',state:'idle'}).catch(()=>{});setTimeout(()=>{if(turn===sequence.current)setBubble('');},2200);}
+    if(turn===sequence.current){clearGestureTimeline();presentation.current={phase:'idle',requestId};setState('idle');api('/api/command',{type:'state',state:'idle'}).catch(()=>{});setTimeout(()=>{if(turn===sequence.current)setBubble('');},2200);}
   }
   useEffect(()=>{
     let disposed=false;
@@ -283,7 +308,7 @@ function Pet(){
     window.companion?.control('diagnostics').then((d:any)=>{setDrag(!!d?.dragMode);applyPetScale(d?.petScale);if(d?.modelTuning)applyModelTuning(d.modelTuning);if(typeof d?.basinEnabled==='boolean')applyBasin(d.basinEnabled);});
     // The main process owns hide/held-button suppression. A renderer-only latch
     // here can race the release event and swallow the first press after showing.
-    const cancel=()=>endPointer(true),visibility=()=>{if(document.hidden){cancel();behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}};window.addEventListener('blur',cancel);document.addEventListener('visibilitychange',visibility);
+    const cancel=()=>endPointer(true),visibility=()=>{if(document.hidden){cancel();clearGestureTimeline();behavior.current?.clearBodyAnimation();behavior.current?.clearExpressionPreview();behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}};window.addEventListener('blur',cancel);document.addEventListener('visibilitychange',visibility);
     let lastShape='';const regionsTimer=setInterval(()=>{
       const r=runtime.current?.getInteractionRegions(),rect=canvas.current?.getBoundingClientRect();if(!rect)return;
       const body=r?{...r.body,x:r.body.x+rect.left,y:r.body.y+rect.top}:null;
@@ -301,7 +326,7 @@ function Pet(){
       const key=JSON.stringify({revision,head,regions:regions.map(v=>({x:Math.round(v.x/4)*4,y:Math.round(v.y/4)*4,width:Math.ceil(v.width/4)*4,height:Math.ceil(v.height/4)*4}))});
       if(key!==lastShape){lastShape=key;if(r)setModelRegion({body,head});setGuardRects(regions);window.companion?.control('pet-hit-regions',{regions,body,fullBody,revision}).catch(()=>{});}
     },100);
-    return()=>{disposed=true;clearFaceTimeline();wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
+    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
   },[]);
   dragEnabled.current=drag;
   const anchor=modelRegion?.head||{x:(petPlacement.current?.centerX??innerWidth/2)-80,y:(petPlacement.current?.centerY??innerHeight/2)-250,width:160,height:160};
@@ -339,7 +364,7 @@ function Chat(){
   const provider=settings?.provider==='codex'?'Codex':settings?.provider==='dsh'?'DeepSeek Harness':'API';
   return <div className="chat-shell">
     <header className="window-header"><div className="brand-icon"><AvatarIcon size={26}/></div><div className="brand-title"><strong>大肥鱼</strong><span>DeepSeek-chan · 桌面伙伴</span></div><button className="icon-button" title="收起窗口" aria-label="收起窗口" onClick={()=>desktop?.control('hide-chat')}>−</button></header>
-    <nav className="tabs">{[['chat','聊一会'],['actions','小动作'],['expressions','小表情'],['tuning','调节'],['settings','设置']].map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}<span className="connection"><i/>{provider}</span></nav>
+    <nav className="tabs">{[['chat','聊一会'],['actions','肢体'],['expressions','小表情'],['tuning','调节'],['settings','设置']].map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}<span className="connection"><i/>{provider}</span></nav>
     {tab==='chat'&&<>
       <div className={'watch-strip '+(watch?'on':'')}><button onClick={toggleWatch}><span className="watch-eye">◉</span>一起看<span className="mini-switch"/></button><span>{watch?(page?.title||'等待分享浏览器页面'):'聊聊你正在看的世界'}</span></div>
       <section className="conversation">
@@ -352,9 +377,9 @@ function Chat(){
       {notice&&<button className="notice" onClick={()=>setNotice('')}>{notice} ×</button>}
       <footer className="composer"><textarea ref={inputRef} aria-label="发给大肥鱼的话" placeholder={watch?'这页有什么想一起聊的？':'和大肥鱼说点什么…'} value={input} onChange={e=>setInput(e.target.value)} rows={2} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();send();}}}/><div className="composer-bottom"><span>Enter 发送 · Shift+Enter 换行</span>{busy?<button className="send stop" onClick={()=>{api('/api/stop',{});setBusy(false);}}>停止</button>:<button className="send" disabled={!input.trim()} onClick={()=>send()}>发送 ↑</button>}</div></footer>
     </>}
-    {tab==='actions'&&<section className="panel-scroll"><div className="section-intro"><h2>让心情动起来</h2><p>轻点一个动作，也可以用全局快捷键。</p></div><BasinToggle onError={setError}/><BasinSoundChoice onError={setError}/><div className="action-grid">{ACTIONS.map((a,i)=><button className="action-card" key={a.title} onClick={()=>api('/api/command',{type:'perform',intensity:.85,durationMs:6500,...a.command}).catch(e=>setError(e.message))}><span className="action-icon">{a.icon}</span><strong>{a.title}</strong><small>{a.sub}</small>{i<4&&<kbd>Ctrl Alt {i+1}</kbd>}</button>)}</div><h3 className="reaction-heading">点击反应预览</h3><div className="action-grid">{[{stage:1,title:"惊慌后害羞",sub:"吓一跳，再慢慢红了脸",icon:"😳"},{stage:2,title:"哼，不理你",sub:"红脸嗔怒，别过头去",icon:"😤"},{stage:3,title:"不许再闹啦",sub:"轻轻皱眉，认真责怪",icon:"😠"},{stage:4,title:"心动一下",sub:"被哄好啦，呼吸轻轻起伏",icon:"💕"}].map(item=><button className="action-card" key={item.stage} data-chest-preview={item.stage} onClick={()=>window.companion?.control("chest-reaction",item.stage).catch(e=>setError(e.message))}><span className="action-icon">{item.icon}</span><strong>{item.title}</strong><small>{item.sub}</small></button>)}</div><p className="hint">轻点胸前触发，播放中连点无效。三轮后先摸摸头，再点触发心动；结束后重置。一分钟不再点击也会重置。</p><div className="action-footer"><button onClick={()=>api('/api/stop',{})}>停止表演</button><button onClick={()=>api('/api/command',{type:'reset'})}>恢复默认</button></div><div className="shortcut-list"><div><span>打开 / 收起聊天</span><kbd>Ctrl Alt Space</kbd></div><div><span>打断说话与动作</span><kbd>Ctrl Alt Backspace</kbd></div><div><span>恢复默认</span><kbd>Ctrl Alt 0</kbd></div></div></section>}
+    {tab==='actions'&&<section className="panel-scroll"><BodyAnimationPreviews onError={setError}/><div className="section-intro"><h2>情境组合</h2><p>原有完整表演，包含相应表情与肢体动作。</p></div><BasinToggle onError={setError}/><BasinSoundChoice onError={setError}/><div className="action-grid">{ACTIONS.map((a,i)=><button className="action-card" key={a.title} onClick={()=>api('/api/command',{type:'perform',intensity:.85,durationMs:6500,...a.command}).catch(e=>setError(e.message))}><span className="action-icon">{a.icon}</span><strong>{a.title}</strong><small>{a.sub}</small>{i<4&&<kbd>Ctrl Alt {i+1}</kbd>}</button>)}</div><h3 className="reaction-heading">点击反应预览</h3><div className="action-grid">{[{stage:1,title:"惊慌后害羞",sub:"吓一跳，再慢慢红了脸",icon:"😳"},{stage:2,title:"哼，不理你",sub:"红脸嗔怒，别过头去",icon:"😤"},{stage:3,title:"不许再闹啦",sub:"轻轻皱眉，认真责怪",icon:"😠"},{stage:4,title:"心动一下",sub:"被哄好啦，呼吸轻轻起伏",icon:"💕"}].map(item=><button className="action-card" key={item.stage} data-chest-preview={item.stage} onClick={()=>window.companion?.control("chest-reaction",item.stage).catch(e=>setError(e.message))}><span className="action-icon">{item.icon}</span><strong>{item.title}</strong><small>{item.sub}</small></button>)}</div><p className="hint">轻点胸前触发，播放中连点无效。三轮后先摸摸头，再点触发心动；结束后重置。一分钟不再点击也会重置。</p><div className="action-footer"><button onClick={()=>api('/api/stop',{})}>停止表演</button><button onClick={()=>api('/api/command',{type:'reset'})}>恢复默认</button></div><div className="shortcut-list"><div><span>打开 / 收起聊天</span><kbd>Ctrl Alt Space</kbd></div><div><span>打断说话与动作</span><kbd>Ctrl Alt Backspace</kbd></div><div><span>恢复默认</span><kbd>Ctrl Alt 0</kbd></div></div></section>}
     {tab!=='chat'&&error&&<div className="error-banner">{error}<button onClick={()=>setError('')}>关闭</button></div>}
-    {tab==='expressions'&&<ExpressionPanel onError={setError}/>}
+    <ExpressionPanel hidden={tab!=='expressions'} onError={setError}/>
     {tab==='tuning'&&<TuningPanel onError={setError}/>}
     {tab==='settings'&&<Settings settings={settings} onSaved={()=>{refresh();setNotice('设置已保存');}} onError={setError}/>}
     <div className="status-bar"><span><i className={busy?'busy':''}/>{stateNames[state]||'在你身边'}</span><button onClick={()=>api('/api/stop',{})} title="立即停止声音和动作">■ 停止</button></div>

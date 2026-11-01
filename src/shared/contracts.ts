@@ -5,7 +5,9 @@ export type AvatarEmotion = ExpressionId;
 export interface ExpressionCue { at: number; emotion: AvatarEmotion; intensity: number }
 export interface AvatarCommand {
   id?: string;
-  type: 'perform' | 'speak' | 'stop' | 'reset' | 'state';
+  type: 'perform' | 'speak' | 'stop' | 'reset' | 'state' | 'expression' | 'body';
+  animation?: 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen';
+  active?: boolean;
   intent?: AvatarIntent; emotion?: AvatarEmotion; gesture?: string; gaze?: string;
   intensity?: number; durationMs?: number; text?: string; state?: AvatarState;
 }
