@@ -21,6 +21,7 @@ let sanitizeModelTuning;
 const roles = new Map();
 let inputRegions = [], pointerLocked = false, shapeKey = '';
 let resizingPet = false, scaleSaveTimer;
+let placingChat = false, autoChatBounds = null, chatSaveTimer;
 let toggleGesture=null,lastToggleDrag=null,toggleShapeTimer,toggleDragSequence=0;
 const validPoint=point=>point&&['x','y'].every(key=>Number.isFinite(point[key])&&Math.abs(point[key])<=10000000);
 let placementRevision = 0, geometrySeen = false, bodyRegion = null, fullBodyRegion = null, petWorkArea;
@@ -179,7 +180,23 @@ function commitPlacement(next) {
   clearTimeout(scaleSaveTimer);scaleSaveTimer=setTimeout(saveConfig,200);scaleSaveTimer.unref?.();
   return broadcastScale();
 }
-function layoutTools() {
+function placeChat(bounds) {
+  placingChat=true;
+  try {
+    if(JSON.stringify(chat.getBounds())!==JSON.stringify(bounds))chat.setBounds(bounds);
+    // Read back native DIP rounding, so an asynchronous move notification from
+    // this placement cannot be mistaken for a user dragging the window.
+    autoChatBounds=chat.getBounds();
+  } finally { placingChat=false; }
+}
+function rememberChatPlacement() {
+  if(placingChat||quitting||!chat||chat.isDestroyed())return;
+  const bounds=chat.getBounds();
+  if(JSON.stringify(bounds)===JSON.stringify(autoChatBounds))return;
+  config.chatBounds=bounds;
+  clearTimeout(chatSaveTimer);chatSaveTimer=setTimeout(saveConfig,200);chatSaveTimer.unref?.();
+}
+function layoutTools({recoverChat=false}={}) {
   if (!pet || pet.isDestroyed()) return;
   if(toggleGesture){scheduleToggleShape();return;}
   const p = pet.getBounds(),state=petScaleState();
@@ -196,8 +213,18 @@ function layoutTools() {
       tools.chat=layoutToolBounds(bounds,area).chat;
     }
   }
-  if (chat && !chat.isDestroyed() && !(chat.isVisible() && chat.isFocused())) {
-    chat.setBounds(tools.chat);
+  if (chat && !chat.isDestroyed()) {
+    // Focusing the pet (e.g. touching its head) blurs chat. Visibility, not
+    // keyboard focus, owns its placement: animation/input updates never move an
+    // already open conversation over the character. Only monitor recovery may
+    // constrain a visible window, and it preserves any in-bounds placement.
+    if(!chat.isVisible()){
+      placeChat(validRect(config.chatBounds)?constrainToolBounds(config.chatBounds,screen.getAllDisplays().map(display=>display.workArea)):tools.chat);
+      if(validRect(config.chatBounds))config.chatBounds=chat.getBounds();
+    }else if(recoverChat){
+      placeChat(constrainToolBounds(chat.getBounds(),screen.getAllDisplays().map(display=>display.workArea)));
+      if(validRect(config.chatBounds))config.chatBounds=chat.getBounds();
+    }
   }
   updateInputShape();
 }
@@ -226,7 +253,7 @@ function icon() {
   return nativeImage.createFromBuffer(Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',ihdr),chunk('IDAT',zlib.deflateSync(raw)),chunk('IEND',Buffer.alloc(0))]));
 }
 function setDragMode(enabled) {dragMode=enabled;suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'drag-mode',enabled});}
-function resetPosition(){const display=screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement({},petWorkArea));saveConfig();}
+function resetPosition(){const display=screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement({},petWorkArea));layoutTools({recoverChat:true});saveConfig();}
 function registerKeys(){
   const bindings=[
     ['CommandOrControl+Alt+Space',()=>showChat()],
@@ -244,7 +271,7 @@ function registerKeys(){
 
 if(!app.requestSingleInstanceLock())app.quit();
 else {
-  app.on('second-instance',()=>{if(chat){chat.show();chat.focus();}});
+  app.on('second-instance',()=>{if(chat){layoutTools();chat.show();chat.focus();}});
   app.whenReady().then(async()=>{
     dataDir=app.getPath('userData');fs.mkdirSync(dataDir,{recursive:true});configFile=path.join(dataDir,'desktop.json');
     try{config=JSON.parse(fs.readFileSync(configFile,'utf8'));}catch{}
@@ -281,10 +308,11 @@ else {
       pet.setAlwaysOnTop(true,'screen-saver');shapeKey='';updateInputShape();
     });
     chat.on('close',event=>{if(!quitting){event.preventDefault();chat.hide();}});
-    chat.on('blur',()=>{if(!quitting)layoutTools();});
+    chat.on('blur',()=>{if(!quitting)updateInputShape();});
+    chat.on('move',rememberChatPlacement);
     pet.on('move',()=>{layoutTools();if(!resizingPet&&Date.now()-lastSaved>500){lastSaved=Date.now();saveConfig();}});
     pet.on('close',event=>{if(!quitting){event.preventDefault();pet.hide();}});
-    const refreshDisplay=()=>{const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement(config,petWorkArea));};
+    const refreshDisplay=()=>{const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement(config,petWorkArea));layoutTools({recoverChat:true});saveConfig();};
     screen.on('display-metrics-changed',refreshDisplay);screen.on('display-removed',refreshDisplay);
     tray=new Tray(icon());tray.setToolTip('大肥鱼 · DeepSeek-chan');
     tray.setContextMenu(Menu.buildFromTemplate([{label:'打开聊天   Ctrl+Alt+Space',click:showChat},{label:'显示桌宠',click:()=>pet.showInactive()},{label:'移动桌宠',click:()=>setDragMode(!dragMode)},{label:'恢复位置',click:resetPosition},{label:'悬浮球跟随桌宠',click:followToggle},{label:'停止说话和动作',click:()=>service.dispatch({type:'stop'})},{type:'separator'},{label:'退出大肥鱼',click:()=>app.quit()}]));
@@ -335,5 +363,5 @@ ipcMain.handle('window-control',async(event,action,data)=>{
   }
   return true;
 });
-app.on('before-quit',()=>{quitting=true;petPointer.clear();toggleGesture?.session.stop('quit');toggleGesture=null;clearTimeout(toggleShapeTimer);clearTimeout(scaleSaveTimer);clearInterval(trackingTimer);mouseInput?.stop();try{saveConfig();}catch{};globalShortcut.unregisterAll();service?.close();});
+app.on('before-quit',()=>{quitting=true;petPointer.clear();toggleGesture?.session.stop('quit');toggleGesture=null;clearTimeout(toggleShapeTimer);clearTimeout(scaleSaveTimer);clearTimeout(chatSaveTimer);clearInterval(trackingTimer);mouseInput?.stop();try{saveConfig();}catch{};globalShortcut.unregisterAll();service?.close();});
 app.on('window-all-closed',()=>{if(quitting)app.quit();});

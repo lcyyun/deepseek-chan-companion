@@ -20,6 +20,8 @@ export interface Live2DHandle {
   setEarImpulse(left: number, right: number): void;
   /** Cuddle-only whole-arm mirroring, with the authored hand, cuff and sleeve together. */
   setCuddleHand(weight: number, active?: boolean): void;
+  /** Whole-arm side selection for body choreography. Sides refer to the screen. */
+  setGestureHands(kind: 'chest' | 'pointer' | null, side: 'left' | 'right' | 'both', active: boolean): void;
   setModelTuning(tuning: Partial<ModelTuning>, options?: {replace?: boolean}): void;
   /** Subtle eye-ball mesh emphasis; restored after each draw, never written to Core state. */
   setPupilScale(scale: number): void;
@@ -265,6 +267,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     let impactEyeOwned = false, impactEyeStyle: string | null = null, impactEyeLevel = 0;
     let earImpulse = [0, 0];
     let cuddleHandWeight = 0, cuddleActive = false, cuddleClosingUntil = -Infinity;
+    let gestureHands: { kind: 'chest' | 'pointer'; side: 'left' | 'right' | 'both'; active: boolean; closingUntil: number; weight: number } | null = null;
     const heldMotionValues = new Map<string, number>();
     motionManager = new sdk.CubismMotionManager();
     idleMotionManager = new sdk.CubismMotionManager();
@@ -298,6 +301,8 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     const handParts = new Set<number>(), handDrawables = new Set<number>();
     const chestArmParts = new Set<number>(), chestArmDrawables = new Set<number>();
     const replacedArmParts = new Set<number>(), replacedArmDrawables = new Set<number>();
+    const leftArmParts = new Set<number>(), leftArmDrawables = new Set<number>();
+    const pointerArmParts = new Set<number>(), pointerArmDrawables = new Set<number>();
     let chestAxisUpper = -1, chestAxisLower = -1;
     let mirroredInteractionVertices: Float32Array[] = [];
     const basinParts = new Set<number>(), basinDrawables = new Set<number>();
@@ -307,6 +312,8 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       if (model.getPartId(i).getString().s === 'Part56') handParts.add(i);
       if (model.getPartId(i).getString().s === 'Part52') chestArmParts.add(i);
       if (model.getPartId(i).getString().s === 'Part128') replacedArmParts.add(i);
+      if (model.getPartId(i).getString().s === 'Part129') leftArmParts.add(i);
+      if (model.getPartId(i).getString().s === 'Part54') pointerArmParts.add(i);
       if (model.getPartId(i).getString().s === 'Part80') basinParts.add(i);
       if (['Part86', 'Part88'].includes(model.getPartId(i).getString().s)) chestParts.add(i);
     }
@@ -320,6 +327,8 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         if (handParts.has(parent)) handDrawables.add(i);
         if (chestArmParts.has(parent)) chestArmDrawables.add(i);
         if (replacedArmParts.has(parent)) replacedArmDrawables.add(i);
+        if (leftArmParts.has(parent)) leftArmDrawables.add(i);
+        if (pointerArmParts.has(parent)) pointerArmDrawables.add(i);
         if (basinParts.has(parent)) basinDrawables.add(i);
         if (chestParts.has(parent)) chestDrawables.add(i);
         pupilParts.get(parent)?.push(i);
@@ -363,9 +372,74 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       reordered.forEach((i, order) => { orders[i] = order; });
       return () => { orders.set(original); };
     };
-    const prepareMirroredArm = () => {
+    const prepareGestureHands = () => {
+      const inactive = { draw: () => {}, restore: () => {} };
+      const state = gestureHands;
+      if (!state || state.weight < .001 || chestAxisUpper < 0 || chestAxisLower < 0) return inactive;
+      const nativeSide = state.kind === 'chest' ? 'left' : 'right';
+      if (state.side === nativeSide) return inactive;
+      const left = new Set([...leftArmDrawables, ...chestArmDrawables]);
+      const right = new Set([...replacedArmDrawables, ...pointerArmDrawables]);
+      if (!left.size || !right.size) return inactive;
+      const sourceSet = state.side === 'both' ? (nativeSide === 'left' ? left : right) : new Set([...left, ...right]);
+      const hiddenSet = state.side === 'both' ? (nativeSide === 'left' ? right : left) : new Set([...left, ...right]);
+      const behindSet = new Set([...leftArmDrawables, ...replacedArmDrawables]);
+      const center = (index: number) => {
+        const vertices: Float32Array = model.getDrawableVertices(index);
+        let x = 0, y = 0;
+        for (let i = 0; i < vertices.length; i += 2) { x += vertices[i]; y += vertices[i + 1]; }
+        return { x: x / (vertices.length / 2), y: y / (vertices.length / 2) };
+      };
+      const upper = center(chestAxisUpper), lower = center(chestAxisLower);
+      const length = Math.hypot(upper.x - lower.x, upper.y - lower.y);
+      if (!Number.isFinite(length) || length < .0001) return inactive;
+      const ux = (upper.x - lower.x) / length, uy = (upper.y - lower.y) / length;
+      // Include masks even when their own mesh is not drawn in this arm pass.
+      const transformedSet = new Set(sourceSet), masks = model.getDrawableMasks() as Int32Array[];
+      for (const index of transformedSet) for (const mask of masks[index]) transformedSet.add(mask);
+      const core = model.getModel().drawables, opacities: Float32Array = core.opacities;
+      const rows = Array.from(transformedSet, index => {
+        const vertices: Float32Array = model.getDrawableVertices(index), original = vertices.slice(), reflected = vertices.slice();
+        for (let i = 0; i < reflected.length; i += 2) {
+          const x = original[i] - lower.x, y = original[i + 1] - lower.y, dot = x * ux + y * uy;
+          reflected[i] = lower.x + 2 * dot * ux - x; reflected[i + 1] = lower.y + 2 * dot * uy - y;
+        }
+        const opacity = sourceSet.has(index) ? opacities[index] * state.weight : 0;
+        if (opacity >= .05) mirroredInteractionVertices.push(reflected);
+        return { index, vertices, original, reflected, opacity };
+      });
+      const hidden = Array.from(hiddenSet, index => ({ index, opacity: opacities[index] }));
+      for (const row of hidden) opacities[row.index] *= 1 - state.weight;
+      const drawPass = (behind: boolean) => {
+          if (!rows.some(row => row.opacity > .001 && behindSet.has(row.index) === behind)) return;
+          if (!mirrorRenderer) {
+            mirrorRenderer = new sdk.CubismRenderer_WebGL();
+            mirrorRenderer.initialize(model, Math.max(1, Math.ceil(uniqueMasks.size / 32)));
+            mirrorRenderer.setClippingMaskBufferSize(1024); mirrorRenderer.startUp(gl); mirrorRenderer.setIsPremultipliedAlpha(true);
+            textures.forEach((texture, index) => mirrorRenderer.bindTexture(index, texture));
+          }
+          const originalOpacity = opacities.slice(), flags: Uint8Array = core.dynamicFlags, originalFlags = flags.slice();
+          try {
+            opacities.fill(0);
+            for (const row of rows) { row.vertices.set(row.reflected); opacities[row.index] = behindSet.has(row.index) === behind ? row.opacity : 0; flags[row.index] |= 32; }
+            mirrorRenderer.setMvpMatrix(matrix); mirrorRenderer.setRenderState(null, [0, 0, canvas.width, canvas.height]); mirrorRenderer.drawModel();
+          } finally {
+            for (const row of rows) row.vertices.set(row.original);
+            opacities.set(originalOpacity); flags.set(originalFlags);
+          }
+      };
+      return {
+        // Resting shoulders belong behind the bodice/frills. Drawing the whole
+        // reflected arm last would put a dark shoulder patch on top of them.
+        drawBehind() { drawPass(true); },
+        draw() { drawPass(false); },
+        restore() { for (const row of hidden) opacities[row.index] = row.opacity; },
+      };
+    };
+    const prepareMirroredArm = (): { draw: () => void; restore: () => void; drawBehind?: () => void } => {
       mirroredInteractionVertices = [];
       const inactive = { draw: () => {}, restore: () => {} };
+      if (cuddleHandWeight < .001 && gestureHands) return prepareGestureHands();
       if (cuddleHandWeight < 0.001 || !chestArmDrawables.size || chestAxisUpper < 0 || chestAxisLower < 0) return inactive;
       const center = (index: number) => {
         const vertices: Float32Array = model.getDrawableVertices(index); let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -511,6 +585,16 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           cuddleActive = false;
         }
       },
+      setGestureHands(kind, side, active) {
+        if (active && (kind === 'chest' || kind === 'pointer') && ['left', 'right', 'both'].includes(side)) {
+          if (gestureHands?.kind === kind && gestureHands.side === side) {
+            gestureHands.active = true; gestureHands.closingUntil = -Infinity;
+          } else gestureHands = { kind, side, active: true, closingUntil: -Infinity, weight: 0 };
+        } else if (gestureHands?.active) {
+          gestureHands.active = false;
+          gestureHands.closingUntil = elapsed + (gestureHands.kind === 'chest' ? 1.067 : 1.3);
+        }
+      },
       setModelTuning(value, options) { modelTuning = sanitizeModelTuning(value, options?.replace ? undefined : modelTuning); },
       async playMotion(name, motionOptions = {}) {
         const file = resolveAssetFile(motionFiles, name); if (!file) throw new Error(`模型没有动作：${name}`);
@@ -559,7 +643,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         expressionStates.set(file, { motion, active, weight: 0 });
       },
       reset() {
-        stopMotion(); releaseMotion = undefined; targetValues.clear(); faceOverlay.clear(); impactEyeOwned = false; impactEyeStyle = null; impactEyeLevel = 0; poseOverlay.clear(); poseWeight = 0; impactOverlay.clear(); impactWeight = 0; earImpulse = [0, 0]; cuddleHandWeight = 0; cuddleActive = false; cuddleClosingUntil = -Infinity; pupilScale = 1; thinkingHandFront = false; expressionVersion++; expressionStates.clear();
+        stopMotion(); releaseMotion = undefined; targetValues.clear(); faceOverlay.clear(); impactEyeOwned = false; impactEyeStyle = null; impactEyeLevel = 0; poseOverlay.clear(); poseWeight = 0; impactOverlay.clear(); impactWeight = 0; earImpulse = [0, 0]; cuddleHandWeight = 0; cuddleActive = false; cuddleClosingUntil = -Infinity; gestureHands = null; pupilScale = 1; thinkingHandFront = false; expressionVersion++; expressionStates.clear();
         for (let i = 0; i < parameters.length; i++) {
           model.setParameterValueByIndex(i, parameters[i].defaultValue);
           upstreamValues[i] = parameters[i].defaultValue;
@@ -621,6 +705,13 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         }
         for (let i = 0; i < parameters.length; i++) upstreamValues[i] = model.getParameterValueByIndex(i);
         options.onFrame?.(dt, elapsed);
+        if (gestureHands?.active) {
+          gestureHands.weight += (1 - gestureHands.weight) * (1 - Math.exp(-dt * 16));
+          if (gestureHands.weight > .995) gestureHands.weight = 1;
+        } else if (gestureHands && elapsed > gestureHands.closingUntil) {
+          gestureHands.weight = Math.max(0, gestureHands.weight - dt / .18);
+          if (!gestureHands.weight) gestureHands = null;
+        }
         // The face's envelope fades before the authored arm closes. Keep the
         // complete mirrored arm present through that motion, then hand back to
         // the resting rig only once both sleeves are down.
@@ -706,7 +797,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         renderer.setRenderState(null, [0, 0, canvas.width, canvas.height]);
         const restorePupils = scalePupils();
         const restoreHandOrder = raiseThinkingHand();
-        try { renderer.drawModel(); mirroredArm.draw(); } finally { restoreHandOrder(); restorePupils(); }
+        try { mirroredArm.drawBehind?.(); renderer.drawModel(); mirroredArm.draw(); } finally { restoreHandOrder(); restorePupils(); }
         } finally { mirroredArm.restore(); restoreBasinShadow(); }
         requestId = requestAnimationFrame(frame);
       } catch (error) { cancelAnimationFrame(requestId); options.onError?.(error instanceof Error ? error : new Error(String(error))); }

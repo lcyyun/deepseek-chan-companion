@@ -17,7 +17,9 @@ source = source.slice(0, anchor);
 source += String.raw`
   const assert = require('node:assert/strict');
   const { BODY_ANIMATION_PRESETS } = await import(pathToFileURL(path.join(root, 'src/shared/behavior.mjs')).href);
-  assert.equal(BODY_ANIMATION_PRESETS.length, 6);
+  for (const id of ['explain','think','reassure','happy','shy','listen','chest-left','chest-right','chest-both','pointer-left','pointer-right','pointer-both','talk','compare']) {
+    assert.ok(BODY_ANIMATION_PRESETS.some(preset => preset.id === id), 'Missing production body preset: '+id);
+  }
   await delay(350);
   const selectParams = /^(Angle[XYZ]|Position[XYZ]|LeanInput|ParamEyeBall[XY]|ParamBreath|Movement[123]|Param(36|39|40|41|42|43|59|60|61|62)|key[34567]|ParamMouthForm|ParamMouthOpenY|ParamBrow[LR]Y)$/;
   await win.webContents.executeJavaScript('window.qaMotionCalls=[];for(const method of ["playMotion","stopMotion"]){const original=qaRuntime[method].bind(qaRuntime);qaRuntime[method]=(...args)=>{qaMotionCalls.push({method,args,at:qaBehavior.time});return original(...args);};}void 0;');
@@ -40,9 +42,17 @@ source += String.raw`
     const record=await sample(7.6);
     for(const [index,image] of record.images.entries()){
       const name=preset.id+'-'+index+'-'+Math.round(image.age*1000)+'.png';
-      const bitmap=nativeImage.createFromDataURL(image.data).toBitmap();let visiblePixels=0;
+      const capture=nativeImage.createFromDataURL(image.data),bitmap=capture.toBitmap(),size=capture.getSize();let visiblePixels=0;
       for(let pixel=3;pixel<bitmap.length;pixel+=4)if(bitmap[pixel]>20)visiblePixels++;
       assert.ok(visiblePixels>10000,preset.id+' disappeared during the animation');
+      // A rendered arm or tail alone can pass the total-pixel check. Keep a
+      // separate lower-body ROI so an accidental mask/pass leak cannot do so.
+      let legPixels=0;
+      for(let y=Math.floor(size.height*.7);y<size.height*.92;y++)for(let x=Math.floor(size.width*.34);x<size.width*.55;x++){
+        const offset=(y*size.width+x)*4;
+        if(bitmap[offset+3]>20&&Math.max(bitmap[offset],bitmap[offset+1],bitmap[offset+2])>30)legPixels++;
+      }
+      assert.ok(legPixels>size.width*size.height*.01,preset.id+' lost the legs during the arm pass');
       await fs.writeFile(path.join(output,name),Buffer.from(image.data.split(',')[1],'base64'));
       image.file=name;image.visiblePixels=visiblePixels;delete image.data;
     }

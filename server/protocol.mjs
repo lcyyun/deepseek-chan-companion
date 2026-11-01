@@ -9,9 +9,9 @@ export const CAPABILITIES = {
   expressionPresets: EXPRESSION_PRESETS.map(({ id, title, description }) => ({ id, title, description })),
   expressionCues: { command: 'speak', maxItems: 4, at: '0..0.9 of actual spoken progress', intensity: '0..1' },
   expressionPreview: { command: 'expression', faceOnly: true, stop: { type: 'expression', active: false } },
-  bodyAnimations: BODY_ANIMATION_PRESETS.map(({ id, title, description, durationMs }) => ({ id, title, description, durationMs })),
+  bodyAnimations: BODY_ANIMATION_PRESETS.map(({ id, title, description, durationMs, gesture, handSide, continuous }) => ({ id, title, description, durationMs, gesture, handSide, continuous })),
   bodyPreview: { command: 'body', faceOnly: false, preservesExpression: true, stop: { type: 'body', active: false } },
-  speechGestures: { timing: 'actual audio progress or silent reading progress', frequency: 'local user setting', shortReplies: 'zero or one emphasis' },
+  speechGestures: { timing: 'actual audio progress or silent reading progress', frequency: 'local user setting', shortReplies: 'zero or one emphasis', bodyAnimation: ['auto', 'none', ...BODY_ANIMATION_PRESETS.map(item => item.id)] },
   gestures: ['none', 'pointer', 'chest', 'foxtail'],
   gaze: ['camera', 'left', 'right', 'up', 'down'],
   states: ['idle', 'thinking', 'listening', 'speaking', 'error'],
@@ -22,8 +22,9 @@ export const RESPONSE_SCHEMA = {
   required: ['segments', 'details', 'sources'],
   properties: {
     segments: { type: 'array', minItems: 1, maxItems: 3, items: {
-      type: 'object', additionalProperties: false, required: ['text', 'intent', 'emotion', 'gesture', 'expressionCues'],
+      type: 'object', additionalProperties: false, required: ['text', 'intent', 'emotion', 'gesture', 'bodyAnimation', 'expressionCues'],
       properties: { text: { type: 'string' }, intent: { type: 'string', enum: CAPABILITIES.intents }, emotion: { type: 'string', enum: CAPABILITIES.emotions }, gesture: { type: 'string', enum: CAPABILITIES.gestures },
+        bodyAnimation: { type: 'string', enum: CAPABILITIES.speechGestures.bodyAnimation },
         expressionCues: { type: 'array', maxItems: 4, items: { type: 'object', additionalProperties: false, required: ['at', 'emotion', 'intensity'], properties: {
           at: { type: 'number', minimum: 0, maximum: 0.9 }, emotion: { type: 'string', enum: CAPABILITIES.emotions }, intensity: { type: 'number', minimum: 0, maximum: 1 },
         } } },
@@ -52,10 +53,11 @@ export function needsSpeechRepair(reply, budget) {
 
 export function makeMessages({ text, mode = 'chat', verbosity, context, history = [] }) {
   const budget = responseBudget(text, verbosity);
-  const system = `你是DeepSeek-chan桌面伙伴，用用户的语言自然回答。只输出符合要求的JSON：segments（最多${budget.maxSegments}段，每段含text,intent,emotion,gesture,expressionCues）、details字符串、sources数组（title,url）。\n` +
+  const system = `你是DeepSeek-chan桌面伙伴，用用户的语言自然回答。只输出符合要求的JSON：segments（最多${budget.maxSegments}段，每段含text,intent,emotion,gesture,bodyAnimation,expressionCues）、details字符串、sources数组（title,url）。\n` +
     `spoken text用于实际朗读，${budget.spokenTarget}，每段一两句完整的话，不使用Markdown列表、链接或冗长铺垫。按用户意图分配长度：打招呼简短，解释给结论与关键理由，复杂步骤的完整版放details供阅读。不要把完整长答生硬截断。details允许Markdown，不会被朗读。\n` +
     `意图可选${CAPABILITIES.intents.join(',')}；情绪可选${CAPABILITIES.emotions.join(',')}；手势可选${CAPABILITIES.gestures.join(',')}。手势少而有意义，避免每句重复。不要虚构模型能自由行走或跳舞。\n` +
     `cuddle表示亲昵或撒娇，idea表示想到办法或恍然大悟，puzzled表示困惑。cuddle由角色行为层协调手臂，不需要创造同名手势；没有明确手势时填none。\n` +
+    `bodyAnimation选择适合这段口播的肢体：通常填auto由本地安排，安静回应填none；较长讲解可用talk，比较两个选项用compare，安慰可用chest-both，害羞用shy，认真倾听用listen。可选${CAPABILITIES.speechGestures.bodyAnimation.join(',')}。左右指画面左右。明确选择动画会替代旧gesture提示的手臂安排，但不改变emotion或expressionCues。连续动画随实际音频推进，你不用输出逐帧指令；不要为了动画拉长文字。\n` +
     `表情对照：${EXPRESSION_PRESETS.map(p => `${p.id}=${p.title}`).join('；')}。依据你正在说的话的语气编排，不照搬用户文字里的情绪词。安慰负面经历优先gentle/worried，解决后relieved；不要在严肃或悲伤话题随意得意、大笑、心动。panic/angry/cold是有意表达时才使用，普通报错或不确定用puzzled/determined。\n` +
     `expressionCues是该段的脸部节奏，最多4项，每项{at,emotion,intensity}。at是该段实际朗读进度0到0.9（不是秒），按顺序、间隔至少0.18；首项at=0。通常一段1至2个表情，短句只用1个，有语意转折才变化；intensity一般0.5到0.85。可留空沿用段落emotion。例如“咦，原来是这样！”可先puzzled后relieved；“等等，我想到了！”可先curious后happy。不得为了展示表情而拉长回复或添写舞台说明。><眼用squeezed、爱心眼love、圈圈眼dizzy、屑眼smug、兔牙playful、眼泪teary、冷汗embarrassed/panic。\n` +
     `来源只填本次实际检索且支持答案的http(s)链接；没有检索就留空。联网不可用时对时效信息直说限制。\n` +
@@ -74,7 +76,7 @@ export function normalizeReply(value) {
   const all = value.segments.map(s => {
     if (!s || typeof s.text !== 'string' || !s.text.trim()) throw Object.assign(new Error('回复段落格式不正确。'), { code: 'INVALID_MODEL_OUTPUT' });
     const emotion = CAPABILITIES.emotions.includes(s.emotion) ? s.emotion : 'neutral';
-    return { id: randomUUID(), text: s.text.trim(), intent: CAPABILITIES.intents.includes(s.intent) ? s.intent : 'explain', emotion, gesture: CAPABILITIES.gestures.includes(s.gesture) ? s.gesture : 'none', expressionCues: normalizeExpressionCues(s.expressionCues, emotion) };
+    return { id: randomUUID(), text: s.text.trim(), intent: CAPABILITIES.intents.includes(s.intent) ? s.intent : 'explain', emotion, gesture: CAPABILITIES.gestures.includes(s.gesture) ? s.gesture : 'none', bodyAnimation: CAPABILITIES.speechGestures.bodyAnimation.includes(s.bodyAnimation) ? s.bodyAnimation : 'auto', expressionCues: normalizeExpressionCues(s.expressionCues, emotion) };
   });
   // Preserve extra content as readable detail; never cut an utterance mid-sentence.
   let details = typeof value.details === 'string' ? value.details : '';
@@ -99,7 +101,7 @@ export function normalizeCommand(input) {
       command.animation = input.animation;
     }
     // These are deliberately independent channels: reject cross-channel fields.
-    const forbidden = type === 'expression' ? ['intent', 'gesture', 'gaze', 'animation', 'text', 'state'] : ['intent', 'gesture', 'gaze', 'emotion', 'text', 'state'];
+    const forbidden = type === 'expression' ? ['intent', 'gesture', 'gaze', 'animation', 'bodyAnimation', 'text', 'state'] : ['intent', 'gesture', 'gaze', 'emotion', 'bodyAnimation', 'text', 'state'];
     if (forbidden.some(key => input[key] !== undefined)) throw new Error('独立预览不能混入其他通道的控制字段。');
   }
   for (const key of ['intent', 'emotion', 'gesture', 'gaze']) {
@@ -116,7 +118,11 @@ export function normalizeCommand(input) {
     if (typeof input.text !== 'string' || input.text.length > 6000) throw new Error('朗读文本长度不合法。');
     command.text = input.text;
   }
-  if (type === 'speak') command.expressionCues = normalizeExpressionCues(input.expressionCues, command.emotion);
+  if (type === 'speak') {
+    command.expressionCues = normalizeExpressionCues(input.expressionCues, command.emotion);
+    if (input.bodyAnimation !== undefined && !CAPABILITIES.speechGestures.bodyAnimation.includes(input.bodyAnimation)) throw new Error('不支持的bodyAnimation：请先查询角色能力。');
+    command.bodyAnimation = input.bodyAnimation ?? 'auto';
+  }
   const intensity = Number(input.intensity ?? 0.55);
   const previewDuration = type === 'expression' ? 20000 : type === 'body' ? CAPABILITIES.bodyAnimations.find(item => item.id === command.animation)?.durationMs : undefined;
   const durationMs = Number(input.durationMs ?? input.duration_ms ?? previewDuration ?? 2200);

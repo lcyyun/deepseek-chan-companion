@@ -67,3 +67,29 @@ test('cancel is idempotent and rejects late progress, including an inherited pos
   const short = fixture([cue()], { continueFirst: true });
   short.timeline.update(0, .5); assert.equal(short.cleared.length, 1);
 });
+
+test('continuous talk follows the full audio clock including the late half and pauses', () => {
+  const { timeline, seen, cleared } = fixture([{ ...cue(), id: 'talk', continuous: true }]);
+  timeline.update(0, 18); timeline.update(5, 18); timeline.update(12, 18);
+  assert.equal(cleared.length, 0, 'do not finish sustained speech at the old 4.2 second limit');
+  assert.equal(seen.at(-1).durationMs, 18000);
+  assert.equal(seen.at(-1).elapsedSeconds, 12);
+  assert.ok(seen.at(-1).progress > .6);
+  const count = seen.length; timeline.update(12, 18);
+  assert.equal(seen.length, count, 'paused audio must not advance the cadence');
+  timeline.update(18, 18); timeline.finish();
+  assert.equal(cleared.length, 1); assert.equal(seen.at(-1).progress, 1);
+});
+
+test('continuous carry keeps advancing instead of freezing the hand on a held frame', () => {
+  const first = fixture([{ ...cue(), id: 'talk', continuous: true }], { holdLast: true });
+  first.timeline.update(0, 12); first.timeline.update(9, 12); first.timeline.update(12, 12); first.timeline.finish();
+  assert.equal(first.cleared.length, 0);
+  assert.equal(first.seen.at(-1).progress, 1); assert.equal(first.seen.at(-1).hold, true);
+  assert.equal(first.seen.at(-1).elapsedSeconds, 12);
+  const second = fixture([{ ...cue(), id: 'talk', continuous: true }], { continueFirst: true });
+  second.timeline.update(0, 10); second.timeline.update(3, 10);
+  assert.equal(second.seen[0].continuing, true);
+  assert.equal(second.seen.at(-1).hold, false);
+  second.timeline.cancel(); assert.equal(second.cleared.length, 1);
+});

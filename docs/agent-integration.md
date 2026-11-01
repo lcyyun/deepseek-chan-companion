@@ -1,6 +1,6 @@
 # 智能体与语音接入
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、独立肢体预览、朗读节奏、双向聊天桥和诊断流程。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、14 组独立肢体预览、朗读节奏、双向聊天桥和诊断流程。本文对应 0.12.0。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
@@ -8,7 +8,23 @@
 
 两者连接同一个 `/mcp`，不需要各启动一份角色。工具包括 `avatar_capabilities`、`avatar_state`、`avatar_perform`、`avatar_expression`、`avatar_body`、`avatar_speak`、`avatar_set_state`、`avatar_stop`、`avatar_reset`、`avatar_watch_context`。动作工具立即返回接受状态；桌宠窗口负责实际动画和逐段朗读。
 
-只换表情用 `avatar_expression({emotion:"happy"})`，只做肢体用 `avatar_body({animation:"explain"})`；分别传 `{active:false}` 结束对应预览，不停止另一通道或说话。HTTP 使用同字段，另加 `type:"expression"` 或 `type:"body"`。身体动画 ID 以 `bodyAnimations` 能力清单为准。常规 `avatar_speak` 会利用已有 intent/gesture 自动安排肢体，不必同时重复发送身体指令。
+只换表情用 `avatar_expression({emotion:"happy"})`，只做肢体用 `avatar_body({animation:"chest-right"})`；分别传 `{active:false}` 结束对应预览，不停止另一通道或说话。HTTP 使用同字段，另加 `type:"expression"` 或 `type:"body"`。身体动画 ID 以 `bodyAnimations` 能力清单为准。常规 `avatar_speak` 自带肢体编排，不必同时重复发送身体指令。
+
+### 0.12 说话肢体选择
+
+`avatar_speak` 与 HTTP `type:"speak"` 新增可选 `bodyAnimation`：省略或 `auto` 使用 `intent/gesture/text` 本地规划；`none` 关闭本段说话肢体编排；具体 ID 选择对应姿态及其默认手型。左右均指画面左右。能力表 `speechGestures.bodyAnimation` 给出完整取值：
+
+`auto / none / explain / think / reassure / happy / shy / listen / chest-left / chest-right / chest-both / pointer-left / pointer-right / pointer-both / talk / compare`
+
+独立预览的字段名仍是 `animation`，只接受 14 个具体 ID，不接受 `auto/none`。其中 `talk`（娓娓道来）和 `compare`（两边说说）跟随整段实际语音或静音阅读时间，包含周期性的柔缓强调和停顿。暂停不推进，相邻相同动画和手型可跨段保持；换轮、停止或触摸会取消旧节点，不补播。预览默认 10 秒不代表说话时只播放 10 秒。
+
+显式选择具体 `bodyAnimation` 优先于旧 `gesture` 的手臂提示，因此 `bodyAnimation:"chest-right", gesture:"none"` 仍会使用右侧抚胸。选择 `bodyAnimation:"none"` 才表示不安排本段肢体；它不关闭脸部、口型或日常呼吸。全局“说话手势频率”仍有效，设为 0 时不安排自动说话肢体，极短音频也会省略完整抬手。脸部预览和 `emotion/expressionCues` 始终独立。
+
+```json
+{"text":"我想到了，我们可以先从这个关键步骤开始。","intent":"explain","emotion":"happy","gesture":"none","bodyAnimation":"talk","expressionCues":[{"at":0,"emotion":"happy","intensity":0.7}]}
+```
+
+上例可直接传给 `avatar_speak`，HTTP 使用时另加 `type:"speak"`。聊天提供方返回的严格 JSON schema 要求每个 `segments` 项包含 `bodyAnimation`，通常填 `auto`；旧提供方省略该字段时，服务归一化仍按 `auto` 兼容。手臂表现来自已有姿态与完整手臂镜像，并不开放自由骨骼或逐帧参数控制。
 
 先把 `L2D_BRIDGE_TOKEN` 放入启动智能体的进程环境。Codex 配置示例在 `integrations/codex/config.example.toml`；追加该节到已有配置即可，不要覆盖原配置。连接后让智能体先查询 `avatar_capabilities`。
 

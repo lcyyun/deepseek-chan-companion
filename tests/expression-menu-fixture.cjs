@@ -67,7 +67,7 @@ let service, win;
   await position('top'); await open();
   await js(`Array.from(document.querySelectorAll('.tabs button')).find(button=>button.textContent==='肢体').click()`);
   await until('!document.querySelector(".expression-select-menu")');
-  assert.equal(await js(`document.querySelectorAll('[data-body-animation]').length`), 6);
+  assert.equal(await js(`document.querySelectorAll('[data-body-animation]').length`), 14);
   await js(`document.querySelector('[data-body-animation="listen"]').click()`); await delay(100);
   assert.equal(commands.at(-1).type, 'body'); assert.equal(commands.at(-1).emotion, undefined);
   await js(`Array.from(document.querySelectorAll('.tabs button')).find(button=>button.textContent==='小表情').click()`);

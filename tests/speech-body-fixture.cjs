@@ -20,7 +20,7 @@ export const events=callback=>{window.__qa.service.add(callback);return()=>windo
 const q=window.__qa;let elapsed=0;
 const runtime={setParameters:p=>Object.assign(q.params,p),getParameters:()=>[],
 getInteractionRegions:()=>({body:{x:100,y:40,width:400,height:500},fullBody:{x:100,y:40,width:400,height:500},head:{x:200,y:70,width:200,height:140},revision:0}),
-setPlacement(){},setView(){},setModelTuning(){},setPoseOverlay(p,w){q.pose={parameters:p,weight:w};},setPupilScale(){},setHandForeground(){},setCuddleHand(){},setImpactOverlay(){},setEarImpulse(){},setFaceOverlay(p){q.face=p;},
+setPlacement(){},setView(){},setModelTuning(){},setPoseOverlay(p,w){q.pose={parameters:{...p},weight:w};},setPupilScale(){},setHandForeground(){},setCuddleHand(){},setGestureHands(kind,side,active){q.hands={kind,side,active};},setImpactOverlay(){},setEarImpulse(){},setFaceOverlay(p){q.face=p;},
 playMotion:async(name)=>{q.motions.push(name);},stopMotion(){},setExpression:async()=>{},reset(){},destroy(){}};
 q.advance=(frames=1)=>{for(let i=0;i<frames;i++){elapsed+=1/60;options.onFrame?.(1/60,elapsed);}};
 q.runtime=runtime;return runtime;}`,
@@ -42,7 +42,7 @@ applyCommand(command){window.__qa.commands.push({...command});super.applyCommand
 }`,
 };
 const setup = `
-window.__qa={boot:{url:'http://fixture.invalid',token:'fixture',role:'pet'},voiceEnabled:true,service:new Set(),desktop:new Set(),params:{},face:{},pose:{},audio:[],audioActive:false,deferStops:false,requests:[],commands:[],motions:[],samples:[],faces:[],clears:0,stops:0,errors:[]};
+window.__qa={boot:{url:'http://fixture.invalid',token:'fixture',role:'pet'},voiceEnabled:true,service:new Set(),desktop:new Set(),params:{},face:{},pose:{},hands:null,audio:[],audioActive:false,deferStops:false,requests:[],commands:[],motions:[],samples:[],faces:[],clears:0,stops:0,errors:[]};
 const q=window.__qa;
 window.companion={bootstrap:async()=>q.boot,control:async()=>({dragMode:false}),onEvent:callback=>{q.desktop.add(callback);return()=>q.desktop.delete(callback);}};
 q.emit=event=>{for(const callback of q.service)callback(event);};
@@ -125,8 +125,8 @@ async function command(value) { await evaluate(`__qa.emit(${JSON.stringify({ typ
     assert.equal(await evaluate('__qa.requests.some(r=>r.path==="/api/tts")'), false);
   });
 
-  await check('consecutive matching spoken gestures keep the raised arm across the segment boundary', async () => {
-    await reply('two-segments', [segment(), segment({ text: '所以接下来我们把这一步处理好，就能继续往下做了。' })]);
+  await check('legacy matching spoken gestures keep the raised arm across the segment boundary', async () => {
+    await reply('two-segments', [segment({ bodyAnimation: 'explain' }), segment({ bodyAnimation: 'explain', text: '所以接下来我们把这一步处理好，就能继续往下做了。' })]);
     await until('__qa.audio.length===1');
     await evaluate('__qa.start(0,8);__qa.progress(0,2,8);__qa.advance(30);__qa.progress(0,7.9,8)');
     const clears = await evaluate('__qa.clears');
@@ -138,6 +138,96 @@ async function command(value) { await evaluate(`__qa.emit(${JSON.stringify({ typ
     assert.deepEqual(await evaluate('__qa.motions'), ['竖手指切出来动画']);
     await evaluate('__qa.finish(1)'); await until('__qa.behavior.speechGesture===null');
     assert.equal(await evaluate('__qa.motions.filter(m=>m==="竖手指切回默认").length'), 1);
+  });
+
+  for (const [animation, side] of [['talk', 'right'], ['compare', 'both']]) {
+    await check(`${animation} keeps moving after eight seconds, follows only playback progress, and retracts on stop`, async () => {
+      await reply(`continuous-${animation}`, [segment({ bodyAnimation: animation })]);
+      await until('__qa.audio.length===1');
+      await evaluate('__qa.start(0,14);__qa.progress(0,1.2,14);__qa.advance(90)');
+      const entrance = await evaluate('({...__qa.behavior.bodySample.armOffsets})');
+      await evaluate('__qa.progress(0,8.2,14);__qa.advance(90)');
+      const late = await evaluate('({cue:__qa.behavior.speechGesture,body:__qa.behavior.bodySample,hands:__qa.hands,motions:__qa.motions})');
+      assert.equal(late.cue.id, animation);
+      assert.equal(late.cue.continuous, true);
+      assert.equal(late.cue.elapsedSeconds, 8.2);
+      assert.equal(late.cue.duration, 14, 'continuous scores must retain the full spoken duration');
+      assert.equal(late.cue.hold, false);
+      assert.equal(late.cue.continuing, false);
+      assert.equal(late.body.gesture, 'pointer');
+      assert.equal(late.body.handSide, side);
+      assert.ok(late.body.weight > .99, 'the arm must not fade at the old 4.2-second limit');
+      assert.deepEqual(late.hands, { kind: 'pointer', side, active: true });
+      assert.deepEqual(late.motions, ['竖手指切出来动画'], 'continuous accents must not reopen or close the authored hand');
+      // Advancing well into the spoken segment reaches another wrist accent.
+      await evaluate('__qa.progress(0,8.7,14);__qa.advance(90)');
+      const offsets = await evaluate('({...__qa.behavior.bodySample.armOffsets})');
+      assert.ok(Object.keys(offsets).some(key => Math.abs(offsets[key] - entrance[key]) > .005), 'the continuous hand must animate, not hold one static pose');
+      const paused = await evaluate('({cue:__qa.behavior.speechGesture,body:__qa.behavior.bodySample,hands:__qa.hands,samples:__qa.samples.length})');
+      await evaluate('__qa.progress(0,8.7,14);__qa.advance(180)');
+      assert.deepEqual(await evaluate('({cue:__qa.behavior.speechGesture,body:__qa.behavior.bodySample,hands:__qa.hands,samples:__qa.samples.length})'), paused, 'render frames and duplicate audio progress must not advance the speech gesture');
+      await command({ type: 'stop' });
+      await evaluate('__qa.advance(180)');
+      assert.equal(await evaluate('__qa.behavior.speechGesture'), null);
+      assert.equal(await evaluate('__qa.behavior.gesture'), 'none');
+      assert.equal(await evaluate('__qa.hands.active'), false);
+      assert.equal(await evaluate('__qa.pose.weight'), 0, 'the pose overlay must release after the authored close');
+      assert.equal(await evaluate('__qa.motions.filter(m=>m==="竖手指切回默认").length'), 1);
+      const count = await evaluate('__qa.samples.length');
+      await evaluate('__qa.progress(0,10,14)');
+      assert.equal(await evaluate('__qa.samples.length'), count, 'late audio callbacks after stop cannot reopen the hand');
+    });
+  }
+
+  await check('continuous matching segments hold both arms across the boundary and close once at completion', async () => {
+    await reply('continuous-boundary', [segment({ bodyAnimation: 'compare' }), segment({ bodyAnimation: 'compare', text: '另一种方案也可以做到，我们可以先把两边的区别说清楚。' })]);
+    await until('__qa.audio.length===1');
+    await evaluate('__qa.start(0,12);__qa.progress(0,11.8,12);__qa.advance(90)');
+    assert.equal(await evaluate('__qa.behavior.speechGesture.hold'), true);
+    assert.equal(await evaluate('__qa.behavior.speechGesture.continuing'), false);
+    assert.ok(await evaluate('__qa.behavior.bodySample.weight>.99'));
+    const clears = await evaluate('__qa.clears');
+    await evaluate('__qa.finish(0)'); await until('__qa.audio.length===2');
+    await evaluate('__qa.advance(90)');
+    assert.equal(await evaluate('__qa.clears'), clears);
+    assert.equal(await evaluate('__qa.behavior.speechGesture.progress'), 1);
+    assert.equal(await evaluate('__qa.behavior.gesture'), 'pointer', 'a held score at progress one must not retract while the next audio buffers');
+    const heldBody = await evaluate('({...__qa.behavior.bodySample})');
+    await evaluate('__qa.start(1,12);__qa.advance(90)');
+    assert.equal(await evaluate('__qa.behavior.speechGesture.continuing'), true);
+    assert.equal(await evaluate('__qa.behavior.speechGesture.hold'), false);
+    assert.equal(await evaluate('__qa.behavior.speechGesture.elapsedSeconds'), 0, 'the second audio still reports its own local clock');
+    assert.equal(await evaluate('__qa.behavior.speechGesture.cadenceOffset'), 12);
+    assert.deepEqual(await evaluate('({...__qa.behavior.bodySample})'), heldBody, 'wrist and body cadence must remain continuous when the next audio starts at zero');
+    assert.ok(await evaluate('__qa.behavior.bodySample.weight>.99'), 'continuation must skip a second arm entrance');
+    assert.deepEqual(await evaluate('__qa.hands'), { kind: 'pointer', side: 'both', active: true });
+    await evaluate('__qa.progress(1,8.4,12);__qa.advance(90)');
+    assert.equal(await evaluate('__qa.behavior.speechGesture.elapsedSeconds'), 8.4);
+    assert.deepEqual(await evaluate('__qa.motions'), ['竖手指切出来动画']);
+    await evaluate('__qa.finish(1)'); await until('__qa.behavior.speechGesture===null');
+    await evaluate('__qa.advance(180)');
+    assert.equal(await evaluate('__qa.behavior.gesture'), 'none');
+    assert.equal(await evaluate('__qa.hands.active'), false);
+    assert.equal(await evaluate('__qa.motions.filter(m=>m==="竖手指切回默认").length'), 1);
+  });
+
+  await check('an explicit spoken body variant selects the right hand without changing the expression lane', async () => {
+    await reply('explicit-right-chest', [segment({ bodyAnimation: 'chest-right', gesture: 'pointer' })]);
+    await until('__qa.audio.length===1');
+    await evaluate('__qa.start(0,8);__qa.progress(0,1.2,8);__qa.advance(90)');
+    assert.equal(await evaluate('__qa.behavior.speechGesture.id'), 'chest-right');
+    assert.deepEqual(await evaluate('__qa.hands'), { kind: 'chest', side: 'right', active: true });
+    assert.equal(await evaluate('__qa.behavior.expressionCue.emotion'), 'puzzled');
+    const motions = await evaluate('__qa.motions.length');
+    const cue = await evaluate('({...__qa.behavior.speechGesture})');
+    await command({ type: 'expression', emotion: 'shy', durationMs: 20000 });
+    await evaluate('__qa.advance(30)');
+    assert.deepEqual(await evaluate('({...__qa.behavior.speechGesture})'), cue);
+    assert.deepEqual(await evaluate('__qa.hands'), { kind: 'chest', side: 'right', active: true });
+    assert.equal(await evaluate('__qa.motions.length'), motions, 'a face preview cannot restart or close the selected hand');
+    await command({ type: 'expression', active: false });
+    assert.equal(await evaluate('__qa.behavior.expressionPreview'), null);
+    assert.deepEqual(await evaluate('({...__qa.behavior.speechGesture})'), cue);
   });
 
   await check('a stopped old audio promise and its late progress cannot clear a new reply', async () => {
@@ -187,7 +277,7 @@ async function command(value) { await evaluate(`__qa.emit(${JSON.stringify({ typ
   await check('thinking completion hands off only its automatic idea, preserving later manual performances', async () => {
     await evaluate('__qa.emit({type:"state",state:"thinking",requestId:"thinking-test"})');
     assert.equal(await evaluate('__qa.behavior.state'), 'thinking');
-    await reply('thinking-result');
+    await reply('thinking-result', [segment({ bodyAnimation: 'explain' })]);
     await until('__qa.behavior.action?.intent==="idea"');
     assert.equal(await evaluate('__qa.behavior.action.replyIntro'), true, 'the reply introduction must be explicitly marked internal');
     assert.equal(await evaluate('__qa.audio.length'), 0);

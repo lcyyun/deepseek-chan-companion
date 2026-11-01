@@ -1,5 +1,6 @@
 /** Semantic body gestures. This module never chooses or modifies a face. */
-export const SPEECH_GESTURE_IDS = Object.freeze(['explain', 'think', 'reassure', 'happy', 'shy', 'listen']);
+import { BODY_ANIMATION_PRESETS } from './body-animation.mjs';
+export const SPEECH_GESTURE_IDS = Object.freeze(BODY_ANIMATION_PRESETS.map(item => item.id));
 
 const ALIASES = Object.freeze({
   explain: 'explain', disagree: 'explain', think: 'think', curious: 'think',
@@ -29,16 +30,25 @@ export function planGestureCues(segment, options = {}) {
   // Below 100%, choose fewer sentences, not weaker gestures. The stable bucket
   // gives replay/tests the same choices and never introduces per-frame jitter.
   if (frequency < 1 && sentenceBucket(text) >= frequency) return [];
+  if (segment.bodyAnimation === 'none') return [];
+  const chosen = BODY_ANIMATION_PRESETS.find(item => item.id === segment.bodyAnimation);
   const explicitHand = HANDS.has(segment.gesture) ? segment.gesture : null;
-  const id = (Object.hasOwn(ALIASES, segment.intent) ? ALIASES[segment.intent] : null)
+  let id = chosen?.id ?? (Object.hasOwn(ALIASES, segment.intent) ? ALIASES[segment.intent] : null)
     ?? (explicitHand === 'pointer' ? 'explain' : explicitHand === 'chest' ? 'reassure' : explicitHand === 'foxtail' ? 'happy' : null);
   if (!id) return [];
-  const gesture = explicitHand ?? DEFAULT_HAND[id];
+  let gesture = chosen?.gesture ?? explicitHand ?? DEFAULT_HAND[id];
   // Acknowledgements need a small response, not a full arm entrance and exit.
   const spokenUnits = Array.from(text.replace(/[\s\p{P}\p{S}]/gu, '')).length;
   if (spokenUnits < 2) return [];
-  const intensity = ({ explain: .56, think: .46, reassure: .44, happy: .55, shy: .43, listen: .34 })[id];
-  const cues = [{ at: 0, id, gesture: spokenUnits < 8 ? 'none' : gesture, intensity }];
+  if (!chosen && id === 'explain' && gesture === 'pointer' && spokenUnits >= 24) {
+    id = /对比|比较|区别|一方面|另一方面|两种|一边|另一边|contrast|compar/iu.test(text) ? 'compare' : 'talk';
+  }
+  const preset = BODY_ANIMATION_PRESETS.find(item => item.id === id);
+  const intensity = ({ explain: .65, think: .56, reassure: .58, happy: .65, shy: .68, listen: .68 })[id] ?? .68;
+  const cues = [{ at: 0, id, gesture: spokenUnits < 8 ? 'none' : gesture, intensity, ...(preset?.continuous ? { continuous: true } : {}) }];
+  // Sustained speech is one performance with internal pauses/accents, not a
+  // queue that lowers and raises the same arm at every clause boundary.
+  if (preset?.continuous) return cues;
   const maxCues = frequency < .75 || spokenUnits < 48 ? 1 : spokenUnits >= 150 && frequency >= 1.25 ? 3 : 2;
   if (maxCues === 1 || !['explain', 'think'].includes(id)) return cues;
 

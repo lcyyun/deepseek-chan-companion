@@ -1,6 +1,6 @@
 # 大肥鱼 · 项目维护与代码导读
 
-本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前实现以 Windows x64 和这份 DeepSeek-chan 模型为目标。
+本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.12.0 实现以 Windows x64 和这份 DeepSeek-chan 模型为目标，版本差异见第 15、16 节。
 
 ## 1. 先理解四层结构
 
@@ -47,7 +47,7 @@ flowchart LR
 | [src/renderer/main.tsx](../src/renderer/main.tsx) | 页面入口；回复编排、触摸、输入取消、窗口事件和设置下发 |
 | [src/renderer/live2d.ts](../src/renderer/live2d.ts) | SDK 与模型加载、每帧组合、动作资源、物理、绘图、模型命中区域 |
 | [src/shared/behavior.mjs](../src/shared/behavior.mjs) | 与 DOM 无关的行为状态机：动作、表情、视线、摸头、敲盆和局部反应 |
-| [src/shared/body-animation.mjs](../src/shared/body-animation.mjs)、[renderer/body-animations.tsx](../src/renderer/body-animations.tsx) | 六组独立肢体关键姿态、中文目录和预览入口 |
+| [src/shared/body-animation.mjs](../src/shared/body-animation.mjs)、[renderer/body-animations.tsx](../src/renderer/body-animations.tsx) | 14 组独立肢体、连续讲话采样、中文目录和预览入口 |
 | [src/shared/gesture-cues.mjs](../src/shared/gesture-cues.mjs)、[renderer/gesture-timeline.ts](../src/renderer/gesture-timeline.ts) | 由段落意图生成手势节点，并按实际播放进度执行、跨段保持和取消 |
 | [src/shared/behavior.d.mts](../src/shared/behavior.d.mts)、[renderer/behavior.ts](../src/renderer/behavior.ts) | 行为接口类型和渲染端导出；改公开方法时同步维护 |
 | [src/shared/expressions.mjs](../src/shared/expressions.mjs) | 表情目录、中文文案、基础脸部姿态、趣味眼型等参数 |
@@ -213,6 +213,7 @@ node scripts/setup-mouse-input.mjs
 - 胸前轻点：down/up 均属于同一 pointer，持续不超过 450ms、最大移动不超过 8 DIP，且不是摸头或拖动。忙碌时按下不登记，防止恰好在 up 前反应结束后误触下一轮。移动距离用 client 坐标；拖动模型仍使用 screen 坐标。
 - 全局跟随：主进程采样物理左键与桌面光标，短暂按住后发送局部 DIP 坐标；渲染器按角色尺寸归一化，不能按整个工作区宽高归一化，否则角色会变迟钝。鼠标位置不发送给聊天后端。
 - 悬浮球：用 screen 坐标相对起点移动原生窗口，超过 5 DIP 视为拖动。仅本次捕获期间，主进程在确认真实左键及对应光标位置后每约 16ms 采样，避免移动中的窗口收不到及时 pointermove；保留抓取点偏移，接管后忽略迟到的 renderer 坐标。释放/取消停止采样，前端等待该 session 的 `moved` 结果决定是否打开聊天。原生 shape 更新合并到约 48ms，结束立即同步，避免每条 move 都重排窗口。手动位置独立保存；“悬浮球跟随桌宠”清除手动位置。
+- 聊天窗：位置归属由可见性决定，不由是否获得键盘焦点决定。摸头会使聊天窗失焦，但 `blur` 只刷新模型命中保护，不重新布局；已打开的聊天窗在角色活动、缩放和移动时保持原位。手动拖动写入 `desktop.json.chatBounds`，收起后再显示时恢复；显示器移除或工作区改变时才将可见聊天窗约束回可用区域。
 
 Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showInactive()`。不要在退出移动模式时将它改成 `false`。0.10.0 在隐藏/重新显示后，真实鼠标事件只剩 pointer up，没有 pointer down；原生 shape 有效、穿透关闭、缩放为 1，且自动化工具激活窗口后又可暂时恢复。改为可激活窗口后允许用户实际点击时正常激活，不需要在显示时调用 `webContents.focus()`。只做渲染器 `sendInputEvent()` 或主动激活目标的自动点击会漏掉这类问题；验收必须包含普通鼠标的隐藏→显示→点击路径。
 
@@ -244,7 +245,7 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 
 | 数据 | 所有者与存放位置 | 注意事项 |
 | --- | --- | --- |
-| 模型目录、模型中心/比例、显示器、浮球位置、戴盆、鼠标跟随、模型调节 | Electron userData 下 `desktop.json` | 保留已有配置；位置恢复需适配工作区和旧布局 |
+| 模型目录、模型中心/比例、显示器、浮球位置、聊天窗位置、戴盆、鼠标跟随、模型调节 | Electron userData 下 `desktop.json` | 保留已有配置；位置恢复需适配工作区和旧布局 |
 | 后端选择、API/TTS 地址和模型、口播偏好 | userData 下 `settings.json` | 用共享校验补缺省字段，不直接信任旧 JSON |
 | API/TTS 密钥 | settings 的加密字段或显式环境变量 | Electron `safeStorage` 加解密；公开配置仅返回是否已设置 |
 | 本地桥接配对码 | userData 下 `bridge-token` | 64 位十六进制随机值；不写入源码、示例或日志 |
@@ -396,7 +397,7 @@ npm run package
 
 ## 14. 当前局限与后续方向
 
-0.11 的独立预览与说话编排实现见下节。语义重点目前按文本子句比例映射到真实音频进度，不是单字级或声学重音对齐。
+独立预览最初在 0.11 引入，第 15 节保留其历史设计；0.12 的完整手臂变体和持续讲话改动见第 16 节。语义重点目前按文本子句比例映射到真实音频进度，连续肢体使用带停顿的内部节奏，都不是单字级或声学重音对齐。
 
 - 原生输入、系统语音和打包按 Windows 实现；不能把前端可运行等同于 macOS/Linux 桌宠支持。
 - 这份模型的手、眼、盆、胸部物理和命中部件经过专用适配；新增模型应抽出可选的模型 profile，重新校准后再启用这些增强。
@@ -408,7 +409,9 @@ npm run package
 
 维护时最可靠的工作顺序是：先确认负责该状态的层，修改最小边界，运行对应自动测试，再对涉及模型姿态、声音或原生输入的变化做相应实测。将“事件到达”“参数生效”“画面正确”“原生输入正确”分别验证，能显著减少仅靠单层测试漏掉的问题。
 
-## 15. 0.11 的独立预览与说话肢体编排
+## 15. 0.11 的独立预览与说话肢体编排（历史设计）
+
+本节说明最初的六组动作和无新增字段的编排方案。0.12 保留通道隔离与生命周期规则，新增 `bodyAnimation`、14 组目录和整段连续采样；当前接入以第 16 节为准。
 
 ### 通道与生命周期
 
@@ -431,3 +434,35 @@ npm run package
 普通视线、头和躯干分别采用较快、中等、较慢的平滑速度（18/7.5/4.5）；躯干读取上一帧已经平滑的头姿。触摸和胸前反应保留原响应速度。待机每隔约 6–13 秒更新一次小重心目标，中间停留；原 Cubism 物理负责头发、衣服等后续运动，不在行为层覆盖物理输出。
 
 相关验证：`tests/gesture-cues.test.mjs`、`tests/gesture-timeline.test.mjs`、`tests/speech-body.test.mjs`、`tests/behavior.test.mjs`，以及独立运行的 `tests/body-production.cjs`。最后一个需要 `L2D_MODEL_ROOT` 指向完整原模型，用隔离服务与隐藏窗口记录真实 Cubism 过程截图，不连接用户正在运行的实例。
+
+## 16. 0.12 的完整手臂变体与连续讲话
+
+### 目录、字段与所有权
+
+`BODY_ANIMATION_PRESETS` 是 14 组肢体的单一目录，每项含 `id/title/description/durationMs/gesture/handSide/continuous`。旧六项 ID 保留，新添 `chest-left/right/both`、`pointer-left/right/both`、`talk`、`compare`。`handSide` 按画面左、右、双侧解释；`durationMs` 是独立预览默认时长，`continuous` 仅在 `talk/compare` 为真。名称与含义见 [DSH 指南](dsh-agent-guide.md#44-14-组肢体动画)。能力接口也返回手型、侧别和连续标记，界面不要另写一份不同的映射。
+
+`ReplySegment.bodyAnimation` 和 `speak.bodyAnimation` 可为 `auto/none/具体ID`。严格模型输出 schema 要求填该字段；旧回复缺失时归一化为 `auto`，MCP/HTTP speak 则允许省略。具体 ID 使用目录里的手型并覆盖旧 `gesture` 提示；`none` 只禁用本段自动肢体。`avatar_body` 仍用 `animation` 字段，只接受具体 ID。停止独立预览使用 `{type:'body',active:false}`，不要与关闭整段自动动作混淆。
+
+`planGestureCues` 首先尊重用户的频率设置，再考虑显式动画和自动选择。`auto` 的较长举指讲解可选 `talk`，比较语句可选 `compare`；这只选肢体，不推断或覆盖面部情绪。短句仍减少举手，真实音频过短时不强行完成打开和关闭。`shy` 增强侧身低头、移开视线再回望；`listen` 增强靠近、侧耳停留和点头，二者不会自动添加害羞或认真表情。
+
+### 连续节点与真实时钟
+
+`createGestureTimeline` 为连续节点使用整段实际音频/阅读时长，不沿用普通手势 4.2 秒的上限。传给 `setSpeechGesture` 的样本包括 `continuous/elapsedSeconds/hold/continuing`，并带节点 `key/progress/durationMs`。`durationMs` 在行为层可保留至 300 秒；它是本次实际时长，不是预览时长。
+
+`sampleBodyAnimation(id,progress,intensity,options)` 用本段 `progress × durationSeconds` 计算进入和退出，用累计 `elapsedSeconds` 推进轻柔强调、手腕稍后跟随与休息段。进入新一句时，行为层为连续且同 ID/手型的节点累计 `cadenceOffset`，保留内部节拍；不能把每句的 elapsed 直接归零后当作新一轮起势。`hold` 让段尾保持而非先收手，`continuing` 让下一段不用从零抬臂。跨段等待时不继续自行计时，暂停音频也暂停时间线。
+
+普通动作仍按少量语义节点运行。`finish()` 表示正常段末，只有明确可续接的节点保留；`cancel()` 总是释放当前通道。触摸、敲盆、胸前反应和手动完整表演保持优先，被打断的旧说话节点不能在松手后补播。这里不产生新的音频，也不控制脸部；`expressionCues` 与真实口型各自保留原所有权。
+
+### 整臂镜像与切换
+
+运行时接口为 `setGestureHands(kind,side,active)`，其中 `kind` 是 `chest/pointer/null`，`side` 是 `left/right/both`。抚胸源在画面左侧，举指源在画面右侧。运行时复用完整的正常手臂和特殊姿态组，处理袖口、手掌、原侧显示与镜像绘制；不能只搬动手掌来制造另一侧姿势。原撒娇的 `setCuddleHand` 保留独立交接，不因选择 `chest-both` 自动加入撒娇脸。
+
+行为层把手型、侧别和撒娇布局一起用于判断是否需要切换。即使都是举指，从左切到右也先走完整关闭，再打开新侧；只有实际开始新动作时才提交新布局。关闭请求 `active:false` 或 `kind:null` 重复到达不能重置释放计时；镜像要覆盖整个作者关闭过程，不能在特殊手型变回普通手的中途消失。绘制后仍在 `finally` 恢复临时数据。
+
+柔缓强调只对原姿势周围的 `Param36/39/41/42` 或 `Param59/60` 叠加有界增量，受手势幅度限制。`Param43` 不拿来尝试任意弯指，避免不自然交叠；手指柔软感主要靠前臂、手腕的相位差和停顿。身体继续使用物理上游输入，由原物理计算头发、衣物等余动。导出模型仍没有可任意摆放的自由骨骼或 IK。
+
+### 聊天窗定位与验收边界
+
+`layoutTools({recoverChat})` 对可见聊天窗默认不重定位；`chat.blur` 只更新保护区。隐藏时再次打开，优先读取持久化 `chatBounds`，否则依照悬浮球/角色计算初始位置。`placeChat` 记录系统实际返回的 DIP bounds，`rememberChatPlacement` 排除程序布局产生的异步 move 事件，避免把自动布局误记为用户拖动。显示器恢复显式传 `recoverChat:true`，正常焦点变化不传。
+
+相关回归应覆盖：14 组身体与表情分离；长于 8 秒仍有连续变化；暂停时节拍不前进；同姿态跨段保持且节拍不归零；停止和触摸取消；左右切换先收再抬；聊天窗失焦/触摸后原位、手动位置重开/重启恢复、显示器变化回到可见区域。行为测试、时轴测试和 `speech-body.test.mjs` 验证状态与集成路径；`desktop-chat-placement.test.mjs` 验证聊天窗位置和持久化。真实模型仍需单独看进入、保持、反向倾身及收回画面，自动测试通过不等于所有姿态无穿模。

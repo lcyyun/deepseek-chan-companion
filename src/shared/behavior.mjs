@@ -100,6 +100,9 @@ export class BehaviorController {
     this.activeExpressions = new Set();
     this.actionExpressions = new Set();
     this.gesture = 'none';
+    this.gestureSide = null;
+    this.gestureCuddle = false;
+    this.gestureHands = null;
     this.queuedGesture = null;
     this.gestureClosingUntil = 0;
     this.nextThought = Infinity;
@@ -271,16 +274,30 @@ export class BehaviorController {
     const key = cue.key ?? id;
     const previous = this.speechGesture;
     const same = previous?.key === key && previous.id === id;
+    const gesture = ['pointer', 'chest', 'foxtail', 'none'].includes(cue.gesture) ? cue.gesture : undefined;
+    const continuous = cue.continuous === true;
+    const continuing = cue.continuing === true;
+    const sameCadence = continuous && previous?.continuous && previous.id === id && previous.gesture === gesture;
+    // Audio reports elapsed time within each sentence. Keep the wrist/body
+    // rhythm through a held boundary instead of jumping back to phase zero.
+    const cadenceOffset = sameCadence && same ? previous.cadenceOffset
+      : sameCadence && previous.hold && continuing ? previous.cadenceOffset + (previous.elapsedSeconds ?? (previous.progress ?? 0) * previous.duration)
+      : 0;
     // The fixed idea flourish has already introduced the reply. Hand its pose
     // straight to the first spoken cue without closing and reopening the arm.
     if (!same && this.action?.intent === 'idea' && this.action.replyIntro) this._cancelTransient(true);
     this.speechGesture = { id, key, intensity: clamp(finite(cue.intensity, .65)),
       start: same ? previous.start : this.time,
-      duration: clamp(finite(cue.durationMs, 5000) / 1000, .3, 30),
+      duration: clamp(finite(cue.durationMs, 5000) / 1000, .3, 300),
       progress: Number.isFinite(cue.progress) ? clamp(cue.progress) : null,
+      elapsedSeconds: Number.isFinite(cue.elapsedSeconds) ? Math.max(0, cue.elapsedSeconds) : null,
+      cadenceOffset,
+      continuous,
+      hold: cue.hold === true,
+      continuing,
       // A held local interaction consumes incoming cues rather than replaying them later.
       blocked: same ? previous.blocked : this._bodyInteractionActive(),
-      gesture: ['pointer', 'chest', 'foxtail', 'none'].includes(cue.gesture) ? cue.gesture : undefined };
+      gesture };
     this._syncGesture();
   }
 
@@ -303,9 +320,12 @@ export class BehaviorController {
     const performance = this._bodyPerformance();
     if (!performance) return null;
     const progress = performance.progress ?? clamp((this.time - performance.start) / performance.duration);
-    const sample = sampleBodyAnimation(performance.id, progress, performance.intensity);
+    const sample = sampleBodyAnimation(performance.id, progress, performance.intensity, {
+      durationSeconds: performance.duration, elapsedSeconds: (performance.cadenceOffset ?? 0) + (performance.elapsedSeconds ?? progress * performance.duration),
+      hold: performance.hold, continuing: performance.continuing,
+    });
     const seconds = progress * performance.duration;
-    const weight = ease(seconds / .25) * (1 - ease((seconds - performance.duration + Math.min(.85, performance.duration * .3)) / Math.min(.85, performance.duration * .3)));
+    const weight = (performance.continuing ? 1 : ease(seconds / .25)) * (performance.hold ? 1 : 1 - ease((seconds - performance.duration + Math.min(.85, performance.duration * .3)) / Math.min(.85, performance.duration * .3)));
     const gesture = performance.gesture ?? sample.gesture;
     return { ...sample, weight, gesture, pose: gesture === sample.gesture ? sample.pose : null };
   }
@@ -491,6 +511,10 @@ export class BehaviorController {
     this.queuedGesture = null;
     this.cuddleWeight = 0;
     this._callRuntime('setCuddleHand', 0);
+    this.gestureHands = null;
+    this.gestureSide = null;
+    this.gestureCuddle = false;
+    this._callRuntime('setGestureHands', null, 'left', false);
     this.poseWeight = 0;
     this.poseValues = {};
     this.idlePose = { x: 0, z: 0, lean: 0 }; this.idleTarget = { x: 0, z: 0, lean: 0 }; this.nextIdleShift = this.time + 5;
@@ -576,10 +600,12 @@ export class BehaviorController {
     const cuddleFace = this.cuddleWeight * (1 - this.expressionCueWeight * (1 - this.petContact)) * (1 - chestWeight);
     // A queued gesture must finish the previous arm's authored close before its
     // new selector/pose can enter. Facial expression and loading remain live.
-    const bodyArm = bodySample?.gesture !== 'none' && bodySample?.gesture === this.gesture && bodyWeight > .001 ? bodySample.pose : null;
+    const bodyArm = bodySample?.gesture !== 'none' && bodySample?.gesture === this.gesture && bodySample?.handSide === this.gestureSide && bodyWeight > .001 ? bodySample.pose : null;
     const armPose = bodySample ? bodyArm : (cuddling && this.gesture === 'chest' ? 'cuddle'
       : this.gesture === 'pointer' ? thinking ? 'think' : action?.intent === 'idea' ? 'idea' : null : null);
     this._callRuntime('setCuddleHand', bodySample ? 0 : this.cuddleWeight, armPose === 'cuddle');
+    const hands = this.gestureHands;
+    this._callRuntime('setGestureHands', hands?.kind ?? null, hands?.side ?? 'left', Boolean(hands && bodySample?.gesture === this.gesture && bodySample?.handSide === this.gestureSide && !this.queuedGesture));
     this._updateArmPose(armPose,
       bodyArm ? bodyWeight : armPose === 'cuddle' || thinking && this._state === 'thinking' ? 1 : actionWeight, smoothingStep,
       bodyArm ? bodySample.armOffsets : null);
@@ -804,6 +830,7 @@ export class BehaviorController {
     this._callRuntime('setPupilScale', 1);
     this._callRuntime('setHandForeground', 0);
     this._callRuntime('setCuddleHand', 0);
+    this._callRuntime('setGestureHands', null, 'left', false);
     this._callRuntime('setFaceOverlay', {});
     this.pending = [];
     this.destroyed = true;
@@ -894,8 +921,12 @@ export class BehaviorController {
   _setGesture(input) {
     const gesture = GESTURE_ALIASES[input] ?? input;
     if (gesture !== 'none' && !Object.hasOwn(HANDS, gesture)) return;
-    if (gesture === this.queuedGesture?.gesture) return;
-    if (gesture === this.gesture) { this.queuedGesture = null; return; }
+    const layout = this._desiredHandLayout(gesture);
+    if (gesture === this.queuedGesture?.gesture && layout.side === this.queuedGesture.side && layout.cuddle === this.queuedGesture.cuddle) return;
+    if (gesture === this.gesture && layout.side === this.gestureSide && layout.cuddle === this.gestureCuddle) {
+      if (gesture !== 'none') this.gestureHands = layout.body ? { kind: gesture, side: layout.side } : null;
+      this.queuedGesture = null; return;
+    }
     this.queuedGesture = null;
     const previous = this.gesture;
     // One hand-motion lane: queued instructions are canceled by generation.
@@ -904,17 +935,36 @@ export class BehaviorController {
       this._callRuntime('playMotion', HANDS[previous].close, { loop: false, holdLastFrame: false, fadeMs: 200 });
       this.gestureClosingUntil = this.time + HANDS[previous].closeSeconds + 0.05;
       this.gesture = 'none';
+      this.gestureSide = null;
+      this.gestureCuddle = false;
     }
     if (gesture !== 'none') {
       const wait = Math.max(0, this.gestureClosingUntil - this.time);
       if (wait === 0) this._startGesture(gesture);
-      else this.queuedGesture = { at: this.time + wait, gesture };
+      else this.queuedGesture = { at: this.time + wait, gesture, side: layout.side, cuddle: layout.cuddle };
     }
   }
 
   _startGesture(gesture) {
+    const layout = this._desiredHandLayout(gesture);
     this.gesture = gesture;
+    this.gestureSide = layout.side;
+    this.gestureCuddle = layout.cuddle;
+    this.gestureHands = layout.body ? { kind: gesture, side: layout.side } : null;
     this._callRuntime('playMotion', HANDS[gesture].open, { loop: false, holdLastFrame: true, fadeMs: 200 });
+  }
+
+  _desiredHandLayout(gesture) {
+    if (gesture === 'none') return { side: null, cuddle: false, body: false };
+    const native = gesture === 'chest' ? 'left' : 'right';
+    const touching = this.petting.active && this.time - this.petStarted >= 2;
+    const performance = touching ? null : this._bodyPerformance();
+    if (performance) {
+      const sample = sampleBodyAnimation(performance.id, 0);
+      return { side: gesture === sample.gesture ? sample.handSide : native, cuddle: false, body: ['chest','pointer'].includes(gesture) };
+    }
+    const cuddle = gesture === 'chest' && (touching || this.action?.intent === 'cuddle');
+    return { side: cuddle ? 'both' : native, cuddle, body: false };
   }
 
   _desiredGesture() {
@@ -922,7 +972,7 @@ export class BehaviorController {
     const performance = this._bodyPerformance();
     if (performance) {
       const progress = performance.progress ?? (this.time - performance.start) / performance.duration;
-      if (progress >= 1) return 'none';
+      if (progress >= 1 && !performance.hold) return 'none';
       return performance.gesture ?? sampleBodyAnimation(performance.id, 0).gesture;
     }
     if (this.action?.intent === 'cuddle') return 'chest';

@@ -34,9 +34,10 @@ export function createGestureTimeline(
     released = true; carrying = false; active = null;
   };
   const publish = (item: ScheduledGesture, progress: number) => {
-    if (progress === lastProgress && active === item) return;
+    if (progress === lastProgress && active === item && !item.cue.continuous) return;
     lastProgress = progress; released = false;
-    apply({ ...item.cue, key: `${key}:${item.index}`, progress, durationMs: item.duration * 1000 });
+    apply({ ...item.cue, key: `${key}:${item.index}`, progress, durationMs: item.duration * 1000,
+      ...(item.cue.continuous ? { elapsedSeconds: Math.max(0, lastElapsed - item.start), hold: item.hold, continuing: Boolean(options.continueFirst && item.index === 0) } : {}) });
   };
   const plan = (duration: number) => {
     const items: ScheduledGesture[] = [];
@@ -47,7 +48,9 @@ export function createGestureTimeline(
       if (duration - start < minimum) continue;
       const previous = items.at(-1);
       if (previous && start < previous.end + .45) continue;
-      const span = Math.min(cue.gesture === 'none' ? 3.2 : 4.2, duration - start - .15);
+      const nextStart = safeCues[index + 1] ? safeCues[index + 1].at * duration - .7 : duration;
+      const span = cue.continuous ? Math.max(minimum, Math.min(duration, nextStart) - start)
+        : Math.min(cue.gesture === 'none' ? 3.2 : 4.2, duration - start - .15);
       items.push({ cue, index, start, end: start + span, duration: span, hold: false });
     }
     if (options.holdLast && items.length) {
@@ -61,7 +64,7 @@ export function createGestureTimeline(
 
   return {
     update(elapsed: number, duration: number) {
-      if (ended || cancelled || !Number.isFinite(elapsed) || elapsed < 0 || !Number.isFinite(duration) || duration <= 0 || elapsed < lastElapsed) return;
+      if (ended || cancelled || !Number.isFinite(elapsed) || elapsed < 0 || !Number.isFinite(duration) || duration <= 0 || elapsed <= lastElapsed) return;
       scheduled ??= plan(duration);
       lastElapsed = elapsed;
 
@@ -76,10 +79,10 @@ export function createGestureTimeline(
         active = item; lastProgress = -1; released = false;
       }
       if (active) {
-        const skipEntrance = options.continueFirst && active.index === 0;
+        const skipEntrance = options.continueFirst && active.index === 0 && !active.cue.continuous;
         const initial = skipEntrance ? .28 : 0;
         const progress = initial + (1 - initial) * Math.max(0, elapsed - active.start) / active.duration;
-        publish(active, Math.min(active.hold ? .72 : 1, progress));
+        publish(active, Math.min(active.hold && !active.cue.continuous ? .72 : 1, progress));
         carrying = active.hold;
       } else if (carrying) {
         // A very short new segment may reject its first gesture. The previous
@@ -90,7 +93,7 @@ export function createGestureTimeline(
     finish() {
       if (cancelled || ended) return;
       ended = true;
-      if (active?.hold) { publish(active, .72); carrying = true; }
+      if (active?.hold) { publish(active, active.cue.continuous ? 1 : .72); carrying = true; }
       else release();
     },
     cancel() {

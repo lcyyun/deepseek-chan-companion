@@ -1,6 +1,6 @@
 import type { ModelTuning } from './model-tuning.mjs';
 export type BehaviorState = 'idle' | 'thinking' | 'listening' | 'speaking';
-export type BodyAnimationId = 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen';
+export type BodyAnimationId = 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen' | 'chest-left' | 'chest-right' | 'chest-both' | 'pointer-left' | 'pointer-right' | 'pointer-both' | 'talk' | 'compare';
 export interface SpeechGestureCue {
   id?: BodyAnimationId;
   intent?: string;
@@ -9,6 +9,10 @@ export interface SpeechGestureCue {
   intensity?: number;
   durationMs?: number;
   progress?: number;
+  elapsedSeconds?: number;
+  continuous?: boolean;
+  hold?: boolean;
+  continuing?: boolean;
 }
 export interface BehaviorRuntime {
   setParameters(parameters: Record<string, number>): void;
@@ -16,6 +20,8 @@ export interface BehaviorRuntime {
   setPupilScale?(scale: number): void;
   setHandForeground?(weight: number): void;
   setCuddleHand?(weight: number, active?: boolean): void;
+  /** Complete authored arms; left/right are screen sides, false retains the authored close. */
+  setGestureHands?(kind: 'chest' | 'pointer' | null, side: 'left' | 'right' | 'both', active: boolean): void;
   setImpactOverlay?(parameters: Record<string, number>, weight: number): void;
   setEarImpulse?(left: number, right: number): void;
   setFaceOverlay?(parameters: Record<string, number>): void;
@@ -70,7 +76,7 @@ export interface PointerTrackingInput {
   travel?: number;
 }
 export const BEHAVIOR_PRESETS: readonly { id: string; title: string; command: BehaviorCommand }[];
-export const BODY_ANIMATION_PRESETS: readonly { id: BodyAnimationId; title: string; description: string; durationMs: number }[];
+export const BODY_ANIMATION_PRESETS: readonly { id: BodyAnimationId; title: string; description: string; durationMs: number; gesture: 'none' | 'chest' | 'pointer'; handSide: 'left' | 'right' | 'both'; continuous: boolean }[];
 export class BehaviorController {
   constructor(runtime: BehaviorRuntime, options?: BehaviorOptions);
   readonly state: BehaviorState;

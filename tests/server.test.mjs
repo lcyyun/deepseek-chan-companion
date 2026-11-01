@@ -121,20 +121,39 @@ test('semantic replies preserve cuddle, idea and puzzled while unsupported comma
   }
 });
 
-test('independent preview commands enforce channel ownership and expose the six body animations', () => {
-  assert.deepEqual(CAPABILITIES.bodyAnimations.map(item => item.id), ['explain', 'think', 'reassure', 'happy', 'shy', 'listen']);
+test('independent preview commands enforce channel ownership and expose all body animations', () => {
+  assert.deepEqual(CAPABILITIES.bodyAnimations.map(item => item.id), ['explain', 'think', 'reassure', 'happy', 'shy', 'listen', 'chest-left', 'chest-right', 'chest-both', 'pointer-left', 'pointer-right', 'pointer-both', 'talk', 'compare']);
   const face = normalizeCommand({ type: 'expression', emotion: 'happy' });
   assert.equal(face.emotion, 'happy'); assert.equal(face.active, true); assert.equal(face.durationMs, 20000);
   const body = normalizeCommand({ type: 'body', animation: 'listen' });
-  assert.equal(body.animation, 'listen'); assert.equal(body.durationMs, 6400); assert.equal(body.emotion, undefined);
+  assert.equal(body.animation, 'listen'); assert.equal(body.durationMs, CAPABILITIES.bodyAnimations.find(item=>item.id==='listen').durationMs); assert.equal(body.emotion, undefined);
   for (const type of ['expression', 'body']) assert.equal(normalizeCommand({ type, active: false }).active, false);
   for (const value of [
     { type: 'expression', emotion: 'happy', gesture: 'pointer' },
     { type: 'expression', emotion: 'happy', intent: 'greet' },
+    { type: 'expression', emotion: 'happy', bodyAnimation: 'talk' },
     { type: 'body', animation: 'happy', emotion: 'happy' },
+    { type: 'body', animation: 'happy', bodyAnimation: 'talk' },
     { type: 'body', animation: 'fly' }, { type: 'expression', emotion: 'fly' },
     { type: 'body', active: 'false' }, { type: 'expression' },
   ]) assert.throws(() => normalizeCommand(value));
+});
+
+test('speech can select a continuous or sided body score while older clients remain compatible', () => {
+  const compare = CAPABILITIES.bodyAnimations.find(item => item.id === 'compare');
+  assert.equal(compare.handSide, 'both'); assert.equal(compare.continuous, true);
+  const normalize = bodyAnimation => normalizeReply({ segments: [{ text: '我来解释一下。', intent: 'explain', gesture: 'none', emotion: 'happy', bodyAnimation }] }).segments[0];
+  assert.equal(normalize(undefined).bodyAnimation, 'auto');
+  assert.equal(normalize('teleport').bodyAnimation, 'auto');
+  for (const id of ['talk', 'compare', 'chest-right', 'pointer-left', 'pointer-both', 'none']) {
+    assert.equal(normalize(id).bodyAnimation, id);
+    const command = normalizeCommand({ type: 'speak', text: '这样就很好理解了。', bodyAnimation: id });
+    assert.equal(command.bodyAnimation, id);
+    assert.ok(RESPONSE_SCHEMA.properties.segments.items.properties.bodyAnimation.enum.includes(id));
+  }
+  assert.throws(() => normalizeCommand({ type: 'speak', text: '你好', bodyAnimation: 'teleport' }));
+  const system = makeMessages({ text: '这两种方法有什么区别？' }).messages[0].content;
+  assert.ok(system.includes('bodyAnimation') && system.includes('compare'));
 });
 
 test('MCP independently dispatches body and face previews without changing dialogue state', async t => {
