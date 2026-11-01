@@ -23,7 +23,7 @@ getInteractionRegions:()=>({body:{x:100,y:40,width:400,height:500},fullBody:{x:1
 setPlacement(){},setView(){},setModelTuning(){},setPoseOverlay(p,w){q.pose={parameters:p,weight:w};},setPupilScale(){},setHandForeground(){},setCuddleHand(){},setImpactOverlay(){},setEarImpulse(){},setFaceOverlay(p){q.face=p;},
 playMotion:async(name)=>{q.motions.push(name);},stopMotion(){},setExpression:async()=>{},reset(){},destroy(){}};
 q.advance=(frames=1)=>{for(let i=0;i<frames;i++){elapsed+=1/60;options.onFrame?.(1/60,elapsed);}};
-q.runtime=runtime;return runtime;}`, 
+q.runtime=runtime;return runtime;}`,
   './audio': `export class SpeechPlayer {
 constructor(){window.__qa.player=this;}
 level(){return window.__qa.audioActive?.3:0;}
