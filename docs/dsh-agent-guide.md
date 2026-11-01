@@ -1,6 +1,6 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-适用于本仓库当前 0.17.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
+适用于本仓库当前 0.18.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
 
 ## 1. 先确定你使用哪条通路
 
@@ -11,7 +11,7 @@
 
 这两条通路可以连接同一个桌宠进程，但职责不同。MCP 连接成功不代表 DSH 聊天桥已经连接；`bridges` 中出现 DSH 心跳，也不代表 `dsh.connected` 为真。
 
-首次安装的聊天来源是 `unconfigured`，界面显示“待接入”；不会默认启动 Codex。外部 DSH 会话通过 MCP 操控角色无需修改来源。用户要求接通桌宠双向聊天时，完成桥接后按第 8 节设置 `provider:"dsh"`；桥连接本身不会自动改设置。未配置的 `/api/chat` 返回 `PROVIDER_NOT_CONFIGURED`，本地互动和角色工具仍可用。升级保留已选择的提供方。
+首次安装使用 `providerSource:"auto"`；聊天桥就绪后有效来源自动为 DSH，输入框显示“和 DeepSeek Harness 说点什么…”。只连 MCP 时明确提示聊天桥未启用并禁用发送；没有 DSH 时保持未连接。Codex 只手动选择，DSH 断线后保持来源并等待重连。外部 DSH 会话通过 MCP 操控角色无需聊天桥。`provider` 是保存值，实际显示与发送应读取 `providerEffective` 和 `chatAvailable`。升级保留旧保存来源，旧 Codex 用户可在设置中切换一次自动模式。
 
 **验证范围：** 用户已在 **DSH `0.2.1-rc.2` 全新 profile** 中完成真实端到端验证：MCP 十个工具、状态桥、双向聊天和真实模型渲染均已打通。这是用户反馈的实机结果；仓库自动测试另外覆盖 MCP 握手、WebSocket 传输、Session Controller 契约与会话目录隔离，不将模拟宿主当作实机验证。其他版本、账号、搜索插件仍需相应验收。准备步骤与已知作业环境边界见[干净 profile 接入指南](dsh-clean-profile.md)。
 
@@ -299,7 +299,11 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 | `busy` | 是否有服务端 `/api/chat` 生成请求；不代表音频正在播放，也不代表所有外部 DSH 会话都空闲 |
 | `requestId` | 当前服务端生成请求 ID，没有请求时为 `null` |
 | `model.ready`、`model.error` | 模型清单是否已加载及错误提示 |
-| `dsh.connected`、`dsh.searchAvailable` | 双向聊天桥是否连接、是否声明有已配置的搜索工具 |
+| `providerEffective`、`providerSource` | 当前有效对话来源；`auto` 自动 DSH 或 `user` 手动选择 |
+| `chatAvailable`、`chatStatus`、`chatMessage` | 是否可发送、不可用原因及对应提供方说明；前端不自行猜测 |
+| `performance.connected/dshConnected/clients/lastSeen/leaseMs` | 最近 65 秒已认证 MCP 活动及识别的客户端；不是长期 TCP 连接或聊天证明 |
+| `dsh.connected/chatAvailable/everConnected/reconnecting` | 聊天桥连接、Session Controller 可用声明、历史连接与重连状态；模型凭据仍在请求时验证 |
+| `dsh.searchAvailable` | 是否声明有已配置的搜索工具 |
 | `bridges` | 最近约 65 秒内有记录的客户端／状态插件；不是专用聊天桥连通证明 |
 | `watch.enabled/sessionId/hasContext` | 陪看开关、当前分享会话、是否有新鲜上下文 |
 
@@ -339,14 +343,14 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 
 ### 8.1 启用和判断成功
 
-先启动插件并确认 `GET /api/state` 的 `dsh.connected` 为 true，再由用户在桌宠设置中选择 DSH 提供方。也可由有配置授权的本地维护程序调用：
+先启动插件，确认 `dsh.chatAvailable=true`。自动模式会直接解析为 `providerEffective:"dsh"`、`chatAvailable:true`，无需再次手动选择。只连 MCP 时发送禁用，应启用桥的 `chat:true`；DSH 断线时保持来源、保留草稿并等待重连。若要显式固定 DSH，可由有配置授权的本地维护程序调用：
 
 ```http
 PUT /api/settings
 Authorization: Bearer <本机配对码>
 Content-Type: application/json
 
-{"provider":"dsh","verbosity":"brief"}
+{"provider":"dsh","providerSource":"user","verbosity":"brief"}
 ```
 
 然后提交：

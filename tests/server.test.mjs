@@ -388,8 +388,10 @@ test('DSH plugin uses native session API and returns the correlated turn through
   attachChatBridge(ctx, { baseUrl: service.url, token: service.token, chatCwd: join(root, 'dsh-chat') });
   t.after(() => { cleanup.forEach(dispose => dispose?.()); bus.removeAllListeners(); });
   await connected;
-  assert.equal(service.settings.provider, 'unconfigured', 'Connecting a DSH bridge does not choose the chat provider');
-  await request('/api/settings', { method: 'PUT', body: JSON.stringify({ provider: 'dsh' }) });
+  assert.equal(service.settings.provider, 'unconfigured', 'Automatic selection must not rewrite the user selection');
+  assert.equal(service.getState().providerSource, 'auto');
+  assert.equal(service.getState().providerEffective, 'dsh');
+  assert.equal(service.getState().chatAvailable, true);
   const response = await request('/api/chat', { method: 'POST', body: JSON.stringify({ text: '你好' }) });
   assert.equal(response.status, 200);
   const reply = await response.json();

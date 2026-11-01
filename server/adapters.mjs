@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { RESPONSE_SCHEMA, makeMessages, normalizeReply } from './protocol.mjs';
 import { edgeSpeech } from './edge-tts.mjs';
 import { getTtsProvider } from './tts-settings.mjs';
+import { codexFailureDetails } from './codex-diagnostics.mjs';
 
 function failure(message, code, status = 502) { return Object.assign(new Error(message), { code, status }); }
 export function endpoint(baseUrl, suffix) {
@@ -97,8 +98,15 @@ export async function codexChat({ settings, request, history, signal, dataDir, o
     if (signal?.aborted) return reject(failure('请求已取消。', 'CANCELLED', 499));
     let child;
     try { child = spawnImpl(launch.command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true, detached: process.platform !== 'win32', env: { ...process.env, ...(launch.runAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}) } }); }
-    catch { reject(failure('无法启动Codex CLI。', 'CODEX_NOT_FOUND', 409)); return; }
-    let settled = false, output = '', lastMessage = '', searchUsed = false, searchAttempted = false, sawError = false, outputBytes = 0, diagnostic = '';
+    catch (err) {
+      if (['EACCES','EPERM'].includes(err.code)) {
+        const details = codexFailureDetails(err.code);
+        reject(Object.assign(failure(details.message, details.code, 409), details));
+      } else reject(Object.assign(failure('无法启动Codex CLI。请检查可执行文件路径。', 'CODEX_NOT_FOUND', 409), { provider: 'codex', exitCode: null, diagnostic: '可执行文件无法启动' }));
+      return;
+    }
+    let settled = false, output = '', lastMessage = '', searchUsed = false, searchAttempted = false, outputBytes = 0, diagnosticInput = '';
+    const collectDiagnostic = value => { diagnosticInput = (diagnosticInput + '\n' + String(value).slice(-16000)).slice(-16000); };
     const abort = () => { killTree(child); finish(failure('请求已取消。', 'CANCELLED', 499)); };
     const timer = setTimeout(() => { killTree(child); finish(failure('Codex响应超时。请重试。', 'PROVIDER_TIMEOUT', 504)); }, 180000);
     timer.unref?.();
@@ -114,14 +122,7 @@ export async function codexChat({ settings, request, history, signal, dataDir, o
       try {
         const event = JSON.parse(line);
         if (event.type === 'error' || event.type === 'turn.failed') {
-          sawError = true;
-          const description = String(event.message || event.error?.message || '');
-          if (/model_not_found|model.*not supported/i.test(description)) diagnostic = `Codex模型${selectedModel ? `“${selectedModel}”` : ''}不可用。请在设置中填写当前账户支持的Codex模型。`;
-          else if (/newer version|upgrade.*Codex/i.test(description)) diagnostic = '当前模型需要更新版本的Codex CLI。请更新桌宠附带的Codex运行时后重试。';
-          else if (/not logged|unauthorized|401|authentication|login/i.test(description)) diagnostic = 'Codex登录失效。请在终端运行codex login后重试。';
-          else if (/quota|usage limit|rate.limit|429/i.test(description)) diagnostic = 'Codex额度或请求频率受限，请稍后重试。';
-          else if (/output.schema|schema.*invalid|invalid.*schema/i.test(description)) diagnostic = 'Codex拒绝了结构化输出格式。请更新Codex CLI。';
-          else if (/network|connect|timeout/i.test(description)) diagnostic = 'Codex无法连接模型服务，请检查网络。';
+          collectDiagnostic(event.message || event.error?.message || event.error?.code || '');
         }
         const item = event.item;
         if (item?.type === 'web_search' || item?.type === 'web_search_call') {
@@ -141,13 +142,23 @@ export async function codexChat({ settings, request, history, signal, dataDir, o
       output = lines.pop();
       for (const line of lines) handleLine(line);
     });
-    child.stderr.on('data', () => {}); // Consume but never log authentication/configuration output.
+    // Bounded in-memory classification only. Never log or return raw stderr,
+    // which can contain local paths, credentials, or provider response text.
+    child.stderr.on('data', chunk => collectDiagnostic(chunk.toString('utf8')));
     child.stdin.on('error', () => {});
-    child.on('error', () => finish(failure('无法启动Codex CLI。请确认已安装并登录。', 'CODEX_NOT_FOUND', 409)));
-    child.on('close', code => {
+    child.on('error', err => {
+      if (['EACCES','EPERM'].includes(err.code)) {
+        const details = codexFailureDetails(err.code);
+        finish(Object.assign(failure(details.message, details.code, 409), details));
+      } else finish(Object.assign(failure('无法启动Codex CLI。请检查可执行文件路径。', 'CODEX_NOT_FOUND', 409), { provider: 'codex', exitCode: null, diagnostic: '可执行文件无法启动' }));
+    });
+    child.on('close', (code, signalName) => {
       if (output) handleLine(output);
       if (settled) return;
-      if (code !== 0 || !lastMessage) return finish(failure(diagnostic || (sawError ? 'Codex调用失败。请检查CLI登录、模型权限或网络。' : 'Codex未生成有效回复。请检查CLI登录状态。'), 'CODEX_EXEC_FAILED'));
+      if (code !== 0 || !lastMessage) {
+        const details = codexFailureDetails(diagnosticInput, code, signalName);
+        return finish(Object.assign(failure(details.message, details.code), details));
+      }
       try { const reply = normalizeReply(lastMessage); finish(null, { ...reply, sources: searchUsed ? reply.sources : [], provider: 'codex', searchAvailable: Boolean(settings.webSearch), searchAttempted, searchUsed }); }
       catch (error) { finish(error); }
     });

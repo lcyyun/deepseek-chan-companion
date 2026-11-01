@@ -2,6 +2,7 @@
 import { mkdir } from 'node:fs/promises';
 import { WebSocket } from 'ws';
 import { resolveCompanionChatCwd } from './home-paths.mjs';
+import { dshWireFailure } from './chat-errors.mjs';
 
 export const name = 'deepseek-chan-bridge';
 export const inject = ['sessionController', 'tools'];
@@ -88,29 +89,30 @@ export function attachChatBridge(ctx, config) {
     })().catch(err => { sessionPromise = null; throw err; });
     return sessionPromise;
   }
-  function finish(operation, errorMessage) {
+  function finish(operation, problem) {
     if (!pending.has(operation.requestId)) return;
     pending.delete(operation.requestId); clearTimeout(operation.timer);
-    send({ type: 'chat-result', requestId: operation.requestId, ...(errorMessage ? { error: errorMessage, code: 'DSH_CHAT_FAILED' } : { reply: operation.text, searchAttempted: operation.searchAttempted, searchUsed: operation.searchUsed }) });
+    send({ type: 'chat-result', requestId: operation.requestId, ...(problem ? dshWireFailure(problem) : { reply: operation.text, searchAttempted: operation.searchAttempted, searchUsed: operation.searchUsed }) });
   }
-  async function cancel(operation) {
+  async function cancel(operation, code = 'DSH_TURN_CANCELLED') {
+    operation.failureCode = code;
     operation.controller.abort();
     try { if (operation.sessionId) await ctx.sessionController.cancel({ sessionId: operation.sessionId }); } catch {}
-    finish(operation, 'cancelled');
+    finish(operation, { code });
   }
   async function receive(message) {
     if (message.type === 'chat-cancel') { const operation = pending.get(message.requestId); if (operation) await cancel(operation); return; }
     if (message.type !== 'chat-request') return;
     const operation = { requestId: message.requestId, controller: new AbortController(), sessionId: '', turn: null, text: '', searchAllowed: message.searchAllowed === true, searchAttempted: false, searchUsed: false, searchCalls: new Set() };
     pending.set(operation.requestId, operation);
-    operation.timer = setTimeout(() => void cancel(operation), 175000); operation.timer.unref?.();
+    operation.timer = setTimeout(() => void cancel(operation, 'DSH_TURN_TIMEOUT'), 175000); operation.timer.unref?.();
     try {
       operation.sessionId = await session();
       if (operation.controller.signal.aborted) return;
       const prompt = message.messages.map(m => `${String(m.role).toUpperCase()}:\n${m.content}`).join('\n\n');
       // Register pending state before prompt: events can arrive before its acknowledgement.
       await ctx.sessionController.prompt({ requestId: operation.requestId, sessionId: operation.sessionId, mode: 'queue', content: [{ type: 'text', text: prompt }], clientTimeZone: config.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone }, operation.controller.signal);
-    } catch { finish(operation, 'DSH rejected the prompt. Check the model and session configuration.'); }
+    } catch (error) { finish(operation, operation.controller.signal.aborted ? { code: operation.failureCode || 'DSH_TURN_CANCELLED' } : error); }
   }
   ctx.on('session/event', (sessionValue, event) => {
     const id = String(sessionValue.id);
@@ -129,7 +131,7 @@ export function attachChatBridge(ctx, config) {
     } else if (event.type === 'tool/result' && operation.searchCalls.has(event.data.message?.toolCallId) && !event.data.message.isError) operation.searchUsed = true;
     else if (event.type === 'turn/end') {
       const reason = JSON.stringify(event.data.reason || '');
-      if (/abort|error|fail|cancel/i.test(reason) || !operation.text) finish(operation, 'The DSH turn did not finish with an answer.');
+      if (/abort|error|fail|cancel|MISSING_CREDENTIAL|MODEL_NOT_CONFIGURED/i.test(reason) || !operation.text) finish(operation, event.data.reason || { code: 'DSH_CHAT_FAILED' });
       else finish(operation);
     }
   });
@@ -140,7 +142,7 @@ export function attachChatBridge(ctx, config) {
       ws.on('open', () => send({ type: 'auth', token: config.token }));
       ws.on('message', raw => {
         let message; try { message = JSON.parse(raw.toString()); } catch { return; }
-        if (message.type === 'auth' && message.ok) send({ type: 'bridge-register', name: 'dsh', chat: true, sessionId: config.chatSessionId || '', searchAvailable: searchNames.size > 0 });
+        if (message.type === 'auth' && message.ok) send({ type: 'bridge-register', name: 'dsh', chat: true, sessionControllerAvailable: true, sessionId: config.chatSessionId || '', searchAvailable: searchNames.size > 0 });
         else void receive(message);
       });
       ws.on('error', () => {});

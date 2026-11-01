@@ -1,10 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { createRequire } from 'node:module';
+const { version } = createRequire(import.meta.url)('../package.json');
 
 export async function handleMcp(req, res, parsedBody, service) {
   if (req.method !== 'POST') { res.writeHead(405, { Allow: 'POST' }); res.end(); return; }
-  const server = new McpServer({ name: 'deepseek-chan', version: '0.1.0' }, { instructions: 'Use avatar_perform sparingly for meaningful expression. A new avatar_speak replaces the current spoken presentation; do not issue consecutive calls as a playback queue. Tools acknowledge acceptance immediately, not completed playback. Read capabilities first. Do not call avatar tools in response to their own bridge activity.' });
+  const server = new McpServer({ name: 'deepseek-chan', version }, { instructions: 'Use avatar_perform sparingly for meaningful expression. A new avatar_speak replaces the current spoken presentation; do not issue consecutive calls as a playback queue. Tools acknowledge acceptance immediately, not completed playback. Read capabilities first. Do not call avatar tools in response to their own bridge activity.' });
   const result = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
   server.registerTool('avatar_capabilities', { description: 'Read character IDs, tags, useWhen/avoidWhen, recommended face/body pairings and the short performanceGuide. Prefer a fitting opening combination, then independent face/body for remaining speech. Tags are selection guidance, not command IDs.', inputSchema: {} }, async () => result(service.capabilities));
   server.registerTool('avatar_state', { description: 'Read character state and connection information.', inputSchema: {} }, async () => result(service.getState()));
@@ -20,6 +22,6 @@ export async function handleMcp(req, res, parsedBody, service) {
   res.on('close', () => { transport.close().catch(() => {}); server.close().catch(() => {}); });
   await server.connect(transport);
   const clientName = parsedBody?.method === 'initialize' ? parsedBody.params?.clientInfo?.name : null;
-  if (clientName) service.bridgeSeen(String(clientName).slice(0, 80));
+  if (typeof parsedBody?.method === 'string') service.bridgeSeen(typeof clientName === 'string' ? clientName.slice(0, 80) : null);
   await transport.handleRequest(req, res, parsedBody);
 }

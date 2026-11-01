@@ -1,14 +1,18 @@
 # 智能体与语音接入
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.17.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.18.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
 ## Codex 与 DeepSeek Harness 共用角色
 
-首次安装的 `provider` 为 `unconfigured`，不自动选择任何对话宿主。外部智能体仍可连接 MCP 并直接使用角色工具；只有要从桌宠聊天窗口发起模型对话时，才需要配置来源。接入智能体在用户要求安装／接入的授权范围内，可通过带配对码的 `PUT /api/settings` 设置 `{"provider":"dsh"}`、`{"provider":"codex"}`，或配置 `provider:"api"` 及对应地址、模型、密钥。切回 `{"provider":"unconfigured"}` 保留已有配置字段。DSH 桥注册不会自动替用户切换来源；已有来源的升级安装不重置选择。
+首次安装保存 `provider:"unconfigured", providerSource:"auto"`。有效来源由服务端解析：可用 DSH 聊天桥优先；只检测到 DSH MCP 时显示表演已连接、聊天桥未启用；没有 DSH 时保持未连接。自动模式不检测或调用 Codex。DSH 聊天桥使用过后由 `autoProvider:"dsh"` 记忆来源，断线和重启保持 DSH，不改走其他提供方。
 
-未配置时调用 `/api/chat` 返回 HTTP 409、`PROVIDER_NOT_CONFIGURED`，不进入思考、不启动提供方、不追加历史。界面显示“待接入”，保留输入草稿；保存来源或收到智能体的配置更新后自动刷新。配对码、密钥不应写入示例或日志。
+`GET /api/settings`、`GET /api/state` 返回同一连接快照：`providerEffective`、`providerSource`、`providerReason`、`chatAvailable`、`chatStatus`、`chatMessage`，以及独立的 `performance` 和 `dsh`。客户端显示／发送判断使用有效来源和 `chatAvailable`，不要只看保存的 `provider`。`performance.connected` 表示最近 65 秒的已认证 MCP 活动；它是无会话 Streamable HTTP 的活动判定，不能证明聊天桥在线。`dsh.chatAvailable` 还要求实际聊天桥声明 Session Controller 可用，模型凭据问题在真实请求时单独报告。
+
+有用户接入授权时，可通过带配对码的 `PUT /api/settings` 设置 `{"provider":"dsh","providerSource":"user"}`、`{"provider":"codex","providerSource":"user"}`，或配置 API 及地址、模型、密钥。旧客户端只提交 `provider` 也视为手动选择。恢复自动模式使用 `{"provider":"unconfigured","providerSource":"auto"}`；明确停用内置对话使用 `{"provider":"unconfigured","providerSource":"user"}`，均保留其他配置。运行时状态广播不覆盖设置页未保存的编辑。
+
+旧配置没有 `providerSource` 时，无法证明保存的 Codex 是默认还是手动选择；升级保守保留已有有效提供方，用户可选择一次自动模式。未配置请求返回 `PROVIDER_NOT_CONFIGURED`；DSH 连接／凭据／取消问题返回 DSH 专属错误，不进入 Codex 适配器。不可用时禁用发送，草稿和外部 MCP 表演仍保留。配对码、密钥和原始错误输出不进入示例或日志。
 
 两者连接同一个 `/mcp`，不需要各启动一份角色。工具包括 `avatar_capabilities`、`avatar_state`、`avatar_perform`、`avatar_expression`、`avatar_body`、`avatar_speak`、`avatar_set_state`、`avatar_stop`、`avatar_reset`、`avatar_watch_context`。动作工具立即返回接受状态；桌宠窗口负责实际动画和逐段朗读。
 

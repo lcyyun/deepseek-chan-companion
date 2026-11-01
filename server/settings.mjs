@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { DEFAULT_TTS, getTtsProvider, TTS_PROVIDERS } from './tts-settings.mjs';
 
 export const DEFAULT_SETTINGS = {
-  provider: 'unconfigured', baseUrl: 'https://api.deepseek.com', model: '', apiKey: '',
+  provider: 'unconfigured', providerSource: 'auto', autoProvider: null, baseUrl: 'https://api.deepseek.com', model: '', apiKey: '',
   codexCommand: 'codex', codexModel: '', webSearch: true, verbosity: 'brief', voiceEnabled: true,
   tts: DEFAULT_TTS,
   watch: { enabled: false, ttlMs: 120000 },
@@ -23,6 +23,11 @@ export async function createSettingsStore({ dataDir, encrypt, decrypt }) {
     settings = { ...settings, ...saved.settings, apiKey: secrets.apiKey || '', tts: { ...settings.tts, ...saved.settings?.tts, apiKey: secrets.ttsKey || '' }, watch: { ...settings.watch, ...saved.settings?.watch, enabled: false } };
     settings.tts.provider = getTtsProvider(saved.settings?.tts);
     settings.tts.enabled = settings.tts.provider === 'api';
+    // Old versions did not distinguish a default from a saved choice. Preserve
+    // valid saved providers conservatively rather than changing a user's host.
+    settings.providerSource = ['auto', 'user'].includes(saved.settings?.providerSource) ? saved.settings.providerSource
+      : ['api', 'codex', 'dsh'].includes(saved.settings?.provider) ? 'user' : 'auto';
+    settings.autoProvider = saved.settings?.autoProvider === 'dsh' ? 'dsh' : null;
   } catch (err) { if (err.code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err; }
   // An absent/invalid old provider must never silently launch a model CLI.
   // Valid saved choices are intentional user/agent configuration and survive upgrades.
@@ -35,11 +40,20 @@ export async function createSettingsStore({ dataDir, encrypt, decrypt }) {
     const { apiKey: ttsKey, ...tts } = rest.tts;
     return { ...rest, tts, hasApiKey: Boolean(apiKey), hasTtsKey: Boolean(ttsKey), secretsPersisted: Boolean(encrypt && decrypt) };
   }
-  async function applyUpdate(patch) {
+  async function applyUpdate(patch, automaticProvider) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('设置格式错误。');
     const next = structuredClone(settings);
+    if (automaticProvider) {
+      if (next.providerSource !== 'auto' || next.autoProvider === automaticProvider) return publicSettings();
+      next.autoProvider = automaticProvider;
+    }
     for (const field of ['provider', 'baseUrl', 'model', 'codexCommand', 'codexModel', 'verbosity']) if (patch[field] !== undefined) next[field] = String(patch[field]).slice(0, 2000);
     if (!PROVIDERS.includes(next.provider)) throw new Error('provider须为unconfigured、api、codex或dsh。');
+    if (patch.providerSource !== undefined) {
+      if (!['auto', 'user'].includes(patch.providerSource)) throw new Error('providerSource须为auto或user。');
+      next.providerSource = patch.providerSource;
+      if (next.providerSource === 'auto' && settings.providerSource !== 'auto') next.autoProvider = null;
+    } else if (patch.provider !== undefined) next.providerSource = 'user';
     if (!['brief', 'balanced', 'detailed'].includes(next.verbosity)) throw new Error('回复长度设置无效。');
     if (patch.apiKey !== undefined) next.apiKey = String(patch.apiKey);
     if (patch.webSearch !== undefined) next.webSearch = Boolean(patch.webSearch);
@@ -76,5 +90,9 @@ export async function createSettingsStore({ dataDir, encrypt, decrypt }) {
   }
   let writeQueue = Promise.resolve();
   function update(patch) { const result = writeQueue.then(() => applyUpdate(patch)); writeQueue = result.catch(() => {}); return result; }
-  return { get: () => structuredClone(settings), public: publicSettings, update };
+  function rememberAutoProvider(provider) {
+    if (provider !== 'dsh') return Promise.reject(new Error('Only DSH can be selected automatically.'));
+    const result = writeQueue.then(() => applyUpdate({}, provider)); writeQueue = result.catch(() => {}); return result;
+  }
+  return { get: () => structuredClone(settings), public: publicSettings, update, rememberAutoProvider, flush: () => writeQueue };
 }

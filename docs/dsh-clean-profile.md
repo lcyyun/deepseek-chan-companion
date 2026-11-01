@@ -1,6 +1,6 @@
 # DSH 干净 profile 接入与受限环境验收
 
-适用于大肥鱼 0.16.0。用户已反馈在 **DeepSeek Harness 0.2.1-rc.2 的全新 profile** 中完成真实端到端验证：MCP 十个工具、状态桥、双向聊天和真实模型渲染均正常。该记录来自用户实机验收；本仓库的自动测试分别验证协议、路径隔离与桌面行为，不将模拟 Session Controller 的结果称作真实 DSH 账号验证。
+适用于大肥鱼 0.18.0。用户此前已反馈在 **DeepSeek Harness 0.2.1-rc.2 的全新 profile** 中完成真实端到端验证：MCP 十个工具、状态桥、双向聊天和真实模型渲染均正常。该记录来自用户实机验收；0.18 新增的来源解析、断线重连与错误分流使用隔离测试宿主验收，不将自动测试称作真实 DSH 账号验证。
 
 ## 1. 先选择运行环境
 
@@ -95,7 +95,10 @@ dsh web --patch $dshPatch
 | 状态与模型 | `avatar_state` 的模型 ready；现场能看见真实模型渲染 |
 | 表情／动作 | 分别调用 `avatar_expression`、`avatar_body`、`avatar_perform`，角色确实表现，预览结束后恢复 |
 | 状态桥 | 普通 DSH 回合开始后显示思考，结束后恢复；自身角色工具不递归触发 |
-| 双向聊天 | 桌宠设置选择 DSH，`dsh.connected=true`；在悬浮聊天窗提问，获得真实模型回复并播放 |
+| 双向聊天 | 自动模式下 `providerEffective=dsh`、`dsh.chatAvailable=true`、`chatAvailable=true`；在悬浮聊天窗提问，获得真实模型回复并播放 |
+| MCP-only | 只连接 MCP 时显示表演已连接／聊天桥未启用，发送禁用，不启动 Codex |
+| 断线重连 | 断开桥后仍显示 DSH，保留草稿并禁用发送；重连后自动恢复 |
+| 手动来源 | 显式 API／Codex 不被 DSH 接入覆盖；显式 DSH 重启后保持。Codex 不自动选择 |
 | 隔离 | 专用会话 cwd 位于本次 home，常用 home 下没有因此新建 `live2d-companion` |
 | 停止 | 生成／朗读中停止后取消对应回合，不补播旧回复 |
 
@@ -108,6 +111,8 @@ dsh web --patch $dshPatch
 | Electron `0x80000003` | 用户在 DSH 作业／管道环境观察到的启动失败。仅凭退出码无法确定 Chromium 内部根因；CI 入口不启动 Electron，真实桌面检查移到正常 Windows 会话 |
 | .NET 查不到父进程 PID | 观察器需要父进程可见性来保证随主进程退出；不要移除这个约束或把读取失败当作鼠标松开验证通过。CI 保留注入假进程的协议／故障释放测试，真实观察器在桌面入口检查 |
 | `spawn EPERM` | 常规 Vite/esbuild、原生解压或辅助进程启动被限制；源码构建改用 restricted 入口，桌面程序本身仍需要相应运行环境 |
-| 桥已心跳，但不能聊天 | 查看 `dsh.connected`；检查 `chat:true`、Session Controller、专用会话模型配置。MCP 连通与双向聊天是不同通路 |
+| 桥已心跳，但不能聊天 | 查看 `providerEffective`、`chatAvailable`、`dsh.chatAvailable`；检查 `chat:true`、Session Controller、专用会话模型配置。状态心跳和 MCP 都不是聊天可用证明 |
+| 升级后仍显示旧 Codex | 旧文件没记录是否手选，升级保留已有来源。设置中选一次“自动 · 优先 DeepSeek Harness”并保存；不要删除模型／配对配置 |
+| Codex 已登录却初始化失败 | 仅在手动 Codex 模式查 `CODEX_PERMISSION_DENIED/INIT_FAILED`、安全诊断摘要与退出码；登录成功不代表作业可以启动进程或访问临时目录 |
 
 记录验收结果时分别写明 DSH 版本、测试 profile、模型提供方、MCP／聊天／搜索／渲染结果，以及使用的测试命令。保留脱敏错误和退出码，不记录配对码、API Key 或私人聊天正文。

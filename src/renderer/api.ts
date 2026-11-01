@@ -8,7 +8,7 @@ export async function initialize() {
 export function credentials() { return boot; }
 export async function api(path: string, data?: unknown, method?: string, signal?: AbortSignal) {
   const response = await fetch(boot.url + path, {method: method || (data === undefined ? 'GET' : 'POST'), headers: {'Authorization':`Bearer ${boot.token}`, ...(data===undefined?{}:{'Content-Type':'application/json'})}, body:data===undefined?undefined:JSON.stringify(data), signal});
-  if(!response.ok){let message=`请求失败 (${response.status})`;try{const e=await response.json();message=e.error?.message||e.error||e.message||message;}catch{};throw new Error(String(message));}
+  if(!response.ok){let message=`请求失败 (${response.status})`,code='REQUEST_FAILED';try{const e=await response.json();message=e.error?.message||e.error||e.message||message;code=String(e.code||code);}catch{};throw Object.assign(new Error(String(message)),{code,status:response.status});}
   if(response.status===204)return null;
   return response.json();
 }

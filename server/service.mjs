@@ -10,6 +10,7 @@ import { createSettingsStore } from './settings.mjs';
 import { apiChat, codexChat, generateSpeech, listSystemVoices } from './adapters.mjs';
 import { handleMcp } from './mcp.mjs';
 import { createDshManager } from './dsh-manager.mjs';
+import { resolveProvider } from './provider-resolution.mjs';
 
 const MAX_BODY = 1024 * 1024;
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.wasm': 'application/wasm', '.moc3': 'application/octet-stream', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg' };
@@ -59,7 +60,7 @@ async function scanManifest(root) {
   return { modelUrl: `/model/${encodeURIComponent(model)}`, modelFile: model, expressions, motions, capabilities: CAPABILITIES };
 }
 
-export async function createService({ port = 39181, modelRoot, dataDir, staticRoot, encrypt, decrypt, chatAdapters } = {}) {
+export async function createService({ port = 39181, modelRoot, dataDir, staticRoot, encrypt, decrypt, chatAdapters, connectionLeaseMs = 65000 } = {}) {
   if (!dataDir) throw new Error('createService requires dataDir');
   await mkdir(dataDir, { recursive: true });
   const tokenFile = join(dataDir, 'bridge-token');
@@ -76,7 +77,17 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   const ttsControllers = new Set();
   const connections = new Set();
   const bridges = new Map();
-  const dsh = createDshManager(() => emit('state', { state: getState() }));
+  const mcpClients = new Map(), mcpScopes = new Map();
+  const leaseMs = Math.max(50, Math.min(300000, Number(connectionLeaseMs) || 65000));
+  let connectionSignature = '', rememberPending = false;
+  const dsh = createDshManager(() => {
+    const state = dsh.state();
+    if ((state.chatAvailable || state.connected && state.chatAvailable === undefined) && store.get().providerSource === 'auto' && store.get().autoProvider !== 'dsh' && !rememberPending) {
+      rememberPending = true;
+      void store.rememberAutoProvider('dsh').catch(() => {}).finally(() => { rememberPending = false; if (!stopped) publishConnections(); });
+    }
+    publishConnections();
+  });
   function emit(type, data = {}) {
     const event = { type, at: Date.now(), ...data };
     events.emit('event', event);
@@ -94,11 +105,48 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     if (!enabled) { watchSessionId = null; clearWatchContext(); }
     else if (!wasEnabled) { watchSessionId = randomUUID(); clearWatchContext(); }
   }
+  function performanceState() {
+    const live = [...mcpClients].filter(([, info]) => Date.now() - info.lastSeen < leaseMs);
+    return { connected: live.length > 0, dshConnected: live.some(([name]) => /dsh|deepseek[\s_-]*harness/i.test(name)),
+      clients: live.map(([name]) => name), lastSeen: live.length ? Math.max(...live.map(([, info]) => info.lastSeen)) : null,
+      leaseMs };
+  }
+  function connectionState() {
+    const performance = performanceState(), dshState = dsh.state();
+    return { ...resolveProvider(store.get(), { dsh: dshState, performance }), performance, dsh: dshState };
+  }
+  function publicSettings() { return { ...store.public(), ...connectionState() }; }
+  function publishConnections() {
+    if (stopped) return;
+    const value = connectionState();
+    // Last activity timestamps are for diagnostics, not a reason to reset UI forms.
+    const signature = JSON.stringify({ ...value, performance: { ...value.performance, lastSeen: null } });
+    if (signature === connectionSignature) return;
+    connectionSignature = signature;
+    emit('state', { state: getState() });
+  }
+  function noteMcpActivity(name, req) {
+    const scope = `${req.socket.remoteAddress || ''}|${String(req.headers['user-agent'] || '').slice(0, 160)}`;
+    if (name) {
+      name = name.replace(/[\u0000-\u001f]/g, '').slice(0, 80);
+      const identities = mcpScopes.get(scope) || new Set(); identities.add(name); mcpScopes.set(scope, identities);
+    } else {
+      const identities = mcpScopes.get(scope);
+      // Stateless HTTP has no stable per-client session ID. If several clients
+      // share this scope, renew only generic MCP activity rather than guessing.
+      name = identities?.size === 1 ? [...identities][0] : 'MCP client';
+    }
+    const lastSeen = Date.now();
+    mcpClients.set(name, { lastSeen });
+    bridges.set(`mcp:${name}`, { lastSeen, kind: 'mcp', clientName: name });
+    for (const registry of [mcpClients, mcpScopes, bridges]) while (registry.size > 128) registry.delete(registry.keys().next().value);
+    publishConnections();
+  }
   function getState() {
     return { state: currentState, status: currentState, busy: Boolean(activeRequest), requestId: activeRequest?.id ?? null, lastCommand, latestReply,
       model: { ready: Boolean(manifest), error: modelError, modelUrl: manifest?.modelUrl || null },
       watch: { ...store.get().watch, sessionId: watchSessionId, hasContext: Boolean(freshContext()) },
-      dsh: dsh.state(),
+      ...connectionState(),
       bridges: [...bridges].filter(([,b]) => Date.now() - b.lastSeen < 65000).map(([id,b]) => ({ id, ...b })),
       clients: [...connections].filter(w => w.authenticated).length };
   }
@@ -137,9 +185,13 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   function hostAllowed(req) { const p = new URL(url).port; return [`127.0.0.1:${p}`, `localhost:${p}`].includes(req.headers.host); }
   async function runChat(payload) {
     if (typeof payload.text !== 'string' || !payload.text.trim() || payload.text.length > 12000) throw error('请输入有效问题（最多12000字符）。');
-    const settings = store.get();
+    const route = connectionState();
+    const settings = { ...store.get(), provider: route.providerEffective };
     const adapters = { api: apiChat, codex: codexChat, dsh: dsh.chat };
-    if (!Object.hasOwn(adapters, settings.provider)) throw error('尚未配置对话来源。请让你的智能体完成接入，或在设置中选择 API、Codex 或 DeepSeek Harness。', 'PROVIDER_NOT_CONFIGURED', 409);
+    if (!Object.hasOwn(adapters, settings.provider)) throw error('尚未配置对话来源。请让你的智能体完成接入，或在设置中手动选择对话来源。', 'PROVIDER_NOT_CONFIGURED', 409);
+    if (!route.chatAvailable) throw Object.assign(error(route.chatMessage, settings.provider === 'dsh'
+      ? route.chatStatus === 'disconnected' && (route.dsh.everConnected || store.get().autoProvider === 'dsh') ? 'DSH_BRIDGE_DISCONNECTED' : 'DSH_CHAT_NOT_CONNECTED'
+      : 'API_NOT_CONFIGURED', 409), { provider: settings.provider });
     const adapter = chatAdapters?.[settings.provider] || adapters[settings.provider];
     const mode = payload.mode || 'chat';
     if (!['chat', 'watch'].includes(mode)) throw error('不支持的对话模式。');
@@ -149,6 +201,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     const controller = new AbortController();
     controller.id = randomUUID();
     controller.mode = mode;
+    controller.provider = settings.provider;
     controller.contextVersion = contextVersion;
     activeRequest = controller;
     currentState = 'thinking';
@@ -157,7 +210,8 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     const timeout = setTimeout(() => controller.abort(), 185000);
     timeout.unref?.();
     const isCurrent = () => activeRequest === controller && !controller.signal.aborted;
-    const requireCurrent = () => { if (!isCurrent()) throw error('请求已取消。', 'CANCELLED', 499); };
+    const cancelled = () => Object.assign(error(settings.provider === 'dsh' ? 'DSH 回合已取消。' : '请求已取消。', settings.provider === 'dsh' ? 'DSH_TURN_CANCELLED' : 'CANCELLED', 499), { provider: settings.provider });
+    const requireCurrent = () => { if (!isCurrent()) throw cancelled(); };
     const progress = data => { if (isCurrent()) emit('chat-progress', { ...data, requestId: controller.id }); };
     try {
       const adapterOptions = { settings, request, history: [...history], signal: controller.signal, dataDir, onProgress: progress };
@@ -190,7 +244,10 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
       return reply;
     } catch (err) {
       if (activeRequest === controller) currentState = controller.signal.aborted ? 'idle' : 'error';
-      if (!isCurrent()) throw error('请求已取消。', 'CANCELLED', 499);
+      if (!isCurrent()) throw cancelled();
+      err.provider = settings.provider;
+      if (settings.provider !== 'codex' && String(err.code || '').startsWith('CODEX_')) throw Object.assign(error(settings.provider === 'dsh'
+        ? 'DSH 未完成回复。请在 Harness 中检查模型配置和聊天桥状态。' : '对话 API 未完成回复，请检查 API 配置。', settings.provider === 'dsh' ? 'DSH_CHAT_FAILED' : 'PROVIDER_HTTP_ERROR', 502), { provider: settings.provider });
       throw err;
     } finally {
       clearTimeout(timeout);
@@ -211,18 +268,22 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
       const target = new URL(req.url, url);
       const path = target.pathname;
       if ((path.startsWith('/api/') || path.startsWith('/model/') || path === '/mcp') && !authenticated(req, target)) return send(res, 401, { error: '需要配对码。', code: 'UNAUTHORIZED' });
-      if (path === '/mcp') return await handleMcp(req, res, req.method === 'POST' ? await body(req) : undefined, { dispatch, getState, capabilities: CAPABILITIES, freshContext, bridgeSeen(name) { bridges.set(name, { lastSeen: Date.now(), kind: 'mcp' }); } });
+      if (path === '/mcp') return await handleMcp(req, res, req.method === 'POST' ? await body(req) : undefined, { dispatch, getState, capabilities: CAPABILITIES, freshContext, bridgeSeen(name) { noteMcpActivity(name, req); } });
       if (path === '/api/state' && req.method === 'GET') return send(res, 200, getState());
       if (path === '/api/capabilities' && req.method === 'GET') return send(res, 200, CAPABILITIES);
-      if (path === '/api/settings' && req.method === 'GET') return send(res, 200, store.public());
+      if (path === '/api/settings' && req.method === 'GET') return send(res, 200, publicSettings());
       if (path === '/api/settings' && ['PUT', 'POST'].includes(req.method)) {
         const patch = await body(req);
         if (patch.modelRoot) await setModelRoot(patch.modelRoot);
         const wasEnabled = store.get().watch.enabled;
-        const settings = await store.update(patch);
+        const previousProvider = connectionState().providerEffective;
+        await store.update(patch);
+        if (store.get().providerSource === 'auto' && dsh.state().chatAvailable) await store.rememberAutoProvider('dsh');
+        const settings = publicSettings();
+        if (previousProvider !== settings.providerEffective) { activeRequest?.abort(); history.length = 0; }
         updateWatchSession(wasEnabled, settings.watch.enabled);
         if (wasEnabled !== settings.watch.enabled) emit('watch', { watch: { ...settings.watch, sessionId: watchSessionId, hasContext: Boolean(freshContext()) } });
-        emit('settings', { settings }); return send(res, 200, settings);
+        emit('settings', { settings }); publishConnections(); return send(res, 200, settings);
       }
       if (path === '/api/model-manifest' && req.method === 'GET') { if (!manifest) throw error(modelError || '尚未配置模型。', 'MODEL_NOT_CONFIGURED', 409); return send(res, 200, manifest); }
       if (path === '/api/command' && req.method === 'POST') return send(res, 202, dispatch(await body(req)));
@@ -282,7 +343,12 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
       const status = err.status || (err.code === 'ENOENT' ? 404 : 500);
       // Do not leak paths, command output, provider response bodies, or credentials.
       const message = err.status || ['INVALID_MODEL_OUTPUT', 'EMPTY_MODEL_OUTPUT', 'CODEX_EXEC_FAILED', 'PROVIDER_HTTP_ERROR'].includes(err.code) ? err.message : status === 404 ? '文件不存在。' : '请求失败，请检查设置后重试。';
-      send(res, status, { error: message, code: err.code || 'INTERNAL_ERROR' });
+      const details = ['api', 'codex', 'dsh'].includes(err.provider) ? { provider: err.provider } : {};
+      if (err.provider === 'codex' && String(err.code || '').startsWith('CODEX_')) {
+        if (Number.isInteger(err.exitCode) || err.exitCode === null) details.exitCode = err.exitCode;
+        if (typeof err.diagnostic === 'string') details.diagnostic = err.diagnostic.slice(0, 500);
+      }
+      send(res, status, { error: message, code: err.code || 'INTERNAL_ERROR', ...details });
     }
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
@@ -315,14 +381,17 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   });
   await new Promise((resolveListen, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.off('error', reject); resolveListen(); }); });
   url = `http://127.0.0.1:${server.address().port}`;
+  connectionSignature = JSON.stringify({ ...connectionState(), performance: { ...performanceState(), lastSeen: null } });
+  const connectionTimer = setInterval(publishConnections, Math.min(1000, Math.max(25, leaseMs / 2))); connectionTimer.unref?.();
   return {
     url, token, events, dispatch, getState, setModelRoot, get settings() { return store.get(); },
     async close() {
-      if (stopped) return; stopped = true;
+      if (stopped) return; stopped = true; clearInterval(connectionTimer);
       activeRequest?.abort(); for (const controller of ttsControllers) controller.abort();
       for (const ws of connections) ws.terminate();
       wss.close(); server.closeAllConnections();
       await new Promise(r => server.close(r));
+      await store.flush();
     },
   };
 }

@@ -2,7 +2,11 @@
 
 在 Windows 桌面陪你聊天、做小动作、一起看网页的 Live2D 平台。角色文件从本机加载，大模型通过结构化指令驱动表情、视线和已有手势；声音按实际播放音频驱动嘴型。
 
-**当前版本：0.17.0。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+**当前版本：0.18.0。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+
+0.18 修复“对话来源”和“回复节奏”的下拉显示，改为窗口内的可滚动选项面板。聊天窗口分别显示 **表演：MCP 状态** 和 **对话：当前来源**。首次使用自动模式，DSH 聊天桥就绪后自动接入；仅连 MCP 时提示启用 `chat: true`，断线后保留 DSH 并等待重连。Codex 只由用户手动选择，不做自动回退。手动来源优先，切换设置后保存生效。
+
+旧版配置没有记录来源是否手动选择，因此升级会保留已保存的 API／Codex／DSH；若仍显示旧的 Codex 来源，在设置中选择一次“自动 · 优先 DeepSeek Harness”并保存即可。模型、配对码、声音及其他偏好不受影响。
 
 0.17 增加悬浮球右键菜单，可暂时隐藏角色或选择“退出大肥鱼”关闭整个程序。首次启动对话来源为“未配置”，由用户自己的智能体完成接入，或在设置中手动选择；配置前不会尝试调用 Codex。升级保留已有来源、凭据和模型设置。
 
@@ -72,7 +76,7 @@ npm test
 
 `npm test` / `npm run test:ci` 默认在当前 Node 进程检查行为、配置、MCP 和桥接，不启动 Electron、原生鼠标观察器或模型 CLI；需要可写临时目录和回环端口。真实桌面检查用正常 Windows 会话中的 `npm run test:desktop`，完整回归用 `npm run test:all`。受限构建使用 Rollup + TypeScript 及 JavaScript 解压，不需要管理员权限；桌面运行和打包仍需相应的 Windows 环境。干净安装、`spawn EPERM` 和 `0x80000003` 的说明见 [DSH 环境准备](docs/dsh-clean-profile.md)。
 
-打开悬浮球 → 设置 → 桌宠与模型，选择包含 `.model3.json` 的模型文件夹。首次启动显示“待接入”，可以让自己的智能体按[接入指南](docs/agent-integration.md)配置聊天来源，也可以在设置中手动选择 API、DSH 或 Codex。仅看桌宠、预览表情、摸头、敲盆，以及由外部智能体通过 MCP 操控角色，都不要求选择桌宠聊天来源。完整双向聊天与搜索取决于所选提供方。
+打开悬浮球 → 设置 → 桌宠与模型，选择包含 `.model3.json` 的模型文件夹。首次启动使用“自动 · 优先 DeepSeek Harness”：检测到可用聊天桥后显示 DSH，未接入时显示“未连接”。也可以让自己的智能体按[接入指南](docs/agent-integration.md)配置，或手动选择 API、DSH、Codex。仅看桌宠、预览表情、摸头、敲盆，以及由外部智能体通过 MCP 操控角色，都不要求聊天桥可用。表演与对话连接分别显示，完整双向聊天与搜索取决于所选提供方。
 
 仓库不含 `node_modules`、Cubism SDK 下载缓存、生成的渲染库、便携发行包、模型原件、用户配置或登录凭据。安装依赖和运行 `setup:live2d` 会重建必要运行库；便携包使用后文命令生成。模型授权和第三方许可证不会因为仓库私有而改变。
 

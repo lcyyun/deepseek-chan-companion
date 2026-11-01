@@ -1,8 +1,16 @@
 # 大肥鱼 · 项目维护与代码导读
 
-本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.17.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
+本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.18.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
 
-0.17 首次启动使用 `provider:unconfigured`，服务在进入思考／取消旧请求／记录历史之前拒绝未配置的 `/api/chat`，不回退到 Codex。已有保存来源继续保留；外部 MCP 操控和本地互动不依赖聊天来源。界面监听 `settings` 广播后刷新来源与发送状态，未配置时保留输入草稿。回归见 `server.test.mjs` 与 `desktop-provider.test.mjs`。
+0.18 由 `server/provider-resolution.mjs` 统一解析有效来源，首次配置为 `provider:unconfigured, providerSource:auto`。自动模式仅接 DSH；显式选择始终优先。`autoProvider:dsh` 独立记录用过的自动桥，断线／重启保持 DSH，不混淆“默认”和“用户选择”。服务在进入思考／取消旧请求／追加历史前检查 `chatAvailable`；请求绑定启动时的有效提供方，显式切换取消旧请求。
+
+`/api/state` 和 `/api/settings` 返回相同连接字段：`providerEffective/providerSource/providerReason/chatAvailable/chatStatus/chatMessage/performance/dsh`。MCP 使用无会话 Streamable HTTP，表演状态依据最近 65 秒已认证活动续租；状态插件心跳单独记录。相同来源范围存在多个无法区分的客户端时只续租通用 MCP 状态，不猜客户端身份。桥就绪由 `chat:true` 和 Session Controller 可用声明判断，不能从 MCP 或心跳推导聊天可用。
+
+前端将连接状态与持久设置分开保存：`state` 广播只更新双通道状态、禁用发送与来源文案，不重置设置页未保存表单；`settings` 广播才刷新保存值。`SettingsSelect` 将两处下拉渲染到 body 的 DOM 弹层，按可用空间上下展开、滚动及键盘选项导航，避免透明 Electron 窗口原生弹出面板的焦点／裁切问题。
+
+DSH 插件只回传有界的错误代码，manager 将凭据、取消、断线、格式等归到 DSH 白名单，不能注入 Codex 文案。Codex 仅手动调用，stderr 最多保留内存末 16 KB 用于 `codex-diagnostics.mjs` 静态分类，不持久化或返回原文；HTTP 返回安全摘要与退出码。`chat-error-message.mjs` 再按有效来源处理前端提示，并忽略旧来源迟到错误。回归见 `provider-resolution.test.mjs`、`provider-errors.test.mjs`、`chat-error-message.test.mjs`、`desktop-provider.test.mjs`、`desktop-settings-select.test.mjs`。
+
+旧文件缺少 `providerSource` 时，无法判定已保存的 Codex 是默认还是手选，所以保守保留有效来源为手动；无来源和旧 `unconfigured` 进入自动模式。用户可选择一次“自动 · 优先 DeepSeek Harness”完成迁移，不应为修复来源删除整份配置。
 
 悬浮球右键通过只允许 toggle 窗口使用的 `toggle-menu` IPC 打开主进程原生菜单，避免菜单被小透明窗口裁切。打开前取消旧拖动和指针捕获；“退出大肥鱼”调用 `app.quit()`，统一走 `before-quit` 保存位置、停止观察器、注销快捷键及关闭服务，三个窗口随应用退出。右键退出与端口释放由 `desktop-toggle.test.mjs` 验证。
 

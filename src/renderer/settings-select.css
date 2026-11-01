@@ -1,0 +1,16 @@
+.settings-select{display:flex;flex-direction:column;gap:7px;margin:0 0 15px;min-width:0}
+.settings-select>label{font-size:11px;color:#687f9b;line-height:1.5}
+.settings-select-trigger{-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:37px;padding:8px 10px;border:1px solid #dce6f2;border-radius:8px;background:#fff;color:#465f7e;text-align:left;font-size:12px;line-height:1.5}
+.settings-select-trigger>span:first-child{min-width:0;overflow-wrap:anywhere}
+.settings-select-trigger[aria-expanded=true]{border-color:#83aef0;box-shadow:0 0 0 3px #3c7ee814}
+.settings-select-chevron{flex:none;font-size:16px;line-height:1;color:#7b96b7}
+.settings-select-menu{-webkit-app-region:no-drag;position:fixed;z-index:1200;box-sizing:border-box;overflow-y:auto;overscroll-behavior:contain;padding:4px;border:1px solid #bcd2ed;border-radius:10px;background:#fff;box-shadow:0 5px 20px #24486f24;scrollbar-width:thin;scrollbar-color:#cadbef transparent}
+.settings-select-option{display:flex;align-items:center;gap:10px;min-height:38px;padding:9px 10px;border-radius:6px;color:#465f7e;cursor:pointer;user-select:none;line-height:1.5}
+.settings-select-option.active{background:#eaf3ff;color:#3168af}
+.settings-select-option[aria-selected=true] strong{font-weight:650}
+.settings-select-copy{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.settings-select-copy strong{font-weight:500;font-size:12px;overflow-wrap:anywhere}
+.settings-select-copy small{font-size:10px;color:#7d8fa6;overflow-wrap:anywhere}
+.settings-select-option.unavailable{cursor:not-allowed;background:#f6f8fb;color:#8c9aac}
+.settings-select-option.unavailable small{color:#8c9aac}
+.settings-select-check{flex:none;color:#4c89df;font-size:13px}
