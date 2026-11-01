@@ -73,12 +73,8 @@ function scheduleToggleShape() {
 function setPetTopmost(next) {
   if (!pet || pet.isDestroyed()) return;
   const value = next === true;
-  if (petTopmost === value) {
-    if (value && !pet.isVisible()) pet.showInactive();
-    return;
-  }
+  if (petTopmost === value) return;
   petTopmost = value;
-  if (value && !pet.isVisible()) pet.showInactive();
   pet.setAlwaysOnTop(value, 'screen-saver');
   if (value) pet.moveTop();
 }
@@ -392,7 +388,12 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
     case 'basin-enabled':config.basinEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'basin-enabled',enabled:config.basinEnabled});return config.basinEnabled;
-    case 'watch-pin':watchPinned=data===true;syncPetTopmost();return watchPinned;
+    case 'watch-pin':{
+      const next = data === true;
+      // Show once when watch pinning turns on; a later manual hide must stay hidden.
+      if (next && !watchPinned && pet && !pet.isDestroyed() && !pet.isVisible()) pet.showInactive();
+      watchPinned = next;syncPetTopmost();return watchPinned;
+    }
     case 'glasses-enabled':config.glassesEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'});return {enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'};
     case 'glasses-style':config.glassesStyle=data==='monocle'?'monocle':'black';saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled===true,style:config.glassesStyle});return config.glassesStyle;
     case 'small-form-enabled':config.smallFormEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'small-form',enabled:config.smallFormEnabled});return config.smallFormEnabled;
