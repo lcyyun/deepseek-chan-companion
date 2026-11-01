@@ -9,6 +9,8 @@ import { ExpressionPanel } from './expression-panel';
 import { BodyAnimationPreviews } from './body-animations';
 import { createExpressionTimeline } from './expression-timeline';
 import { createGestureTimeline } from './gesture-timeline';
+import { createCombinationTimeline } from './combination-timeline';
+import { planSpeechCombination } from '../shared/speech-combination.mjs';
 import { planGestureCues, canContinueGesture } from '../shared/gesture-cues.mjs';
 import { normalizeExpressionCues } from '../shared/expression-cues.mjs';
 import { createLive2D } from './live2d';
@@ -75,6 +77,7 @@ function Pet(){
   const speakingPage=useRef('');
   const faceTimeline=useRef<ReturnType<typeof createExpressionTimeline>|null>(null),faceFrame=useRef<number|undefined>(undefined);
   const gestureTimeline=useRef<ReturnType<typeof createGestureTimeline>|null>(null);
+  const combinationTimeline=useRef<ReturnType<typeof createCombinationTimeline>|null>(null);
   const stage=useRef<HTMLElement>(null), pointer=useRef<{id:number;session:string;captured:boolean;pat:boolean;chest:boolean;x:number;y:number;startX:number;startY:number;startClientX:number;startClientY:number;travel:number;at:number;started:number}|null>(null);
   const patEnd=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const petView=useRef({scale:1,offsetX:0,offsetY:0});
@@ -101,10 +104,11 @@ function Pet(){
   function clearGestureTimeline(expected?:ReturnType<typeof createGestureTimeline>){
     if(expected&&gestureTimeline.current!==expected)return;
     gestureTimeline.current?.cancel();gestureTimeline.current=null;behavior.current?.clearSpeechGesture();
+    combinationTimeline.current?.cancel();combinationTimeline.current=null;behavior.current?.clearSpeechCombination();
   }
-  async function readWithExpressions(ms:number,turn:number,timeline:ReturnType<typeof createExpressionTimeline>,bodyTimeline:ReturnType<typeof createGestureTimeline>){
+  async function readWithExpressions(ms:number,turn:number,timeline:ReturnType<typeof createExpressionTimeline>,update:(elapsed:number,duration:number)=>void){
     const started=performance.now();
-    const frame=()=>{if(turn!==sequence.current||faceTimeline.current!==timeline)return;const elapsed=Math.min(ms,performance.now()-started)/1000;timeline.update(elapsed,ms/1000);if(gestureTimeline.current===bodyTimeline)bodyTimeline.update(elapsed,ms/1000);faceFrame.current=requestAnimationFrame(frame);};
+    const frame=()=>{if(turn!==sequence.current||faceTimeline.current!==timeline)return;const elapsed=Math.min(ms,performance.now()-started)/1000;update(elapsed,ms/1000);faceFrame.current=requestAnimationFrame(frame);};
     frame();const complete=await waitForPresentation(ms,turn);
     if(faceTimeline.current===timeline&&faceFrame.current!==undefined){cancelAnimationFrame(faceFrame.current);faceFrame.current=undefined;}
     return complete;
@@ -146,6 +150,7 @@ function Pet(){
     const next=enabled===true;
     if(next!==basinEnabled.current)endPointer(true);
     basinEnabled.current=next;behavior.current?.setBasinEnabled(next);
+    if(next)void basinSound.current.prepare().catch(()=>{});
     if(!next)basinSound.current.stop();
   }
   function applyModelTuning(value:any){modelTuning.current=sanitizeModelTuning(value);runtime.current?.setModelTuning(modelTuning.current,{replace:true});behavior.current?.setTuning(modelTuning.current,{replace:true});basinSound.current.setVolume(modelTuning.current.knockVolume);basinSound.current.setSound(modelTuning.current.knockSound);}
@@ -225,7 +230,8 @@ function Pet(){
   async function presentReply({reply,turn,reveal,requestId}:Presentation){
     if(turn!==sequence.current)return;
     const settingsPromise=api('/api/settings').catch(()=>null);
-    if(reveal){
+    const opening=planSpeechCombination(reply.segments[0],{frequency:modelTuning.current.gestureFrequency});
+    if(reveal&&!opening){
       // Leave a small choreography overlap so the first spoken gesture can take
       // over before an animation-frame completion callback closes the same hand.
       behavior.current?.applyCommand({type:'perform',intent:'idea',emotion:'happy',gesture:'pointer',intensity:.7,durationMs:2000,replyIntro:true});
@@ -245,18 +251,43 @@ function Pet(){
       },()=>{if(turn===sequence.current&&gestureTimeline.current===bodyTimeline)behavior.current?.clearSpeechGesture();},{
         key:`${turn}:${index}`,holdLast:canContinueGesture(scores[index].at(-1),scores[index+1]?.[0]),
         continueFirst:canContinueGesture(scores[index-1]?.at(-1),scores[index][0]),
+        fillLast:index===0&&Boolean(opening),
       });
       gestureTimeline.current=bodyTimeline;
+      const comboTimeline=createCombinationTimeline(index===0?opening:null,
+        sample=>{if(turn===sequence.current)behavior.current?.setSpeechCombination(sample);},
+        keepHands=>{if(turn===sequence.current)behavior.current?.clearSpeechCombination(keepHands);},`${turn}:${index}:combo`);
+      combinationTimeline.current=comboTimeline;
+      const playback={elapsed:0,duration:0};
+      const update=(elapsed:number,duration:number)=>{
+        if(turn!==sequence.current||faceTimeline.current!==timeline||elapsed<playback.elapsed)return;
+        playback.elapsed=elapsed;playback.duration=duration;
+        const tail=comboTimeline.update(elapsed,duration);
+        if(!tail)return;
+        timeline.update(tail.elapsed,tail.duration);
+        if(gestureTimeline.current===bodyTimeline)bodyTimeline.update(tail.elapsed,tail.duration);
+      };
       const startSegment=(voiced:boolean)=>{if(turn===sequence.current)setState(voiced?'speaking':'idle');};
       let completed=false;
       try {
-        if(settings?.voiceEnabled===false){startSegment(false);if(!await readWithExpressions(Math.min(10000,Math.max(2200,segment.text.length*150)),turn,timeline,bodyTimeline))return;}
+        if(settings?.voiceEnabled===false){startSegment(false);if(!await readWithExpressions(Math.min(10000,Math.max(2200,segment.text.length*150)),turn,timeline,update))return;}
         else {
-          try { await speaker.current.speak(segment.text,()=>{if(turn===sequence.current){startSegment(true);api('/api/command',{type:'state',state:'speaking'}).catch(()=>{});}},progress=>{if(turn===sequence.current&&faceTimeline.current===timeline){timeline.update(progress.elapsed,progress.duration);if(gestureTimeline.current===bodyTimeline)bodyTimeline.update(progress.elapsed,progress.duration);}}); }
-          catch(e:any){if(e.name==='AbortError'||turn!==sequence.current)return;setError('语音未播放：'+e.message);startSegment(false);if(!await readWithExpressions(Math.min(10000,Math.max(2200,segment.text.length*150)),turn,timeline,bodyTimeline))return;}
+          try { await speaker.current.speak(segment.text,()=>{if(turn===sequence.current){startSegment(true);api('/api/command',{type:'state',state:'speaking'}).catch(()=>{});}},progress=>update(progress.elapsed,progress.duration)); }
+          catch(e:any){
+            if(e.name==='AbortError'||turn!==sequence.current)return;
+            setError('语音未播放：'+e.message);startSegment(false);
+            // Preserve the played coordinate when a device fails mid-sentence.
+            // Restarting at zero freezes all monotonic timelines and can replay
+            // an opening which the user has already watched.
+            const base=playback.elapsed;
+            const remaining=playback.duration>base?playback.duration-base:Math.min(10,Math.max(2.2,segment.text.length*.15));
+            if(!await readWithExpressions(Math.min(10000,remaining*1000),turn,timeline,
+              (elapsed,duration)=>update(base+elapsed/duration*remaining,base+remaining)))return;
+          }
         }
         completed=turn===sequence.current;
       } finally {
+        if(combinationTimeline.current===comboTimeline){comboTimeline.finish();combinationTimeline.current=null;}
         clearFaceTimeline(timeline);
         if(gestureTimeline.current===bodyTimeline){if(completed){bodyTimeline.finish();gestureTimeline.current=null;}else clearGestureTimeline(bodyTimeline);}
       }

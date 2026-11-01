@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import { transform } from 'esbuild';
+
+const { code } = await transform(await fs.readFile(new URL('../src/renderer/combination-timeline.ts', import.meta.url), 'utf8'), { loader: 'ts', format: 'esm' });
+const { createCombinationTimeline } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+const preset = { id: 'reassure', durationMs: 4000, command: { intent: 'reassure', gesture: 'chest', emotion: 'gentle' } };
+function fixture(combination = preset) {
+  const samples = [], clears = [];
+  return { samples, clears, clock: createCombinationTimeline(combination, sample => samples.push(sample), keep => clears.push(keep), 'test') };
+}
+
+test('opening waits for playback, follows its clock once, then leaves the remainder to face/body', () => {
+  const { clock, samples, clears } = fixture();
+  assert.deepEqual(samples, []);
+  assert.equal(clock.update(0, 14), null);
+  assert.equal(clock.update(2, 14), null);
+  assert.equal(samples.at(-1).progress, .5);
+  clock.update(2, 14); clock.update(1, 14);
+  assert.equal(samples.length, 2);
+  assert.deepEqual(clock.update(4, 14), { elapsed: 0, duration: 10 });
+  assert.deepEqual(clock.update(10, 14), { elapsed: 6, duration: 10 });
+  assert.deepEqual(clears, [true]);
+  clock.finish(); clock.cancel();
+  assert.deepEqual(clears, [true]);
+});
+
+test('short clips and late arrivals skip a preset instead of truncating or replaying it', () => {
+  for (const [elapsed, duration] of [[0, 2], [1, 14]]) {
+    const { clock, samples } = fixture();
+    assert.deepEqual(clock.update(elapsed, duration), { elapsed, duration });
+    assert.deepEqual(samples, []);
+  }
+});
+
+test('stop releases an active opening once and rejects old audio callbacks', () => {
+  const { clock, samples, clears } = fixture();
+  clock.update(0, 14); clock.cancel(); clock.cancel(); clock.update(2, 14); clock.finish();
+  assert.equal(samples.length, 1);
+  assert.deepEqual(clears, [false]);
+});

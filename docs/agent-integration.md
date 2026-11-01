@@ -1,6 +1,6 @@
 # 智能体与语音接入
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、14 组独立肢体预览、朗读节奏、双向聊天桥和诊断流程。本文对应 0.12.0。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。本文对应 0.13.0。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
@@ -10,13 +10,13 @@
 
 只换表情用 `avatar_expression({emotion:"happy"})`，只做肢体用 `avatar_body({animation:"chest-right"})`；分别传 `{active:false}` 结束对应预览，不停止另一通道或说话。HTTP 使用同字段，另加 `type:"expression"` 或 `type:"body"`。身体动画 ID 以 `bodyAnimations` 能力清单为准。常规 `avatar_speak` 自带肢体编排，不必同时重复发送身体指令。
 
-### 0.12 说话肢体选择
+### 说话肢体选择
 
 `avatar_speak` 与 HTTP `type:"speak"` 新增可选 `bodyAnimation`：省略或 `auto` 使用 `intent/gesture/text` 本地规划；`none` 关闭本段说话肢体编排；具体 ID 选择对应姿态及其默认手型。左右均指画面左右。能力表 `speechGestures.bodyAnimation` 给出完整取值：
 
-`auto / none / explain / think / reassure / happy / shy / listen / chest-left / chest-right / chest-both / pointer-left / pointer-right / pointer-both / talk / compare`
+`auto / none / explain / think / reassure / happy / shy / listen / chest-left / chest-right / chest-both / pointer-left / pointer-right / talk`
 
-独立预览的字段名仍是 `animation`，只接受 14 个具体 ID，不接受 `auto/none`。其中 `talk`（娓娓道来）和 `compare`（两边说说）跟随整段实际语音或静音阅读时间，包含周期性的柔缓强调和停顿。暂停不推进，相邻相同动画和手型可跨段保持；换轮、停止或触摸会取消旧节点，不补播。预览默认 10 秒不代表说话时只播放 10 秒。
+独立预览的字段名仍是 `animation`，只接受 12 个具体 ID，不接受 `auto/none`。其中 `talk`（娓娓道来）跟随实际语音或静音阅读时间，包含周期性的柔缓强调和停顿。暂停不推进，相邻相同动画和手型可跨段保持；换轮、停止或触摸会取消旧节点，不补播。预览默认 10 秒不代表说话时只播放 10 秒。0.13 已移除 `pointer-both/compare`：显式命令会被拒绝，旧回复中的这两个值按 `auto` 兼容。
 
 显式选择具体 `bodyAnimation` 优先于旧 `gesture` 的手臂提示，因此 `bodyAnimation:"chest-right", gesture:"none"` 仍会使用右侧抚胸。选择 `bodyAnimation:"none"` 才表示不安排本段肢体；它不关闭脸部、口型或日常呼吸。全局“说话手势频率”仍有效，设为 0 时不安排自动说话肢体，极短音频也会省略完整抬手。脸部预览和 `emotion/expressionCues` 始终独立。
 
@@ -26,11 +26,25 @@
 
 上例可直接传给 `avatar_speak`，HTTP 使用时另加 `type:"speak"`。聊天提供方返回的严格 JSON schema 要求每个 `segments` 项包含 `bodyAnimation`，通常填 `auto`；旧提供方省略该字段时，服务归一化仍按 `auto` 兼容。手臂表现来自已有姿态与完整手臂镜像，并不开放自由骨骼或逐帧参数控制。
 
+### 0.13 说话开场组合
+
+`speak.combination` 与回复段落的 `combination` 可选 `auto/none` 或 `greet/explain/agree/disagree/curious/reassure/shy/playful/surprised/cuddle/think/idea`。这是已有情境预设的动作与表情组合，不是独立肢体 ID。能力表 `combinations` 提供预设元数据，`speechCombinations.selection` 提供允许值。MCP/HTTP 可省略，默认 `auto`；严格回复 schema 要求填写该字段，旧回复缺失时仍按 `auto` 兼容。
+
+每轮只考虑第一段的组合。`auto` 仅在 `bodyAnimation` 缺省或为 `auto` 时按准确 `intent` 与兼容 `emotion` 选择，不靠正文中的情绪词机械匹配；普通 `think` 不自动选回长时间等待动作。显式 `combination` 可以覆盖开场选择，结束后仍使用所选 `bodyAnimation`。`none` 只关闭开场组合；“说话手势频率”为 0 时组合与自动肢体均关闭。
+
+首段实际时长达到“组合预设时长 + 0.4 秒”才播放组合，组合和语音同时开始；短语音直接进入独立通道，不压缩完整手臂动作。组合结束后，`expressionCues` 和 `bodyAnimation` 按剩余语音的进度开始，`at:0` 指剩余部分的起点。暂停、停止和触摸遵循同一时轴与取消规则。已选组合取代旧的思考完成 `idea` 前导；没有选中组合时，原思考完成提示仍独立保留。
+
+```json
+{"text":"别着急，我们可以先把最重要的一步做好，剩下的再慢慢处理。","intent":"reassure","emotion":"gentle","gesture":"chest","bodyAnimation":"chest-right","combination":"reassure","expressionCues":[{"at":0,"emotion":"gentle","intensity":0.65}]}
+```
+
+这条 `avatar_speak` 先尝试完整的抚胸安慰组合，再在剩余语音中切换右侧抚胸与温柔脸；是否能播开场取决于实际语音时长。它不会改变“小表情”卡片的独立预览行为。
+
 先把 `L2D_BRIDGE_TOKEN` 放入启动智能体的进程环境。Codex 配置示例在 `integrations/codex/config.example.toml`；追加该节到已有配置即可，不要覆盖原配置。连接后让智能体先查询 `avatar_capabilities`。
 
 HTTP、MCP和聊天结构化回复共用能力表：`intent`支持`neutral/greet/agree/disagree/curious/explain/reassure/shy/playful/surprised/think/cuddle/idea`；`emotion`支持25种：`neutral/happy/joyful/squeezed/gentle/puzzled/curious/panic/shy/cold/sad/worried/embarrassed/playful/smug/angry/sleepy/surprised/determined/proud/relieved/love/teary/dizzy/speechless`。`cuddle`表示亲昵或撒娇，由行为层协调手臂；`idea`表示想到办法或恍然大悟；`puzzled`表示困惑。手势仍为`none/pointer/chest/foxtail`，没有`cuddle`手势。例如`POST /api/command {"type":"perform","intent":"cuddle","emotion":"gentle","gesture":"none"}`。未知命令能力会被拒绝，模型回复中的未知语义值会回退到已支持的值。
 
-`avatar_speak`及回复段落支持`expressionCues:[{at,emotion,intensity}]`，最多4项，`at`为该段实际朗读进度0–0.9，相邻至少间隔0.18；只控制脸部节奏，嘴部开合仍跟随音频。通常一段1–2个表情。单次工具返回已接受，不代表读完；连续独立朗读会替换旧回复，不应靠快速连发工具调用拼接队列。
+`avatar_speak`及回复段落支持`expressionCues:[{at,emotion,intensity}]`，最多4项，`at`为该段实际朗读进度0–0.9；若播放开场组合，则对应组合后的剩余语音进度。相邻至少间隔0.18，只控制脸部节奏，嘴部开合仍跟随音频。通常一段1–2个表情。单次工具返回已接受，不代表读完；连续独立朗读会替换旧回复，不应靠快速连发工具调用拼接队列。
 
 DeepSeek Harness 的示例在 `integrations/dsh/cordis.patch.example.yml`。校正其中绝对插件路径后，将它作为 `dsh web --patch <绝对路径>` 的覆盖层。MCP 客户端负责显式表演，附带的 Cordis 插件负责将回合开始、非角色工具调用和回合结束映射成角色状态。状态观察部分只发送会话ID和状态，不上传会话正文；下述双向聊天桥会把桌宠问题及已授权页面内容交给DSH，并回传该回合的回答。多会话时可用 `sessionId` 限定状态观察来源。桌宠关闭不会阻断DSH。
 

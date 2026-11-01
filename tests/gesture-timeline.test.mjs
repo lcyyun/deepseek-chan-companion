@@ -93,3 +93,14 @@ test('continuous carry keeps advancing instead of freezing the hand on a held fr
   assert.equal(second.seen.at(-1).hold, false);
   second.timeline.cancel(); assert.equal(second.cleared.length, 1);
 });
+
+
+test('the final body score fills speech remaining after an opening combination', () => {
+  const { timeline, seen, cleared } = fixture([{ ...cue(), id: 'reassure', gesture: 'chest' }], { fillLast: true });
+  timeline.update(0, 20); timeline.update(12, 20);
+  assert.equal(cleared.length, 0);
+  assert.equal(seen.at(-1).durationMs, 20000);
+  assert.equal(seen.at(-1).progress, .6);
+  timeline.update(20, 20); timeline.finish();
+  assert.equal(cleared.length, 1);
+});

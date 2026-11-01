@@ -5,6 +5,8 @@ interface GestureTimelineOptions {
   /** Consecutive segments with the same final/first pose need no arm round-trip. */
   holdLast?: boolean;
   continueFirst?: boolean;
+  /** After a complete opening, let the final body score span the remaining speech. */
+  fillLast?: boolean;
   key?: string;
 }
 interface ScheduledGesture { cue: GestureCue; index: number; start: number; end: number; duration: number; hold: boolean }
@@ -49,7 +51,7 @@ export function createGestureTimeline(
       const previous = items.at(-1);
       if (previous && start < previous.end + .45) continue;
       const nextStart = safeCues[index + 1] ? safeCues[index + 1].at * duration - .7 : duration;
-      const span = cue.continuous ? Math.max(minimum, Math.min(duration, nextStart) - start)
+      const span = cue.continuous || options.fillLast && index === safeCues.length - 1 ? Math.max(minimum, Math.min(duration, nextStart) - start)
         : Math.min(cue.gesture === 'none' ? 3.2 : 4.2, duration - start - .15);
       items.push({ cue, index, start, end: start + span, duration: span, hold: false });
     }

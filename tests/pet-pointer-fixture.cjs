@@ -25,7 +25,7 @@ const stubs = {
   './api': `export const credentials=()=>window.__qa.boot;export const initialize=async()=>credentials();export const api=async path=>path==='/api/model-manifest'?{}:{voiceEnabled:false};export const events=callback=>{window.__qa.service.add(callback);return()=>window.__qa.service.delete(callback);};`,
   './live2d': runtimeStub,
   './audio': `export class SpeechPlayer{level(){return 0;}stop(){}destroy(){}async speak(_text,start){start?.();}}`,
-  './basin-audio': `export class BasinSound{setVolume(){}setSound(){}stop(){}destroy(){}async play(){window.__qa.sounds++;}}`,
+  './basin-audio': `export class BasinSound{setVolume(){}setSound(){}stop(){}destroy(){}async prepare(){window.__qa.prepared=(window.__qa.prepared||0)+1;}async play(){window.__qa.sounds++;}}`,
   './behavior': `import {BehaviorController as Real,BEHAVIOR_PRESETS} from ${JSON.stringify(path.join(root, 'src/shared/behavior.mjs').replaceAll('\\','/'))};export {BEHAVIOR_PRESETS};export class BehaviorController extends Real{constructor(...args){super(...args);window.__qa.behavior=this;}setPetting(active,input){window.__qa.pets.push({active,input});super.setPetting(active,input);}tapChest(){const accepted=super.tapChest();window.__qa.taps.push(accepted);return accepted;}}`,
 };
 const setup = `

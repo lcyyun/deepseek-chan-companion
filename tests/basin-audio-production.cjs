@@ -32,7 +32,7 @@ app.whenReady().then(async()=>{
     const check=(condition,message)=>{if(!condition)throw Error(message);};
     const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
     const sound=window.qaSound,connected=new Set(),started=new Set();let starts=0;
-    const timing={construct:[],decode:[],resume:[],createBuffer:[],firstPlayMs:0};
+    const timing={construct:[],decode:[],resume:[],createBuffer:[],preparationMs:0,firstPlayMs:0,firstPipePlayMs:0};
     const base=performance.now(),NativeContext=window.AudioContext;
     window.AudioContext=class extends NativeContext{
       constructor(...args){const at=performance.now();super(...args);timing.construct.push({at:at-base,ms:performance.now()-at,state:this.state});}
@@ -45,7 +45,12 @@ app.whenReady().then(async()=>{
     proto.connect=function(...args){const result=connect.apply(this,args);connected.add(this);return result;};
     proto.disconnect=function(...args){const result=disconnect.apply(this,args);connected.delete(this);return result;};
     proto.start=function(...args){const result=start.apply(this,args);starts++;started.add(this);this.addEventListener('ended',()=>started.delete(this),{once:true});return result;};
-    sound.setVolume(.08);const firstPlayAt=performance.now();await sound.play();timing.firstPlayMs=performance.now()-firstPlayAt;
+    sound.setVolume(.08);
+    const prepareAt=performance.now();await sound.prepare();timing.preparationMs=performance.now()-prepareAt;
+    check(starts===0&&sound.voices.length===0,'preparation emitted an audio source');
+    const preparedContext=sound.context,preparedBuffer=sound.buffer;
+    const firstPlayAt=performance.now();await sound.play();timing.firstPlayMs=performance.now()-firstPlayAt;
+    check(sound.context===preparedContext&&sound.buffer===preparedBuffer&&timing.construct.length===1,'prepared first strike repeated expensive initialization');
     const warmupDropped=sound.voices.length===0;
     check(!warmupDropped,'normal cold first click was incorrectly discarded');
     check(sound.context.state==='running','AudioContext must actually be running');
@@ -58,7 +63,9 @@ app.whenReady().then(async()=>{
     const basinDuration=sound.buffer.duration;
     const beforeSwitch=starts;sound.setSound('pipe');
     check(connected.size===0&&sound.voices.length===0&&sound.retiring.length===0,'switch left basin tail connected');
-    await sound.pipeBytes;await sound.play();
+    await sound.pipeLoading;
+    const preparedPipe=sound.pipeBuffer,firstPipeAt=performance.now();await sound.play();timing.firstPipePlayMs=performance.now()-firstPipeAt;
+    check(preparedPipe&&sound.pipeBuffer===preparedPipe&&timing.decode.length===1,'pipe selection did not decode before playback');
     if(starts===beforeSwitch)await sound.play();
     const pipe=sound.pipeBuffer;
     check(pipe&&pipe.duration>3.1&&pipe.duration<3.25,'HTTP MP3 failed real decode or has unexpected duration');

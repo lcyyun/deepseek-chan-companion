@@ -1,4 +1,4 @@
-export type SpeechGestureId = 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen' | 'chest-left' | 'chest-right' | 'chest-both' | 'pointer-left' | 'pointer-right' | 'pointer-both' | 'talk' | 'compare';
+export type SpeechGestureId = 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen' | 'chest-left' | 'chest-right' | 'chest-both' | 'pointer-left' | 'pointer-right' | 'talk';
 export type SpeechHand = 'none' | 'pointer' | 'chest' | 'foxtail';
 export interface GestureCue { at: number; id: SpeechGestureId; gesture: SpeechHand; intensity: number; continuous?: boolean }
 export interface SpeechGestureSample extends GestureCue { key: string; progress: number; durationMs: number; elapsedSeconds?: number; hold?: boolean; continuing?: boolean }

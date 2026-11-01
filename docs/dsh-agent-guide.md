@@ -1,6 +1,6 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-适用于本仓库当前 0.12.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。
+适用于本仓库当前 0.13.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。
 
 ## 1. 先确定你使用哪条通路
 
@@ -101,18 +101,18 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 
 | 工具 | 参数与限制 | 结果与用途 |
 | --- | --- | --- |
-| `avatar_capabilities` | `{}` | 支持的 intents、25 种 emotions、14 组 bodyAnimations、表情描述、gestures、gaze、states 和 cue 限制 |
+| `avatar_capabilities` | `{}` | 支持的 intents、25 种 emotions、12 组 bodyAnimations、12 个组合预设、表情描述、gestures、gaze、states 和 cue 限制 |
 | `avatar_state` | `{}` | 当前状态、生成 busy、模型状态、桥状态、watch 状态等 |
 | `avatar_perform` | `intent?`、`emotion?`、`gesture?`、`gaze?`：字符串，最长 80；`intensity?`：0–1；`durationMs?`：100–30000 | 接受一次短表演，不等待表演结束。名称还会经能力白名单校验 |
 | `avatar_expression` | `emotion?`、`active?`、`intensity?` 0–1、`durationMs?` 200–20000；active 默认 true，此时 emotion 必填 | 只预览脸，不切换手臂；active:false 只结束面部预览 |
 | `avatar_body` | `animation?`、`active?`、`intensity?` 0–1、`durationMs?` 2000–20000；active 默认 true，此时 animation 必填 | 独立肢体动画，保持表情；active:false 只结束肢体预览 |
-| `avatar_speak` | **`text` 必填**，1–6000 字符；`intent?`、`emotion?`、`gesture?`；`bodyAnimation?`：`auto/none` 或具体动画 ID；`expressionCues?`：最多 4 项，每项 `{at, emotion, intensity}`，三字段必填；`at` 0–0.9、`intensity` 0–1、emotion 字符串最长 80 | 提交一句朗读及独立的面部、肢体编排。此工具没有 `gaze`、顶层 `intensity` 或 `durationMs` 参数 |
+| `avatar_speak` | **`text` 必填**，1–6000 字符；`intent?`、`emotion?`、`gesture?`；`bodyAnimation?`：`auto/none` 或具体动画 ID；`combination?`：`auto/none` 或组合 ID；`expressionCues?`：最多 4 项，每项 `{at, emotion, intensity}`，三字段必填；`at` 0–0.9、`intensity` 0–1、emotion 字符串最长 80 | 提交一句朗读、可选开场组合及后续独立的面部、肢体编排。此工具没有 `gaze`、顶层 `intensity` 或 `durationMs` 参数 |
 | `avatar_set_state` | **`state` 必填**：`idle/thinking/listening/speaking/error` | 更新可见活动状态。设置 speaking 本身不会合成语音 |
 | `avatar_stop` | `{}` | 取消当前聊天生成、正在合成的语音，并广播停止，由桌宠取消播放／动作 |
 | `avatar_reset` | `{}` | 同样取消生成和语音，并让桌宠恢复基础姿态。不是清空用户设置或删除模型 |
 | `avatar_watch_context` | `{}` | `{context: 页面对象或null}`；只读取用户已开启并分享、且尚未过期的页面 |
 
-`avatar_capabilities.bodyAnimations` 返回第 4.4 节的 14 个动画 ID，`speechGestures.bodyAnimation` 另外包含 `auto/none`。仅想切换脸时优先 `avatar_expression`；要展示肢体时用 `avatar_body`；有意组合脸和肢体时仍可用原 `avatar_perform`。不要把手势字段放入独立表情命令。`avatar_speak` 自带说话肢体编排，通常无需再额外调用 body，以免覆盖自动节奏。
+`avatar_capabilities.bodyAnimations` 返回第 4.4 节的 12 个动画 ID，`speechGestures.bodyAnimation` 另外包含 `auto/none`。仅想切换脸时优先 `avatar_expression`；要展示肢体时用 `avatar_body`；有意组合脸和肢体时仍可用原 `avatar_perform`，或在朗读中指定第 4.5 节的 `combination`。不要把手势字段放入独立表情命令。`avatar_speak` 自带编排，通常无需再额外调用 body 或 perform，以免覆盖自动节奏。
 
 MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 
@@ -169,7 +169,7 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 
 `curious` 同时是合法意图和合法情绪；两者用途不同。`playful` 的脸部是俏皮／兔牙，`smug` 才是屑眼；不要沿用旧版本的映射。特殊眼型由行为层互斥协调，智能体不需要手工清零模型参数。
 
-### 4.4 14 组肢体动画
+### 4.4 12 组肢体动画
 
 左右均指**画面左右**。以下 ID 用于 `avatar_body.animation`，也可用于 `avatar_speak.bodyAnimation`。所有这些动画都不选脸部表情；例如 `shy` 肢体是躲闪和回望，若还想要害羞脸，需独立指定 `emotion:"shy"`。
 
@@ -186,11 +186,9 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 | `chest-both` | 双手抚胸 | 双手靠在胸前、轻轻靠近 |
 | `pointer-left` | 左侧举指 | 左侧食指抬起、柔缓强调 |
 | `pointer-right` | 右侧举指 | 右侧食指抬起、柔缓强调 |
-| `pointer-both` | 双手举指 | 两侧食指一起抬起 |
 | `talk` | 娓娓道来 | 连续讲述，轻晃指尖、停顿再强调 |
-| `compare` | 两边说说 | 双手举指，配合侧头比较与回望 |
 
-名称与可用能力以运行时返回为准。每项还提供 `gesture/handSide/continuous`，分别表示默认手型、画面侧别和是否连续讲述。`talk/compare` 的独立预览默认 10 秒，其他预览约 4.8–6.6 秒；预览可以传 `durationMs`，范围 2000–20000。说话时不使用预览时长截断连续动画，而是跟随整段实际音频或静音阅读时轴。
+名称与可用能力以运行时返回为准。每项还提供 `gesture/handSide/continuous`，分别表示默认手型、画面侧别和是否连续讲述。`talk` 的独立预览默认 10 秒，其他预览约 4.8–6.6 秒；预览可以传 `durationMs`，范围 2000–20000。说话时不使用预览时长截断连续动画，而是跟随实际音频或静音阅读时轴。0.13 已移除 `pointer-both` 和 `compare`；显式命令会拒绝这两个值，旧回复会兼容回退到 `auto`。
 
 说话时的选择规则：
 
@@ -199,9 +197,9 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 - 填具体 ID：使用该动画的默认手型，优先于旧 `gesture`。例如 `bodyAnimation:"chest-right", gesture:"none"` 仍会右侧抚胸。
 - 用户设置的说话手势频率仍优先；设为 0 时不安排自动肢体，较低频率会跳过部分句子。过短文本或音频不强行举手。
 
-`talk/compare` 持续动作带有内部停顿，不需要逐句重新发起。音频暂停时不推进节拍，相邻相同动画和手型的段落可以保持手势与累计节拍，不从新一轮起势重来；停止、新回复或真实触摸会取消旧节点。不同侧手型要先收回再抬起，不能靠快速连发指令模拟左右挥舞。
+`talk` 持续动作带有内部停顿，不需要逐句重新发起。音频暂停时不推进节拍，相邻相同动画和手型的段落可以保持手势与累计节拍，不从新一轮起势重来；停止、新回复或真实触摸会取消旧节点。不同侧手型要先收回再抬起，不能靠快速连发指令模拟左右挥舞。
 
-本模型基于已有抚胸、举指姿态和完整手臂镜像，不是自由骨骼。`compare` 也不表示两只手能各做完全不同的动作；手指的柔缓观感主要来自腕部、前臂与身体配合。
+本模型基于已有抚胸、举指姿态和完整手臂镜像，不是自由骨骼。手指的柔缓观感主要来自腕部、前臂与身体配合。
 
 ```json
 {"animation":"chest-right","intensity":0.8,"durationMs":6000}
@@ -210,8 +208,41 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 上例用于 `avatar_body`，只预览右侧抚胸。若要边说边表演，直接调用一次 `avatar_speak`：
 
 ```json
-{"text":"我们可以比较一下：第一种更直接，第二种留给后续调整的空间更大。","intent":"explain","emotion":"gentle","gesture":"none","bodyAnimation":"compare"}
+{"text":"我们可以比较一下：第一种更直接，第二种留给后续调整的空间更大。","intent":"explain","emotion":"gentle","gesture":"none","bodyAnimation":"talk","combination":"none"}
 ```
+
+### 4.5 12 个开场组合
+
+`combination` 是一次完整的表情与动作组合，之后才开始独立的表情、肢体时间线。它只用于一轮回复的第一段，最多一次；后续段落填 `none`，不再播放开场。能力表的 `combinations` 给出预设，`speechCombinations.selection` 给出 `auto/none` 与下列全部预设 ID：
+
+| ID | 名称 | 预设时长 |
+|---|---|---:|
+| `greet` | 打个招呼 | 2.6 秒 |
+| `explain` | 认真讲解 | 4.2 秒 |
+| `agree` | 点头赞同 | 1.8 秒 |
+| `disagree` | 轻轻摇头 | 1.9 秒 |
+| `curious` | 歪头好奇 | 2.6 秒 |
+| `reassure` | 抚胸安慰 | 4 秒 |
+| `shy` | 害羞一下 | 2.6 秒 |
+| `playful` | 狗尾草彩蛋 | 4.5 秒 |
+| `surprised` | 有点惊讶 | 1.7 秒 |
+| `cuddle` | 撒娇捧胸 | 4.2 秒 |
+| `think` | 冥思苦想 | 6 秒 |
+| `idea` | 想到了 | 1.8 秒 |
+
+默认或省略 `combination` 为 `auto`：只在 `bodyAnimation` 缺省或为 `auto` 时尝试，用第一段自己的准确 `intent` 与兼容 `emotion` 选择。情绪不合拍时不选，例如 `explain + sad` 不会为了讲解套上开心动作；普通 `think` 不会自动返回长时间思考，`neutral` 也不强行配动作。不会从正文里的“生气”“害怕”等词猜测表情。
+
+显式选择组合 ID 表示你确实要该组合，可以覆盖开场的自动判断，后半段仍按 `bodyAnimation` 执行。`combination:none` 关闭开场组合；频率设为 0 时自动与显式组合都不播放，但原先独立的思考完成提示仍保留。降低频率会稳定地减少部分句子的开场，不是把动作减弱。
+
+组合与首段语音同时开始。只有实际首段语音至少达到“预设时长 + 0.4 秒”时才会播放；过短时直接跳过，不压缩整套手臂进出，也不额外等待。已选的组合取代旧的 `idea` 思考完成前导；若因语音过短跳过，也不回头补播。没有选中组合时，真正完成思考的回复仍保留原 `idea` 前导。静音模式使用阅读时长判断。
+
+播放组合时，真实语音继续控制口型；组合结束后，`emotion/expressionCues` 和 `bodyAnimation` 从**剩余语音**的起点开始，`at:0.5` 此时指剩余部分的一半。暂停不推进，停止与新回复取消旧组合，实际触摸或手动预览优先。不要额外发 `avatar_perform` 模拟同一开场，这会争用通道。小表情卡片的预览仍只控制脸。
+
+```json
+{"text":"别着急，我们可以先把最重要的一步做好，剩下的再慢慢处理。","intent":"reassure","emotion":"gentle","gesture":"chest","combination":"reassure","bodyAnimation":"chest-right","expressionCues":[{"at":0,"emotion":"gentle","intensity":0.65}]}
+```
+
+这条朗读在实际时长足够时先做“抚胸安慰”，随后进入右侧抚胸和温柔脸。组合 ID 与肢体 ID 是不同目录；例如 `cuddle` 是组合，`chest-both` 是独立肢体。
 
 ## 5. 朗读节奏与 expressionCues
 
@@ -231,7 +262,7 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 }
 ```
 
-把此对象作为 `avatar_speak` 的参数。`at: 0.5` 指这一段**实际朗读进度的一半**，不是第 0.5 秒，也不是模型思考进度。关闭语音时，界面以阅读停留进度推动表情。语音合成等待期间不会提前跑完表情。
+把此对象作为 `avatar_speak` 的参数。没有开场组合时，`at: 0.5` 指这一段**实际朗读进度的一半**；有组合时指组合之后剩余语音的一半。它不是第 0.5 秒，也不是模型思考进度。关闭语音时，界面以阅读停留进度推动表情。语音合成等待期间不会提前跑完表情。
 
 - 首项使用 `at: 0`；后续按顺序排列，相邻至少间隔 0.18，末项不晚于 0.9。
 - 通常只需要 1–2 项，最多 4 项。强度通常 0.5–0.85，0 表示把该提示的面部强度降为零。
@@ -337,6 +368,7 @@ Content-Type: application/json
       "emotion": "happy",
       "gesture": "none",
       "bodyAnimation": "auto",
+      "combination": "auto",
       "expressionCues": [{"at": 0, "emotion": "happy", "intensity": 0.65}]
     }
   ],
@@ -345,7 +377,7 @@ Content-Type: application/json
 }
 ```
 
-顶层 `segments/details/sources` 必须齐全；0.12 的严格 schema 要求每个段落包含 `text/intent/emotion/gesture/bodyAnimation/expressionCues`。`bodyAnimation` 通常填 `auto`，明确需要安静肢体时填 `none`，也可使用第 4.4 节的 14 个 ID；旧提供方省略时，服务仍兼容归一化为 `auto`。schema 允许 1–3 段；实际预算通常更少：问候 1 段，brief 通常最多 2 段，非 brief 的复杂说明最多 3 段。`details` 是不自动朗读的详细说明，可用 Markdown；`sources` 是实际检索支持的 `{title,url}` 数组，仅使用 HTTP(S) 链接。
+顶层 `segments/details/sources` 必须齐全；0.13 的严格 schema 要求每个段落包含 `text/intent/emotion/gesture/bodyAnimation/combination/expressionCues`。`bodyAnimation` 通常填 `auto`，明确需要安静肢体时填 `none`，也可使用第 4.4 节的 12 个 ID；`combination` 通常填 `auto`，其具体 ID 见第 4.5 节。旧提供方省略这两个字段时，服务仍兼容归一化为 `auto`。schema 允许 1–3 段；实际预算通常更少：问候 1 段，brief 通常最多 2 段，非 brief 的复杂说明最多 3 段。`details` 是不自动朗读的详细说明，可用 Markdown；`sources` 是实际检索支持的 `{title,url}` 数组，仅使用 HTTP(S) 链接。
 
 默认 brief 通常一两句、约 30–90 汉字；复杂问题也要先给结论，完整步骤放 details。服务会对超预算或复杂问题的空洞应答最多做一次语义修复，不能依赖它替你把长篇讲稿机械切短。单段超过 1200 字符会被拒绝；6000 字的 MCP 朗读上限也不是推荐长度。
 

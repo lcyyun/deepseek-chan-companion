@@ -41,7 +41,7 @@ export function planGestureCues(segment, options = {}) {
   const spokenUnits = Array.from(text.replace(/[\s\p{P}\p{S}]/gu, '')).length;
   if (spokenUnits < 2) return [];
   if (!chosen && id === 'explain' && gesture === 'pointer' && spokenUnits >= 24) {
-    id = /对比|比较|区别|一方面|另一方面|两种|一边|另一边|contrast|compar/iu.test(text) ? 'compare' : 'talk';
+    id = 'talk';
   }
   const preset = BODY_ANIMATION_PRESETS.find(item => item.id === id);
   const intensity = ({ explain: .65, think: .56, reassure: .58, happy: .65, shy: .68, listen: .68 })[id] ?? .68;

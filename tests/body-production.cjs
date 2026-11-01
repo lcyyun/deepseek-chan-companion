@@ -17,7 +17,7 @@ source = source.slice(0, anchor);
 source += String.raw`
   const assert = require('node:assert/strict');
   const { BODY_ANIMATION_PRESETS } = await import(pathToFileURL(path.join(root, 'src/shared/behavior.mjs')).href);
-  for (const id of ['explain','think','reassure','happy','shy','listen','chest-left','chest-right','chest-both','pointer-left','pointer-right','pointer-both','talk','compare']) {
+  for (const id of ['explain','think','reassure','happy','shy','listen','chest-left','chest-right','chest-both','pointer-left','pointer-right','talk']) {
     assert.ok(BODY_ANIMATION_PRESETS.some(preset => preset.id === id), 'Missing production body preset: '+id);
   }
   await delay(350);
@@ -53,6 +53,15 @@ source += String.raw`
         if(bitmap[offset+3]>20&&Math.max(bitmap[offset],bitmap[offset+1],bitmap[offset+2])>30)legPixels++;
       }
       assert.ok(legPixels>size.width*size.height*.01,preset.id+' lost the legs during the arm pass');
+      if(index===2&&(preset.id==='chest-right'||preset.id==='pointer-left')){
+        const box=preset.id==='chest-right'?[.30,.33,.38,.44]:[.59,.33,.67,.44];let cloth=0,total=0;
+        for(let y=Math.floor(size.height*box[1]);y<size.height*box[3];y++)for(let x=Math.floor(size.width*box[0]);x<size.width*box[2];x++){
+          const offset=(y*size.width+x)*4,b=bitmap[offset],g=bitmap[offset+1],r=bitmap[offset+2];total++;
+          if(bitmap[offset+3]>200&&b>r*1.05&&r<90&&g<100&&b<170)cloth++;
+        }
+        assert.ok(cloth/total>.35,preset.id+' lost the resting forearm behind the hair');
+        image.restingForearmFraction=cloth/total;
+      }
       await fs.writeFile(path.join(output,name),Buffer.from(image.data.split(',')[1],'base64'));
       image.file=name;image.visiblePixels=visiblePixels;delete image.data;
     }

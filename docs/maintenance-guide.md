@@ -1,6 +1,6 @@
 # 大肥鱼 · 项目维护与代码导读
 
-本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.12.0 实现以 Windows x64 和这份 DeepSeek-chan 模型为目标，版本差异见第 15、16 节。
+本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.13.0 实现以 Windows x64 和这份 DeepSeek-chan 模型为目标，版本差异见第 15–17 节。
 
 ## 1. 先理解四层结构
 
@@ -47,7 +47,8 @@ flowchart LR
 | [src/renderer/main.tsx](../src/renderer/main.tsx) | 页面入口；回复编排、触摸、输入取消、窗口事件和设置下发 |
 | [src/renderer/live2d.ts](../src/renderer/live2d.ts) | SDK 与模型加载、每帧组合、动作资源、物理、绘图、模型命中区域 |
 | [src/shared/behavior.mjs](../src/shared/behavior.mjs) | 与 DOM 无关的行为状态机：动作、表情、视线、摸头、敲盆和局部反应 |
-| [src/shared/body-animation.mjs](../src/shared/body-animation.mjs)、[renderer/body-animations.tsx](../src/renderer/body-animations.tsx) | 14 组独立肢体、连续讲话采样、中文目录和预览入口 |
+| [src/shared/body-animation.mjs](../src/shared/body-animation.mjs)、[renderer/body-animations.tsx](../src/renderer/body-animations.tsx) | 12 组独立肢体、连续讲话采样、中文目录和预览入口 |
+| [src/shared/speech-combination.mjs](../src/shared/speech-combination.mjs)、[renderer/combination-timeline.ts](../src/renderer/combination-timeline.ts) | 12 个原预设的开场选择，按实际语音时长决定是否播放，并交接独立时间线 |
 | [src/shared/gesture-cues.mjs](../src/shared/gesture-cues.mjs)、[renderer/gesture-timeline.ts](../src/renderer/gesture-timeline.ts) | 由段落意图生成手势节点，并按实际播放进度执行、跨段保持和取消 |
 | [src/shared/behavior.d.mts](../src/shared/behavior.d.mts)、[renderer/behavior.ts](../src/renderer/behavior.ts) | 行为接口类型和渲染端导出；改公开方法时同步维护 |
 | [src/shared/expressions.mjs](../src/shared/expressions.mjs) | 表情目录、中文文案、基础脸部姿态、趣味眼型等参数 |
@@ -397,7 +398,7 @@ npm run package
 
 ## 14. 当前局限与后续方向
 
-独立预览最初在 0.11 引入，第 15 节保留其历史设计；0.12 的完整手臂变体和持续讲话改动见第 16 节。语义重点目前按文本子句比例映射到真实音频进度，连续肢体使用带停顿的内部节奏，都不是单字级或声学重音对齐。
+独立预览最初在 0.11 引入，第 15 节保留其历史设计；完整手臂变体和持续讲话见第 16 节，0.13 的开场组合与渲染/音效维护见第 17 节。语义重点目前按文本子句比例映射到真实音频进度，连续肢体使用带停顿的内部节奏，都不是单字级或声学重音对齐。
 
 - 原生输入、系统语音和打包按 Windows 实现；不能把前端可运行等同于 macOS/Linux 桌宠支持。
 - 这份模型的手、眼、盆、胸部物理和命中部件经过专用适配；新增模型应抽出可选的模型 profile，重新校准后再启用这些增强。
@@ -411,7 +412,7 @@ npm run package
 
 ## 15. 0.11 的独立预览与说话肢体编排（历史设计）
 
-本节说明最初的六组动作和无新增字段的编排方案。0.12 保留通道隔离与生命周期规则，新增 `bodyAnimation`、14 组目录和整段连续采样；当前接入以第 16 节为准。
+本节说明最初的六组动作和无新增字段的编排方案。后续版本保留通道隔离与生命周期规则，新增 `bodyAnimation`、扩展目录和整段连续采样；当前接入以第 16、17 节为准。
 
 ### 通道与生命周期
 
@@ -435,15 +436,15 @@ npm run package
 
 相关验证：`tests/gesture-cues.test.mjs`、`tests/gesture-timeline.test.mjs`、`tests/speech-body.test.mjs`、`tests/behavior.test.mjs`，以及独立运行的 `tests/body-production.cjs`。最后一个需要 `L2D_MODEL_ROOT` 指向完整原模型，用隔离服务与隐藏窗口记录真实 Cubism 过程截图，不连接用户正在运行的实例。
 
-## 16. 0.12 的完整手臂变体与连续讲话
+## 16. 完整手臂变体与连续讲话（0.13 当前目录）
 
 ### 目录、字段与所有权
 
-`BODY_ANIMATION_PRESETS` 是 14 组肢体的单一目录，每项含 `id/title/description/durationMs/gesture/handSide/continuous`。旧六项 ID 保留，新添 `chest-left/right/both`、`pointer-left/right/both`、`talk`、`compare`。`handSide` 按画面左、右、双侧解释；`durationMs` 是独立预览默认时长，`continuous` 仅在 `talk/compare` 为真。名称与含义见 [DSH 指南](dsh-agent-guide.md#44-14-组肢体动画)。能力接口也返回手型、侧别和连续标记，界面不要另写一份不同的映射。
+`BODY_ANIMATION_PRESETS` 是 12 组肢体的单一目录，每项含 `id/title/description/durationMs/gesture/handSide/continuous`。旧六项 ID 保留，另有 `chest-left/right/both`、`pointer-left/right` 和 `talk`。0.13 删除 `pointer-both/compare`，不能再通过接口请求双手举指。`handSide` 按画面左、右、双侧解释；`durationMs` 是独立预览默认时长，`continuous` 仅在 `talk` 为真。名称与含义见 [DSH 指南](dsh-agent-guide.md#44-12-组肢体动画)。能力接口也返回手型、侧别和连续标记，界面不要另写一份不同的映射。
 
 `ReplySegment.bodyAnimation` 和 `speak.bodyAnimation` 可为 `auto/none/具体ID`。严格模型输出 schema 要求填该字段；旧回复缺失时归一化为 `auto`，MCP/HTTP speak 则允许省略。具体 ID 使用目录里的手型并覆盖旧 `gesture` 提示；`none` 只禁用本段自动肢体。`avatar_body` 仍用 `animation` 字段，只接受具体 ID。停止独立预览使用 `{type:'body',active:false}`，不要与关闭整段自动动作混淆。
 
-`planGestureCues` 首先尊重用户的频率设置，再考虑显式动画和自动选择。`auto` 的较长举指讲解可选 `talk`，比较语句可选 `compare`；这只选肢体，不推断或覆盖面部情绪。短句仍减少举手，真实音频过短时不强行完成打开和关闭。`shy` 增强侧身低头、移开视线再回望；`listen` 增强靠近、侧耳停留和点头，二者不会自动添加害羞或认真表情。
+`planGestureCues` 首先尊重用户的频率设置，再考虑显式动画和自动选择。`auto` 的较长举指讲解与比较语句统一选 `talk`；这只选肢体，不推断或覆盖面部情绪。短句仍减少举手，真实音频过短时不强行完成打开和关闭。`shy` 增强侧身低头、移开视线再回望；`listen` 增强靠近、侧耳停留和点头，二者不会自动添加害羞或认真表情。
 
 ### 连续节点与真实时钟
 
@@ -465,4 +466,28 @@ npm run package
 
 `layoutTools({recoverChat})` 对可见聊天窗默认不重定位；`chat.blur` 只更新保护区。隐藏时再次打开，优先读取持久化 `chatBounds`，否则依照悬浮球/角色计算初始位置。`placeChat` 记录系统实际返回的 DIP bounds，`rememberChatPlacement` 排除程序布局产生的异步 move 事件，避免把自动布局误记为用户拖动。显示器恢复显式传 `recoverChat:true`，正常焦点变化不传。
 
-相关回归应覆盖：14 组身体与表情分离；长于 8 秒仍有连续变化；暂停时节拍不前进；同姿态跨段保持且节拍不归零；停止和触摸取消；左右切换先收再抬；聊天窗失焦/触摸后原位、手动位置重开/重启恢复、显示器变化回到可见区域。行为测试、时轴测试和 `speech-body.test.mjs` 验证状态与集成路径；`desktop-chat-placement.test.mjs` 验证聊天窗位置和持久化。真实模型仍需单独看进入、保持、反向倾身及收回画面，自动测试通过不等于所有姿态无穿模。
+相关回归应覆盖：12 组身体与表情分离；长于 8 秒仍有连续变化；暂停时节拍不前进；同姿态跨段保持且节拍不归零；停止和触摸取消；左右切换先收再抬；聊天窗失焦/触摸后原位、手动位置重开/重启恢复、显示器变化回到可见区域。行为测试、时轴测试和 `speech-body.test.mjs` 验证状态与集成路径；`desktop-chat-placement.test.mjs` 验证聊天窗位置和持久化。真实模型仍需单独看进入、保持、反向倾身及收回画面，自动测试通过不等于所有姿态无穿模。
+
+## 17. 0.13 开场组合、手臂清理与音效预热
+
+### 纯选择与实际播放分开
+
+`speech-combination.mjs` 从 `BEHAVIOR_PRESETS` 导出 `COMBINATION_IDS/COMBINATION_PRESETS`，保留已有 12 个组合，不另造一份动作配方。元数据包含 ID、标题、预设时长和手型；`cuddle` 的手型明确为 `chest`。`planSpeechCombination(segment,{frequency,skipIdea})` 返回独立的 command 副本或 null，不播放、不计时。
+
+`combination:auto` 只在 `bodyAnimation` 缺省/auto 时根据准确意图及兼容情绪选择，文本只参与降低频率时的稳定抽样，不做关键词情绪匹配。普通 `think` 不自动选长等待动作；显式组合可覆盖开场选择，显式 `none` 或频率 0 禁用。预设有固定表情时保留该表情，无固定表情的自动组合继承兼容的段落情绪。`skipIdea` 可避免已经播过的完成提示重复出现。生产 renderer 只对一轮第一段调用选择，后续段落不会重放开场。
+
+### 组合占用首段语音的开头
+
+`createCombinationTimeline` 首次收到有效实际播放时长后决定：若音频达到 `durationMs/1000 + 0.4`，且第一回调未迟到超过 0.25 秒，按该时钟播放完整组合；否则跳过，不压缩进出动作，也不新增长度。静音模式使用实际阅读时轴。返回 null 时组合还占用通道；结束后返回扣除组合时长的 `{elapsed,duration}`，供原表情/肢体时间线使用。因此有组合时 `expressionCues.at` 对应剩余语音，`talk` 也持续于剩余部分。尾段肢体使用 `fillLast`，让最后一个普通姿态的准备、停留和收回覆盖余下语音，不在开头几秒后直接结束。
+
+组合通过 `setSpeechCombination` 更新 `action.elapsed`，来源标记为 `speech-combination`，不依赖墙钟定时器。`clearSpeechCombination(true)` 可保留手型等待独立肢体接手，普通 finish/cancel 则走释放。触摸、手动完整表演和身体预览优先；已打断的组合节点不能在松手后补播。真实音频口型一直独立。小表情预览的 `expression` 命令和 UI 仍不增加肢体。
+
+若第一段选中了组合，renderer 不再额外播放固定 `idea` 前导；实际音频太短而跳过组合时也不回头追加。没选中组合的真实思考完成仍保留旧前导。停止、新回复、隐藏和失效 Promise 都必须取消本轮组合，不允许旧 clear 清掉新回合。音频播放中途失败后，阅读模式沿最后已播放的坐标推进原时轴的剩余部分；不能从零重启单调时间线，否则会冻结表情或重复开场。
+
+### 渲染与敲击首响
+
+镜像手臂与摸头抚胸共用一条合成路径：先准备独立的镜像遮罩，再按作者每个 drawable 的 render order 穿插到主模型绘制中。源侧与替换侧互斥，不把不同拓扑的两条手臂做透明度交叉淡化。临时顶点、透明度、动态标记及 drawMeshWebGL 包装均在 finally 恢复。此实现使用当前随附 Cubism renderer 的绘制入口和裁剪上下文；升级 SDK 时必须重新验证该契约。检查应覆盖默认垂手前臂布料区域、头发遮挡、连续摸头、收手中途重新触摸和切换单手举指，不能只检查腿部或全图总像素。
+
+戴盆时调用 `BasinSound.prepare()`，提前建立 AudioContext、准备当前音色缓冲，把首次设备建立和解码从 pointer-down 路径移走。prepare 不创建发声 source，不主动 resume 挂起设备；音量为 0 或已经销毁时直接返回。后续点击仍由 `play()` 处理真实播放、音量、过期请求和有限余响。预热不能变成戴盆时偷偷敲一次，也不能让旧点击在设备恢复后补播。
+
+测试入口包括 `speech-combination.test.mjs`（选择与兼容性）、`combination-timeline.test.mjs`（真实时长门槛、迟到、暂停和尾段）、`speech-body.test.mjs`（renderer 交接）、行为与音效测试；渲染变更仍单独做真实模型检查。测试证明的边界与最终实际运行结果应分别记录。

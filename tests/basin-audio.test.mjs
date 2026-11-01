@@ -7,11 +7,11 @@ const { BasinSound } = await import('data:text/javascript;base64,' + Buffer.from
 
 function audioFixture(t, suspended = false) {
   const previous = globalThis.AudioContext;
-  const sources = [], decoded = []; let context, resume;
+  const sources = [], decoded = [], buffers = []; let context, resume, constructions = 0, resumes = 0;
   const parameter = () => ({ value: 0, cancelScheduledValues() {}, setValueAtTime(v) { this.value = v; }, linearRampToValueAtTime(v) { this.value = v; } });
   globalThis.AudioContext = class {
-    constructor() { context = this; this.sampleRate = 22050; this.currentTime = 0; this.state = suspended ? 'suspended' : 'running'; this.destination = {}; }
-    createBuffer() { return { copyToChannel() {} }; }
+    constructor(options) { context = this; constructions++; this.options = options; this.sampleRate = 22050; this.currentTime = 0; this.state = suspended ? 'suspended' : 'running'; this.destination = {}; }
+    createBuffer() { const buffer = { copyToChannel() {} }; buffers.push(buffer); return buffer; }
     async decodeAudioData(bytes) {
       const channels = [new Float32Array([-.9, .4, .7]), new Float32Array([.2, -.3, .6])];
       const buffer = { duration: 3.17, numberOfChannels: 2, bytes, getChannelData: index => channels[index] };
@@ -23,11 +23,11 @@ function audioFixture(t, suspended = false) {
       const source = { connected: false, started: false, stops: [], connect() { this.connected = true; }, disconnect() { this.connected = false; }, start() { this.started = true; }, stop(at = 0) { this.stops.push(at); } };
       sources.push(source); return source;
     }
-    resume() { return new Promise(resolve => { resume = () => { this.state = 'running'; resolve(); }; }); }
+    resume() { resumes++; return new Promise(resolve => { resume = () => { this.state = 'running'; resolve(); }; }); }
     close() { this.state = 'closed'; return Promise.resolve(); }
   };
   t.after(() => { globalThis.AudioContext = previous; });
-  return { sources, decoded, resume: () => resume(), get context() { return context; } };
+  return { sources, decoded, buffers, resume: () => resume(), get context() { return context; }, get constructions() { return constructions; }, get resumes() { return resumes; } };
 }
 
 function fetchFixture(t, handler = async () => new Response(new Uint8Array([0x49, 0x44, 0x33]))) {
@@ -35,6 +35,71 @@ function fetchFixture(t, handler = async () => new Response(new Uint8Array([0x49
   globalThis.fetch = (url, options) => { requests.push({ url, options }); return handler(url, options); };
   t.after(() => { globalThis.fetch = previous; }); return requests;
 }
+
+test('preparing the enabled prop moves device construction and synthesis off the first strike', async t => {
+  const fixture = audioFixture(t); let clock = 0;
+  t.mock.method(performance, 'now', () => clock);
+  const Context = globalThis.AudioContext;
+  globalThis.AudioContext = class extends Context {
+    constructor(options) { super(options); clock += 250; }
+    createBuffer(...args) { clock += 20; return super.createBuffer(...args); }
+  };
+  const sound = new BasinSound();
+  await sound.prepare();
+  assert.equal(fixture.constructions, 1);
+  assert.equal(fixture.buffers.length, 1);
+  assert.equal(fixture.context.options.latencyHint, 'interactive');
+  assert.equal(fixture.sources.length, 0, 'preparation itself must stay silent');
+  const ready = clock;
+  await sound.play();
+  assert.equal(clock, ready, 'the prepared first strike does no device construction or synthesis');
+  assert.equal(fixture.sources.length, 1);
+  sound.stop(); await sound.prepare(); await sound.play();
+  assert.equal(fixture.constructions, 1, 'hiding and re-enabling reuse the audio device');
+  assert.equal(fixture.buffers.length, 1);
+  sound.destroy();
+});
+
+test('preparation respects mute and leaves suspended devices asleep until an actual strike', async t => {
+  const fixture = audioFixture(t, true), sound = new BasinSound();
+  sound.setVolume(0); await sound.prepare();
+  assert.equal(fixture.context, undefined);
+  sound.setVolume(.55); await sound.prepare();
+  assert.equal(fixture.context.state, 'suspended');
+  assert.equal(fixture.resumes, 0);
+  assert.equal(fixture.sources.length, 0);
+  const pending = sound.play();
+  assert.equal(fixture.resumes, 1);
+  fixture.resume(); await pending;
+  assert.equal(fixture.sources.length, 1);
+  sound.destroy(); await sound.prepare();
+  assert.equal(fixture.constructions, 1, 'destroyed preparation cannot reopen a device');
+});
+
+test('pipe preparation and switching on a prepared device decode before the next strike', async t => {
+  const fixture = audioFixture(t), requests = fetchFixture(t), sound = new BasinSound();
+  sound.setSound('pipe');
+  assert.equal(fixture.context, undefined, 'sound selection alone remains device-free');
+  await sound.prepare();
+  assert.equal(fixture.decoded.length, 1);
+  assert.equal(fixture.sources.length, 0);
+  await sound.play();
+  assert.equal(fixture.sources[0].buffer, fixture.decoded[0]);
+  sound.setSound('basin');
+  assert.equal(fixture.buffers.length, 1, 'the other sound is prepared during selection');
+  sound.setSound('pipe'); await sound.prepare();
+  assert.equal(fixture.decoded.length, 1);
+  assert.equal(requests.length, 1);
+  sound.destroy();
+
+  const second = new BasinSound();
+  await second.prepare(); second.setSound('pipe');
+  await second.pipeLoading;
+  assert.equal(fixture.decoded.length, 2, 'an existing prepared device decodes newly selected pipe audio immediately');
+  const count = fixture.decoded.length;
+  await second.play(); assert.equal(fixture.decoded.length, count);
+  second.destroy();
+});
 
 test('rapid clicks have bounded sound polyphony and stop removes every active/fading voice', async t => {
   const { sources } = audioFixture(t);

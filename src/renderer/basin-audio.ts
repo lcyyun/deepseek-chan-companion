@@ -20,9 +20,47 @@ export class BasinSound {
   setSound(value: 'basin' | 'pipe') {
     if (this.destroyed || (value !== 'basin' && value !== 'pipe') || value === this.sound) return;
     this.stop(); this.sound = value;
-    // Preload only bytes. Choosing a sound, especially while muted, must not
-    // open an audio device; errors are reported by the next actual play call.
-    if (value === 'pipe') void this.loadPipeBytes().catch(() => {});
+    // Reuse an already prepared device to decode before the next strike.
+    // Choosing a sound alone must never open an audio device.
+    if (value === 'pipe') void (this.context ? this.loadPipe(this.context) : this.loadPipeBytes()).catch(() => {});
+    else if (this.context) this.loadBasin(this.context);
+  }
+
+  private audioContext(): AudioContext {
+    this.context ||= new AudioContext({ latencyHint: 'interactive' });
+    const context = this.context;
+    if (!this.compressor) {
+      this.compressor = context.createDynamicsCompressor();
+      this.compressor.threshold.value = -16;
+      this.compressor.knee.value = 12;
+      this.compressor.ratio.value = 8;
+      this.compressor.attack.value = .002;
+      this.compressor.release.value = .12;
+      this.output = context.createGain();
+      this.output.gain.value = this.volume / 0.55;
+      this.compressor.connect(this.output);
+      this.output.connect(context.destination);
+    }
+    return context;
+  }
+
+  private loadBasin(context: AudioContext): AudioBuffer {
+    if (!this.buffer) {
+      const samples = synthesizeBasinTap(context.sampleRate);
+      this.buffer = context.createBuffer(1, samples.length, context.sampleRate);
+      this.buffer.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
+    }
+    return this.buffer;
+  }
+
+  /** Prepare when the prop is enabled, before a pointer-down needs its first frame. */
+  async prepare() {
+    if (this.destroyed || this.volume === 0) return;
+    const context = this.audioContext();
+    // Creating the first Windows audio device can block for hundreds of ms.
+    // Do that during prop setup; never emit a source or wake a suspended device.
+    if (this.sound === 'pipe') await this.loadPipe(context);
+    else this.loadBasin(context);
   }
 
   private loadPipeBytes(): Promise<ArrayBuffer> {
@@ -78,32 +116,14 @@ export class BasinSound {
   async play() {
     if (this.destroyed || this.volume === 0) return;
     const generation = this.generation, sound = this.sound;
-    this.context ||= new AudioContext();
-    const context = this.context;
+    const context = this.audioContext();
     // Windows may synchronously spend ~200ms constructing its first running
     // context. That is not a queued click: start the stale-playback clock after
     // construction, while retaining the strict limit on async decode/resume.
     const requested = performance.now();
-    if (sound === 'basin' && !this.buffer) {
-      const samples = synthesizeBasinTap(context.sampleRate);
-      this.buffer = context.createBuffer(1, samples.length, context.sampleRate);
-      this.buffer.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
-    }
-    if (!this.compressor) {
-      this.compressor = context.createDynamicsCompressor();
-      this.compressor.threshold.value = -16;
-      this.compressor.knee.value = 12;
-      this.compressor.ratio.value = 8;
-      this.compressor.attack.value = .002;
-      this.compressor.release.value = .12;
-      this.output = context.createGain();
-      this.output.gain.value = this.volume / 0.55;
-      this.compressor.connect(this.output);
-      this.output.connect(context.destination);
-    }
     let buffer: AudioBuffer;
     try {
-      [buffer] = await Promise.all([sound === 'pipe' ? this.loadPipe(context) : Promise.resolve(this.buffer!), context.state !== 'running' ? context.resume() : Promise.resolve()]);
+      [buffer] = await Promise.all([sound === 'pipe' ? this.loadPipe(context) : Promise.resolve(this.loadBasin(context)), context.state !== 'running' ? context.resume() : Promise.resolve()]);
     } catch (error) {
       if (this.destroyed || generation !== this.generation) return;
       throw error;

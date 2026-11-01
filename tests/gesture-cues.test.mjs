@@ -56,9 +56,18 @@ test('explicit body animation selects sides independently of the legacy hand hin
   assert.equal(chosen[0].id, 'chest-right'); assert.equal(chosen[0].gesture, 'chest');
   assert.deepEqual(planGestureCues({ text, intent: 'explain', gesture: 'pointer', bodyAnimation: 'none' }), []);
   const automatic = planGestureCues({ text, intent: 'explain', gesture: 'pointer' });
-  assert.equal(automatic[0].id, 'compare');
+  assert.equal(automatic[0].id, 'talk');
   const comparison = planGestureCues({ text: '我们先比较这两种方案的区别，再分别讲一讲各自适合什么样的情况。', intent: 'explain', gesture: 'pointer' });
-  assert.equal(comparison[0].id, 'compare');
+  assert.equal(comparison[0].id, 'talk');
+});
+
+test('retired bilateral pointer animations cannot be selected by the speech planner', () => {
+  assert.equal(SPEECH_GESTURE_IDS.length, 12);
+  for (const bodyAnimation of ['pointer-both', 'compare']) {
+    assert.equal(SPEECH_GESTURE_IDS.includes(bodyAnimation), false);
+    const cues = planGestureCues({ text: '我们把这两种方案从头讲清楚，然后一起看看它们之间最重要的区别。', intent: 'explain', gesture: 'pointer', bodyAnimation });
+    assert.equal(cues[0].id, 'talk', 'obsolete hints use the normal supported explanation');
+  }
 });
 
 test('continuity requires both the same body intent and the same hand', () => {

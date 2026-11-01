@@ -122,7 +122,7 @@ test('semantic replies preserve cuddle, idea and puzzled while unsupported comma
 });
 
 test('independent preview commands enforce channel ownership and expose all body animations', () => {
-  assert.deepEqual(CAPABILITIES.bodyAnimations.map(item => item.id), ['explain', 'think', 'reassure', 'happy', 'shy', 'listen', 'chest-left', 'chest-right', 'chest-both', 'pointer-left', 'pointer-right', 'pointer-both', 'talk', 'compare']);
+  assert.deepEqual(CAPABILITIES.bodyAnimations.map(item => item.id), ['explain', 'think', 'reassure', 'happy', 'shy', 'listen', 'chest-left', 'chest-right', 'chest-both', 'pointer-left', 'pointer-right', 'talk']);
   const face = normalizeCommand({ type: 'expression', emotion: 'happy' });
   assert.equal(face.emotion, 'happy'); assert.equal(face.active, true); assert.equal(face.durationMs, 20000);
   const body = normalizeCommand({ type: 'body', animation: 'listen' });
@@ -140,20 +140,28 @@ test('independent preview commands enforce channel ownership and expose all body
 });
 
 test('speech can select a continuous or sided body score while older clients remain compatible', () => {
-  const compare = CAPABILITIES.bodyAnimations.find(item => item.id === 'compare');
-  assert.equal(compare.handSide, 'both'); assert.equal(compare.continuous, true);
+  const talk = CAPABILITIES.bodyAnimations.find(item => item.id === 'talk');
+  assert.equal(talk.handSide, 'right'); assert.equal(talk.continuous, true);
   const normalize = bodyAnimation => normalizeReply({ segments: [{ text: '我来解释一下。', intent: 'explain', gesture: 'none', emotion: 'happy', bodyAnimation }] }).segments[0];
   assert.equal(normalize(undefined).bodyAnimation, 'auto');
   assert.equal(normalize('teleport').bodyAnimation, 'auto');
-  for (const id of ['talk', 'compare', 'chest-right', 'pointer-left', 'pointer-both', 'none']) {
+  for (const id of ['talk', 'chest-right', 'chest-both', 'pointer-left', 'none']) {
     assert.equal(normalize(id).bodyAnimation, id);
     const command = normalizeCommand({ type: 'speak', text: '这样就很好理解了。', bodyAnimation: id });
     assert.equal(command.bodyAnimation, id);
     assert.ok(RESPONSE_SCHEMA.properties.segments.items.properties.bodyAnimation.enum.includes(id));
   }
   assert.throws(() => normalizeCommand({ type: 'speak', text: '你好', bodyAnimation: 'teleport' }));
+  for (const id of ['pointer-both', 'compare']) {
+    assert.equal(normalize(id).bodyAnimation, 'auto', 'older replies fall back to supported local planning');
+    assert.throws(() => normalizeCommand({ type: 'speak', text: '你好', bodyAnimation: id }));
+    assert.throws(() => normalizeCommand({ type: 'body', animation: id }));
+    assert.equal(RESPONSE_SCHEMA.properties.segments.items.properties.bodyAnimation.enum.includes(id), false);
+  }
   const system = makeMessages({ text: '这两种方法有什么区别？' }).messages[0].content;
-  assert.ok(system.includes('bodyAnimation') && system.includes('compare'));
+  assert.ok(system.includes('bodyAnimation') && system.includes('talk'));
+  assert.equal(system.includes('compare'), false);
+  assert.equal(system.includes('pointer-both'), false);
 });
 
 test('MCP independently dispatches body and face previews without changing dialogue state', async t => {
@@ -375,4 +383,17 @@ test('pairing token survives service restart', async t => {
   assert.equal(restarted.settings.voiceEnabled, false);
   assert.equal(restarted.getState().watch.enabled, false);
   assert.equal(restarted.getState().watch.sessionId, null);
+});
+
+
+test('spoken combinations expose preset choices, normalize older clients, and preserve separate preview channels', () => {
+  assert.equal(CAPABILITIES.combinations.length, 12);
+  assert.ok(CAPABILITIES.speechCombinations.selection.includes('reassure'));
+  assert.ok(RESPONSE_SCHEMA.properties.segments.items.required.includes('combination'));
+  assert.equal(normalizeCommand({ type: 'speak', text: '慢慢来。', combination: 'reassure' }).combination, 'reassure');
+  assert.equal(normalizeCommand({ type: 'speak', text: '慢慢来。' }).combination, 'auto');
+  assert.equal(normalizeReply({ segments: [{ text: '慢慢来。' }] }).segments[0].combination, 'auto');
+  assert.throws(() => normalizeCommand({ type: 'speak', text: '你好', combination: 'pointer-both' }));
+  assert.throws(() => normalizeCommand({ type: 'expression', emotion: 'happy', combination: 'reassure' }));
+  assert.throws(() => normalizeCommand({ type: 'body', animation: 'talk', combination: 'reassure' }));
 });

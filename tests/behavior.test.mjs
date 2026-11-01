@@ -1091,7 +1091,7 @@ test('heart sampler has an exact five-second boundary and rejects invalid stages
 });
 
 test('all body previews leave every facial recipe and speech mouth independent', () => {
-  assert.equal(BODY_ANIMATION_PRESETS.length, 14);
+  assert.equal(BODY_ANIMATION_PRESETS.length, 12);
   for (const preset of BODY_ANIMATION_PRESETS) {
     const active = fixture(), control = fixture();
     for (const f of [active, control]) {
@@ -1288,8 +1288,10 @@ test('screen-side arm changes close the old whole arm before opening the other s
     advance(1.5);
     assert.equal(behavior.gesture,kind);
     assert.deepEqual(runtime.gestureHands,{kind,side:'right',active:true});
-    behavior.previewBodyAnimation(`${kind}-both`,{durationMs:12000});advance(1.6);
-    assert.deepEqual(runtime.gestureHands,{kind,side:'both',active:true});
+    if (kind === 'chest') {
+      behavior.previewBodyAnimation(`${kind}-both`,{durationMs:12000});advance(1.6);
+      assert.deepEqual(runtime.gestureHands,{kind,side:'both',active:true});
+    } else assert.equal(behavior.previewBodyAnimation('pointer-both'), false);
     behavior.clearBodyAnimation();advance(.05);assert.equal(runtime.gestureHands.active,false);
     advance(2);assert.equal(behavior.gesture,'none');
   }
@@ -1323,14 +1325,14 @@ test('continuous hand cadence pauses with the audio clock and does not bend unsu
   const pose={...runtime.overlay.values};advance(3);
   for(const id of ['Param36','Param39','Param41','Param42'])assert.ok(Math.abs(runtime.overlay.values[id]-pose[id])<.0001);
   assert.equal(runtime.overlay.values.Param43,0,'finger softness comes from wrist motion, not uncalibrated hand deformation');
-  for(const id of ['talk','compare']){
+  for(const id of ['talk']){
     const rest=sampleBodyAnimation(id,.5,1,{durationSeconds:12,elapsedSeconds:3.15,hold:true});
     assert.equal(rest.armOffsets.Param41,0,'cadence includes a quiet interval');
   }
 });
 
 test('continuous sentence boundaries preserve cadence without adding elapsed time twice', () => {
-  for (const id of ['talk', 'compare']) {
+  for (const id of ['talk']) {
     const { behavior, advance } = fixture();
     const cue = { id, gesture: 'pointer', intensity: 1, continuous: true, hold: true };
     behavior.setSpeechGesture({ ...cue, key: 'first', durationMs: 12000, progress: 1, elapsedSeconds: 12 }); advance(.1);
@@ -1356,7 +1358,7 @@ test('continuous sentence boundaries preserve cadence without adding elapsed tim
 });
 
 test('cadence inheritance requires a matching held continuous gesture', () => {
-  for (const change of [{ id: 'compare' }, { gesture: 'none' }, { continuous: false }, { continuing: false }]) {
+  for (const change of [{ id: 'explain' }, { gesture: 'none' }, { continuous: false }, { continuing: false }]) {
     const { behavior } = fixture();
     const cue = { id: 'talk', gesture: 'pointer', intensity: 1, continuous: true, hold: true, durationMs: 12000 };
     behavior.setSpeechGesture({ ...cue, key: 'first', progress: 1, elapsedSeconds: 12 });
@@ -1371,7 +1373,7 @@ test('cadence inheritance requires a matching held continuous gesture', () => {
 });
 
 test('continuous entrance and exit use sentence time rather than accumulated cadence', () => {
-  for (const id of ['talk', 'compare']) {
+  for (const id of ['talk']) {
     for (const [progress, continuing] of [[0, false], [1, true]]) {
       const sample = sampleBodyAnimation(id, progress, 1, { durationSeconds: 12, elapsedSeconds: 18, continuing });
       for (const field of ['headX', 'headY', 'bodyX', 'bodyY', 'lean', 'lift', 'turn']) assert.equal(Math.abs(sample[field]), 0, `${id} ${field} at ${progress}`);
@@ -1392,4 +1394,34 @@ test('shy and listening have visibly distinct head and torso performances', () =
   assert.ok(Math.max(...shyX)>12&&Math.min(...shyY)<-7,'shy visibly turns away and lowers her head');
   assert.ok(Math.min(...listenLean)<-5.5,'listening leans toward the user');
   assert.ok(Math.max(...listenY)-Math.min(...listenY)>6,'listening includes a visible nod after the hold');
+});
+
+
+test('spoken preset uses playback time and hands off without restarting the same arm', () => {
+  const { behavior, advance, calls } = fixture();
+  const sample = { id: 'reassure', key: 'combo', durationMs: 4000, progress: .5, command: { intent: 'reassure', gesture: 'chest', emotion: 'gentle' } };
+  behavior.setState('speaking'); behavior.setSpeechCombination(sample); advance(8);
+  assert.equal(behavior.action.source, 'speech-combination');
+  assert.equal(behavior.action.elapsed, 2);
+  assert.equal(behavior.gesture, 'chest');
+  behavior.clearSpeechCombination(true);
+  behavior.setSpeechGesture({ id: 'reassure', key: 'tail', progress: 0, durationMs: 8000, gesture: 'chest' });
+  advance(.1);
+  assert.equal(behavior.action, null);
+  assert.equal(calls.filter(row => row[0] === 'motion' && row[1] === '默认手切举手').length, 1);
+});
+
+test('touch, knock and manual actions consume a spoken preset instead of allowing it to restart', () => {
+  for (const kind of ['pet', 'knock', 'manual']) {
+    const { behavior, advance } = fixture();
+    const sample = { id: 'reassure', key: kind, durationMs: 4000, progress: .3, command: { intent: 'reassure', gesture: 'chest', emotion: 'gentle' } };
+    behavior.setSpeechCombination(sample); advance(.2);
+    if (kind === 'pet') { behavior.setPetting(true); behavior.setPetting(false); }
+    if (kind === 'knock') { behavior.setBasinEnabled(true); behavior.knockBasin(); }
+    if (kind === 'manual') behavior.perform({ intent: 'agree', durationMs: 2000 });
+    advance(.8); behavior.setSpeechCombination({ ...sample, progress: .7 });
+    assert.notEqual(behavior.action?.source, 'speech-combination');
+    behavior.clearSpeechCombination();
+    if (kind === 'manual') assert.equal(behavior.action.intent, 'agree');
+  }
 });

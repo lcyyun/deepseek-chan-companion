@@ -11,9 +11,7 @@ const entries = [
   ['chest-both','双手抚胸','双手靠在胸前，轻轻靠近你',6500,'chest','both',false],
   ['pointer-left','左侧举指','抬起左侧食指，柔缓地点出重点',6500,'pointer','left',false],
   ['pointer-right','右侧举指','抬起右侧食指，柔缓地点出重点',6500,'pointer','right',false],
-  ['pointer-both','双手举指','两侧食指一起抬起，轻快地强调',6500,'pointer','both',false],
   ['talk','娓娓道来','边讲边轻晃指尖，停顿后再强调',10000,'pointer','right',true],
-  ['compare','两边说说','两侧举指，侧头比较，再看向你',10000,'pointer','both',true],
 ];
 export const BODY_ANIMATION_PRESETS = Object.freeze(entries.map(([id,title,description,durationMs,gesture,handSide,continuous]) => Object.freeze({id,title,description,durationMs,gesture,handSide,continuous})));
 const presets = Object.fromEntries(BODY_ANIMATION_PRESETS.map(row => [row.id,row]));
@@ -89,7 +87,7 @@ export function sampleBodyAnimation(id,progress,intensity=1,options={}) {
     const follow=pulse(delayed,.35,1.45)+pulse(delayed,1.95,.65)*.35;
     const envelope=entrance*exit*amount;
     // Two soft beats, then a genuine pause; the wrist trails the upper arm.
-    const side=id==='compare'?Math.sin(elapsed*Math.PI/3.5):-.18;
+    const side=-.18;
     values={...neutral,headX:side*8*envelope,headY:(1+main*2.4)*envelope,headZ:side*3*envelope,
       gazeX:side*.42*envelope,gazeY:.04*envelope,bodyX:side*1.2*envelope,bodyY:main*.65*envelope,
       bodyZ:side*.9*envelope,lean:(-2.8-main*1.6)*envelope,lift:(main+second)*envelope,turn:(follow-.35*main)*envelope};

@@ -78,6 +78,7 @@ export class BehaviorController {
     this.expressionPreview = null;
     this.bodyPreview = null;
     this.speechGesture = null;
+    this.speechCombination = null;
     this.bodySample = null;
     this.idlePose = { x: 0, z: 0, lean: 0 };
     this.idleTarget = { x: 0, z: 0, lean: 0 };
@@ -205,6 +206,7 @@ export class BehaviorController {
   }
 
   _startChestReaction(stage, preview) {
+    this._blockSpeechCombination();
     this.bodyPreview = null;
     if (this.speechGesture) this.speechGesture.blocked = true;
     this.chestReaction = { stage, start: this.time, duration: CHEST_REACTION_DURATIONS[stage - 1], preview };
@@ -256,6 +258,7 @@ export class BehaviorController {
   /** Body-only preview; it leaves the active face, voice and dialogue state alone. */
   previewBodyAnimation(id, { intensity = .8, durationMs } = {}) {
     if (this.destroyed || !BODY_ANIMATION_PRESETS.some(item => item.id === id) || this._bodyInteractionActive()) return false;
+    this._blockSpeechCombination();
     const preset = BODY_ANIMATION_PRESETS.find(item => item.id === id);
     this.bodyPreview = { id, intensity: clamp(intensity), start: this.time,
       duration: clamp(finite(durationMs, preset.durationMs) / 1000, 2, 20) };
@@ -303,6 +306,48 @@ export class BehaviorController {
 
   clearSpeechGesture() { this.speechGesture = null; this._syncGesture(); }
 
+  /** A complete preset follows actual audio progress, not a wall-clock timer. */
+  setSpeechCombination(sample) {
+    if (!sample || this.destroyed) return;
+    const previous = this.speechCombination;
+    const same = previous?.key === sample.key;
+    if (same && previous.blocked) return;
+    if (this._bodyInteractionActive() || this.bodyPreview || this.action?.source === 'command' && !this.action.replyIntro) {
+      this.speechCombination = { key: sample.key, blocked: true };
+      return;
+    }
+    if (!same) {
+      this._cancelTransient(true);
+      this.speechGesture = null;
+      const command = sample.command ?? {};
+      const emotion = Object.hasOwn(EMOTIONS, command.emotion) ? command.emotion : 'neutral';
+      this.action = { intent: command.intent ?? sample.id, emotion, gaze: command.gaze ?? 'camera',
+        gesture: command.gesture ?? (sample.id === 'cuddle' ? 'chest' : 'none'),
+        intensity: clamp(command.intensity ?? .7), duration: clamp(sample.durationMs / 1000, .2, 20),
+        start: this.time, source: 'speech-combination', elapsed: 0 };
+      this.speechCombination = { key: sample.key, blocked: false };
+      this.clearExpressionCue();
+      this._setEmotionExpression(emotion);
+      if (sample.id === 'think') this._activateExpression('加载');
+    }
+    if (this.action?.source !== 'speech-combination') { this.speechCombination.blocked = true; return; }
+    this.action.elapsed = clamp(sample.progress) * this.action.duration;
+    if (this.action.elapsed >= this.action.duration - actionFade(this.action.duration)) this._clearExpressions();
+    this._syncGesture();
+  }
+
+  clearSpeechCombination(keepHands = false) {
+    this.speechCombination = null;
+    if (this.action?.source !== 'speech-combination') return;
+    this._cancelTransient(keepHands);
+  }
+
+  _blockSpeechCombination() {
+    if (!this.speechCombination) return;
+    this.speechCombination.blocked = true;
+    if (this.action?.source === 'speech-combination') this._cancelTransient(true);
+  }
+
   _bodyInteractionActive() {
     return this.petting.active || this.petContact > .05 || Boolean(this.chestReaction) || this.time - this.knockStarted < .66;
   }
@@ -310,7 +355,7 @@ export class BehaviorController {
   _bodyPerformance() {
     if (this._bodyInteractionActive()) return null;
     if (this.bodyPreview) return this.bodyPreview;
-    if (this.speechGesture?.blocked || this._state === 'thinking' || this.action?.source === 'command') return null;
+    if (this.speechGesture?.blocked || this._state === 'thinking' || ['command', 'speech-combination'].includes(this.action?.source)) return null;
     return this.speechGesture;
   }
 
@@ -344,6 +389,7 @@ export class BehaviorController {
   /** Each click restarts one bounded reaction. No timers, backlog, or accumulated force. */
   knockBasin() {
     if (this.destroyed || !this.basinEnabled) return false;
+    this._blockSpeechCombination();
     this.cancelChestReaction();
     this.bodyPreview = null;
     if (this.speechGesture) this.speechGesture.blocked = true;
@@ -397,6 +443,7 @@ export class BehaviorController {
   perform(command = {}) {
     if (this.destroyed) return;
     this.cancelChestReaction();
+    this._blockSpeechCombination();
     this.bodyPreview = null; this.speechGesture = null;
     this.clearExpressionPreview();
     this.clearExpressionCue();
@@ -435,6 +482,7 @@ export class BehaviorController {
     if (this.basinEnabled) active = false;
     if (active && this.chestReaction) this.cancelChestReaction();
     if (active && (!this.petting.active || input.newContact)) {
+      this._blockSpeechCombination();
       this.bodyPreview = null;
       if (this.speechGesture) this.speechGesture.blocked = true;
       this._expireChestSequence();
@@ -468,6 +516,7 @@ export class BehaviorController {
   interrupt(nextState = 'listening') {
     if (this.destroyed) return;
     this.cancelChestReaction();
+    this.speechCombination = null;
     this.clearExpressionCue();
     this.expressionPreview = null; this.bodyPreview = null; this.speechGesture = null; this.bodySample = null;
     this._cancelTransient();
@@ -576,7 +625,7 @@ export class BehaviorController {
     }
 
     const action = this.action;
-    const age = action ? this.time - action.start : 0;
+    const age = action ? action.source === 'speech-combination' ? action.elapsed : this.time - action.start : 0;
     const actionWeight = action ? ease(age / 0.16) * (1 - ease((age - action.duration + actionFade(action.duration)) / actionFade(action.duration))) : 0;
     const intensity = (action?.intensity ?? 0.35) * actionWeight;
     const thinking = this._state === 'thinking' && (!action || action.source === 'thought') || action?.intent === 'think';
@@ -976,7 +1025,7 @@ export class BehaviorController {
       return performance.gesture ?? sampleBodyAnimation(performance.id, 0).gesture;
     }
     if (this.action?.intent === 'cuddle') return 'chest';
-    if (this.action?.source === 'command') return GESTURE_ALIASES[this.action.gesture] ?? this.action.gesture ?? 'none';
+    if (['command', 'speech-combination'].includes(this.action?.source)) return GESTURE_ALIASES[this.action.gesture] ?? this.action.gesture ?? 'none';
     return this._state === 'thinking' ? 'pointer' : 'none';
   }
 

@@ -1,6 +1,6 @@
 import type { ModelTuning } from './model-tuning.mjs';
 export type BehaviorState = 'idle' | 'thinking' | 'listening' | 'speaking';
-export type BodyAnimationId = 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen' | 'chest-left' | 'chest-right' | 'chest-both' | 'pointer-left' | 'pointer-right' | 'pointer-both' | 'talk' | 'compare';
+export type BodyAnimationId = 'explain' | 'think' | 'reassure' | 'happy' | 'shy' | 'listen' | 'chest-left' | 'chest-right' | 'chest-both' | 'pointer-left' | 'pointer-right' | 'talk';
 export interface SpeechGestureCue {
   id?: BodyAnimationId;
   intent?: string;
@@ -101,6 +101,8 @@ export class BehaviorController {
   clearBodyAnimation(): void;
   setSpeechGesture(cue: SpeechGestureCue | null): void;
   clearSpeechGesture(): void;
+  setSpeechCombination(sample: { id: string; key: string; durationMs: number; progress: number; command: Partial<BehaviorCommand> }): void;
+  clearSpeechCombination(keepHands?: boolean): void;
   setBasinEnabled(enabled: boolean): void;
   knockBasin(): boolean;
   cancelBasinKnock(): void;
