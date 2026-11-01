@@ -1,6 +1,10 @@
 # 大肥鱼 · 项目维护与代码导读
 
+核对版本：**0.18.0** · 最近核对：**2026-11-01** · [文档目录](README.md)
+
 本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.18.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
+
+第 1–14 节按当前实现阅读；第 15 节是历史方案，第 16–18 节说明仍在使用的模型适配机制，标题中的版本号表示引入时间。维护时以当前源码和接口返回为准，不把历史段落中的旧目录或字段当作现行契约。
 
 0.18 由 `server/provider-resolution.mjs` 统一解析有效来源，首次配置为 `provider:unconfigured, providerSource:auto`。自动模式仅接 DSH；显式选择始终优先。`autoProvider:dsh` 独立记录用过的自动桥，断线／重启保持 DSH，不混淆“默认”和“用户选择”。服务在进入思考／取消旧请求／追加历史前检查 `chatAvailable`；请求绑定启动时的有效提供方，显式切换取消旧请求。
 
@@ -8,7 +12,7 @@
 
 前端将连接状态与持久设置分开保存：`state` 广播只更新双通道状态、禁用发送与来源文案，不重置设置页未保存表单；`settings` 广播才刷新保存值。`SettingsSelect` 将两处下拉渲染到 body 的 DOM 弹层，按可用空间上下展开、滚动及键盘选项导航，避免透明 Electron 窗口原生弹出面板的焦点／裁切问题。
 
-DSH 插件只回传有界的错误代码，manager 将凭据、取消、断线、格式等归到 DSH 白名单，不能注入 Codex 文案。Codex 仅手动调用，stderr 最多保留内存末 16 KB 用于 `codex-diagnostics.mjs` 静态分类，不持久化或返回原文；HTTP 返回安全摘要与退出码。`chat-error-message.mjs` 再按有效来源处理前端提示，并忽略旧来源迟到错误。回归见 `provider-resolution.test.mjs`、`provider-errors.test.mjs`、`chat-error-message.test.mjs`、`desktop-provider.test.mjs`、`desktop-settings-select.test.mjs`。
+DSH 插件只回传有界的错误代码，manager 将凭据、取消、断线、格式等归到 DSH 白名单，不能注入 Codex 文案。Codex 仅手动调用，stderr 及 JSON 错误最多保留内存末 16,000 字符用于 `codex-diagnostics.mjs` 静态分类，不持久化或返回原文；HTTP 返回安全摘要与退出码。`chat-error-message.mjs` 再按有效来源处理前端提示，并忽略旧来源迟到错误。回归见 `provider-resolution.test.mjs`、`provider-errors.test.mjs`、`chat-error-message.test.mjs`、`desktop-provider.test.mjs`、`desktop-settings-select.test.mjs`。
 
 旧文件缺少 `providerSource` 时，无法判定已保存的 Codex 是默认还是手选，所以保守保留有效来源为手动；无来源和旧 `unconfigured` 进入自动模式。用户可选择一次“自动 · 优先 DeepSeek Harness”完成迁移，不应为修复来源删除整份配置。
 
@@ -56,8 +60,13 @@ flowchart LR
 | [server/adapters.mjs](../server/adapters.mjs) | OpenAI 兼容聊天/语音接口、Codex CLI、语音来源路由及 Windows TTS |
 | [server/edge-tts.mjs](../server/edge-tts.mjs) | 默认晓伊在线语音合成、取消及有界音频收集 |
 | [server/settings.mjs](../server/settings.mjs) | API/TTS 配置、密钥加密、公开设置视图和原子写入 |
+| [server/provider-resolution.mjs](../server/provider-resolution.mjs) | 持久选择与有效来源分离、DSH 自动接入和断线保持、是否允许聊天 |
+| [server/codex-diagnostics.mjs](../server/codex-diagnostics.mjs)、[integrations/dsh/chat-errors.mjs](../integrations/dsh/chat-errors.mjs) | 各提供方的有限错误分类；原始日志和凭据不进入界面 |
+| [server/tts-settings.mjs](../server/tts-settings.mjs)、[edge-tts-token.mjs](../server/edge-tts-token.mjs) | 语音来源兼容与 Edge 协议辅助；后者的独立许可位于 `server/licenses/` |
 | [server/mcp.mjs](../server/mcp.mjs)、[server/dsh-manager.mjs](../server/dsh-manager.mjs) | MCP 工具和 DSH 请求桥接 |
 | [src/renderer/main.tsx](../src/renderer/main.tsx) | 页面入口；回复编排、触摸、输入取消、窗口事件和设置下发 |
+| [src/renderer/connection-status.tsx](../src/renderer/connection-status.tsx)、[settings-select.tsx](../src/renderer/settings-select.tsx) | 表演/对话双通道状态、窗口内下拉选项；不自行猜测有效提供方 |
+| [src/shared/chat-error-message.mjs](../src/shared/chat-error-message.mjs)、[renderer/api.ts](../src/renderer/api.ts) | 保留 HTTP 错误码，按当前来源显示提示，屏蔽旧来源错误 |
 | [src/renderer/live2d.ts](../src/renderer/live2d.ts) | SDK 与模型加载、每帧组合、动作资源、物理、绘图、模型命中区域 |
 | [src/shared/behavior.mjs](../src/shared/behavior.mjs) | 与 DOM 无关的行为状态机：动作、表情、视线、摸头、敲盆和局部反应 |
 | [src/shared/body-animation.mjs](../src/shared/body-animation.mjs)、[renderer/body-animations.tsx](../src/renderer/body-animations.tsx) | 12 组独立肢体、连续讲话采样、中文目录和预览入口 |
@@ -72,11 +81,13 @@ flowchart LR
 | [src/shared/chest-reaction.mjs](../src/shared/chest-reaction.mjs) | 胸前点击反应的纯时间采样；不管理鼠标事件或计时器 |
 | [src/renderer/audio.ts](../src/renderer/audio.ts) | 语音解码、播放、取消、音量包络和真实播放进度 |
 | [src/renderer/basin-audio.ts](../src/renderer/basin-audio.ts)、[basin-sound-choice.tsx](../src/renderer/basin-sound-choice.tsx) | 敲击音效、限幅、音色选择和试听生命周期 |
-| [src/renderer/orbit-toggle.tsx](../src/renderer/orbit-toggle.tsx) | 悬浮球轻点与拖动分流；屏幕坐标和 pointer capture |
+| [src/renderer/orbit-toggle.tsx](../src/renderer/orbit-toggle.tsx) | 悬浮球轻点、拖动与右键菜单分流；屏幕坐标和 pointer capture |
 | [src/renderer/pet.css](../src/renderer/pet.css)、[style.css](../src/renderer/style.css) | 透明模型窗口与聊天面板样式 |
 | [extension/](../extension/) | 浏览器扩展：配对、主动分享、受控跟随页面 |
 | [integrations/](../integrations/) | Codex/DSH 接入示例与 DSH 插件 |
 | [scripts/setup-live2d.mjs](../scripts/setup-live2d.mjs) | 获取固定版本官方 SDK、校验、生成本地运行文件 |
+| [scripts/build-in-process.mjs](../scripts/build-in-process.mjs)、[build-restricted.mjs](../scripts/build-restricted.mjs) | 不启动子进程的 SDK/前端构建路径 |
+| [scripts/test.mjs](../scripts/test.mjs) | CI、桌面、完整回归三种测试入口；维护桌面测试文件清单 |
 | [scripts/package.mjs](../scripts/package.mjs) | Windows 便携目录打包、运行依赖收集和排除模型资产 |
 
 `src/shared/*.mjs` 使用普通 JavaScript，方便浏览器和 Node 测试共用。对应 `.d.mts` 提供类型声明。修改方法、枚举或字段时，不能只改声明或只改实现。当前 `tsconfig.json` 的 `strict` 为 `false`；类型检查通过不等于业务边界已被验证。
@@ -90,11 +101,13 @@ npm ci
 npm run setup:live2d
 npx tsc --noEmit
 npm run build
-npm test
+npm run test:all
 npm start
 ```
 
-先 `build` 再 `test`，才能覆盖依赖生产 UI 的 Electron 集成测试；没有 `dist/index.html` 时，这些测试会明确跳过。`npm run dev` 当前是“构建一次后启动 Electron”，不是热更新开发服务器。修改代码后需要重新构建并重新启动对应测试实例。
+上面是正常 Windows 桌面会话的完整检查流程：先构建 `dist`，再运行 `test:all`。仅检查无桌面逻辑时使用 `npm test`（等同 `test:ci`），它不包含 Electron 与原生鼠标检查，也不要求先构建 UI。没有 `dist/index.html` 时，部分桌面测试会明确跳过；有跳过的结果不能当作完整桌面验收。`npm run dev` 是“构建一次后启动 Electron”，不是热更新开发服务器。
+
+DSH 作业环境不允许编译/解压子进程时，使用 `npm run setup:live2d:restricted`、`npm run build:restricted` 和 `npm test`。若从 `npm ci --ignore-scripts` 准备依赖，之后要运行真实桌面程序，仍须在允许子进程的普通终端安装 Electron 运行时；完整步骤见[干净 profile 与受限环境指南](dsh-clean-profile.md)。
 
 SDK 脚本下载固定的 Cubism Web SDK 包并验证 SHA-256，把 Core、Framework bundle 和许可文件写入 `public/vendor/`。`vendor/` 保存下载/展开文件，两处均忽略提交。仅执行 `npm run build` 不会自动补 SDK；页面可以构建成功，但模型运行或打包仍会因缺少 SDK 失败。
 
@@ -114,11 +127,11 @@ node scripts/setup-mouse-input.mjs
 
 ### 4.1 一次聊天经过哪些位置
 
-1. `Chat.send()` 调用 `/api/chat`。服务创建带 `id` 的 `AbortController`，广播含 `requestId` 的 thinking 状态。
+1. `Chat.send()` 仅在服务返回 `chatAvailable:true` 时调用 `/api/chat`。服务再次解析有效来源并校验可用性，然后才创建带 `id` 的 `AbortController`、广播含 `requestId` 的 thinking 状态；不能靠禁用按钮代替服务端校验。
 2. `protocol.mjs` 准备受限回复格式，adapter 请求配置的聊天后端。后端输出归一化为 `segments`、`details`、`sources`。
 3. 服务只接受当前、未取消的请求结果；旧请求的进度、完成和 finally 不得覆盖新请求状态。
 4. `Pet` 通过 WS 接收结果，使用回复 ID 去重、请求 ID 识别所属请求、`sequence` 使旧异步播放失效。
-5. 成功 thinking 的回复先执行一次“想到了”过渡，再逐段展示和朗读。直接 `speak` 不插入这一过渡，失败和 stop 也不插入。
+5. 先为首段选择开场组合。只有成功结束 thinking **且未选中组合**时，才先执行约 1.8 秒“想到了”过渡；选中组合则交给首段音频开头播放。直接 `speak` 不额外插入 thinking 完成过渡，失败和 stop 也不插入。实际音频太短而跳过组合时，不回头补播“想到了”。
 6. 每一段在声音真正开始或无声阅读真正开始时才应用段落动作和表情时间轴。最后回到 idle，字幕短暂保留后消失。
 
 “服务已经收到回复”和“用户已经听完”是两个状态。服务的 `busy` 表示远程请求是否仍在执行；桌宠自己的 presentation/sequence 表示当前演出是否仍在播放，二者不能简单互相覆盖。
@@ -139,7 +152,7 @@ node scripts/setup-mouse-input.mjs
 
 ### 4.3 表情时间轴
 
-段落可带最多四个 `{at, emotion, intensity}` 节点。共享校验补齐 `at: 0` 的基表情、过滤未知表情并限制节点密度。`at` 是该段真实播放时长的比例，不是请求发出后的秒数。
+段落可带最多四个 `{at, emotion, intensity}` 节点。共享校验补齐 `at: 0` 的基表情、过滤未知表情并限制节点密度。没有开场组合时，`at` 是该段真实播放时长的比例；有组合时，以组合结束后的剩余播放时长为基准，都不是请求发出后的秒数。
 
 `SpeechPlayer` 用 `AudioContext.currentTime` 和解码后的 `AudioBuffer.duration` 回报进度；等待 TTS 时不推进表情。关闭语音或语音失败后的阅读模式用本段阅读时间推进。运行时间轴额外限制相邻表情至少 750ms，尾部不足 400ms 不再切换，短句保留首个表情。结束和取消调用 `clearExpressionCue()`，脸部通过行为层渐退。
 
@@ -228,6 +241,7 @@ node scripts/setup-mouse-input.mjs
 - 胸前轻点：down/up 均属于同一 pointer，持续不超过 450ms、最大移动不超过 8 DIP，且不是摸头或拖动。忙碌时按下不登记，防止恰好在 up 前反应结束后误触下一轮。移动距离用 client 坐标；拖动模型仍使用 screen 坐标。
 - 全局跟随：主进程采样物理左键与桌面光标，短暂按住后发送局部 DIP 坐标；渲染器按角色尺寸归一化，不能按整个工作区宽高归一化，否则角色会变迟钝。鼠标位置不发送给聊天后端。
 - 悬浮球：用 screen 坐标相对起点移动原生窗口，超过 5 DIP 视为拖动。仅本次捕获期间，主进程在确认真实左键及对应光标位置后每约 16ms 采样，避免移动中的窗口收不到及时 pointermove；保留抓取点偏移，接管后忽略迟到的 renderer 坐标。释放/取消停止采样，前端等待该 session 的 `moved` 结果决定是否打开聊天。原生 shape 更新合并到约 48ms，结束立即同步，避免每条 move 都重排窗口。手动位置独立保存；“悬浮球跟随桌宠”清除手动位置。
+- 悬浮球右键：先取消本轮捕获，再打开主进程原生菜单。可打开聊天、暂时隐藏/显示角色、退出整个应用。隐藏保留悬浮球和本地服务；退出走 `app.quit()` 的统一清理，不能只销毁模型窗口。
 - 聊天窗：位置归属由可见性决定，不由是否获得键盘焦点决定。摸头会使聊天窗失焦，但 `blur` 只刷新模型命中保护，不重新布局；已打开的聊天窗在角色活动、缩放和移动时保持原位。手动拖动写入 `desktop.json.chatBounds`，收起后再显示时恢复；显示器移除或工作区改变时才将可见聊天窗约束回可用区域。
 
 Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showInactive()`。不要在退出移动模式时将它改成 `false`。0.10.0 在隐藏/重新显示后，真实鼠标事件只剩 pointer up，没有 pointer down；原生 shape 有效、穿透关闭、缩放为 1，且自动化工具激活窗口后又可暂时恢复。改为可激活窗口后允许用户实际点击时正常激活，不需要在显示时调用 `webContents.focus()`。只做渲染器 `sendInputEvent()` 或主动激活目标的自动点击会漏掉这类问题；验收必须包含普通鼠标的隐藏→显示→点击路径。
@@ -252,7 +266,9 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 
 `tts.enabled` 是旧 API 模式的兼容字段，`provider: "api"` 时为 `true`。旧配置的启用 API 保留为 `api`，显式指定的系统嗓音保留为 `system`，其他未指定声音的配置迁移为默认 `edge`。切换来源只改变选择，不删除原 API 地址、模型、音色和密钥。
 
-`SpeechPlayer.level()` 使用 analyser 的实际波形计算 RMS，过滤静音后转为口型包络；每帧先 `setAudioLevel()` 再 `update()`。结束、停止和沉默必须归零。不能用字幕长度、正弦波或 TTS 请求耗时冒充真实口型。五元音参数暂不作为默认可靠功能，缺少可见效果校准时维持关闭。
+`SpeechPlayer.level()` 使用 analyser 的实际波形计算 RMS，过滤静音后转为口型包络；每帧先 `setAudioLevel()` 再 `update()`。声音结束、停止和沉默时，音频包络必须归零；非语音表情仍可有自己的嘴形。不能用字幕长度、正弦波或 TTS 请求耗时冒充真实口型。五元音参数暂不作为默认可靠功能，缺少可见效果校准时维持关闭。
+
+默认晓伊由 Node 进程通过 Edge 语音适配器生成，无需 Python 或本机配音模型。介绍视频的诗歌剧配音属于独立制作工程，不是应用默认 TTS。关闭 `voiceEnabled` 后使用无声阅读进度；语音请求或设备播放失败时显示错误并进入阅读模式，不切换另一家语音服务。若已经播放一部分，阅读进度从原音频坐标继续，不能重新开始开场组合。
 
 敲击音效有独立 AudioContext/节点管理，不进入口型 analyser。音色支持合成铁盆声和本地金属管 MP3；音量与语音音量相互独立。播放采用有界重叠、退场尾音与限幅，停止、卸盆、隐藏、切换音色和组件卸载都需要取消对应声音。增加音效时必须补充 [audio-sources.md](audio-sources.md) 的来源及授权信息。
 
@@ -263,10 +279,12 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 | 数据 | 所有者与存放位置 | 注意事项 |
 | --- | --- | --- |
 | 模型目录、模型中心/比例、显示器、浮球位置、聊天窗位置、戴盆、鼠标跟随、模型调节 | Electron userData 下 `desktop.json` | 保留已有配置；位置恢复需适配工作区和旧布局 |
-| 后端选择、API/TTS 地址和模型、口播偏好 | userData 下 `settings.json` | 用共享校验补缺省字段，不直接信任旧 JSON |
+| 后端选择、`providerSource/autoProvider`、API/TTS 地址和模型、口播偏好 | userData 下 `settings.json` | 保存值与 `providerEffective` 分开；用共享校验补缺省字段，不直接信任旧 JSON |
 | API/TTS 密钥 | settings 的加密字段或显式环境变量 | Electron `safeStorage` 加解密；公开配置仅返回是否已设置 |
 | 本地桥接配对码 | userData 下 `bridge-token` | 64 位十六进制随机值；不写入源码、示例或日志 |
 | 聊天演出、手势、当前音频、临时表情、触摸序列 | 内存 | 不能持久化为下次启动继续播放的任务 |
+| MCP 最近活动、DSH socket/待回传请求、有效来源及可用性 | 服务内存和派生状态 | 断线后重算；连接状态不能当作已完成的模型登录或凭据检查 |
+| DSH 专用聊天会话 cwd | 显式 `chatCwd`，否则 DSH home 下 `live2d-companion` | home 顺序为 `dshHome` → `DSH_HOME` → `~/.dsh`；不属于 Electron userData |
 | 网页共同观看 | 本次会话的开关、session ID 和 TTL 上下文 | 重启不自动恢复授权，过期上下文不能沿用 |
 
 `app.getPath('userData')` 的实际目录由主进程决定。当前默认目录使用“大肥鱼 · DeepSeek-chan”。品牌更名前的配置由 `profile-migration.cjs` 在 Electron ready 前迁移：只复制 `Local State`、`Preferences`、`desktop.json`、`settings.json`、`bridge-token`，保留加密密钥所需状态，不覆盖新目录已有文件、不删除旧目录、不复制聊天缓存。测试显式指定的 userData 不触发该迁移。以后再次改品牌或用户目录时，应沿这条边界处理，不能仅改 `app.setName()`。
@@ -352,7 +370,15 @@ Windows 上模型窗口必须保持 `focusable: true`，显示仍调用 `showIna
 
 ## 12. 测试与发布
 
-0.16 将自动测试入口分为 `npm test` / `npm run test:ci`、`npm run test:desktop`、`npm run test:all`。`scripts/test.mjs` 使用 Node 的 `run({isolation:'none', concurrency:1})`，CI 不为每个测试文件 fork 子进程，并禁止 `child_process` 的启动 API。测试用 TypeScript 的进程内转换加载时间轴与音效代码，不调用 esbuild。新增无需桌面的 `.test.mjs` 自动进入 CI；需要 Electron 或原生辅助程序的检查必须显式列入 desktop 集合，避免权限错误被误报为业务回归。
+当前自动测试有三个明确入口（自 0.16 起）：
+
+| 命令 | 运行范围 | 所需环境 |
+|---|---|---|
+| `npm test` 或 `npm run test:ci` | 无桌面逻辑、真实回环协议和注入进程的测试 | Node 及开发依赖、可写临时目录、回环端口；不要求 `dist` |
+| `npm run test:desktop` | Electron UI/IPC、真实鼠标观察器 | 先构建 `dist`，正常 Windows 用户桌面和子进程权限 |
+| `npm run test:all` | 上述两组的完整自动回归 | 满足桌面组条件；检查是否有跳过或失败 |
+
+`scripts/test.mjs` 使用 Node 的 `run({isolation:'none', concurrency:1})`，CI 不为每个测试文件 fork 子进程，并禁止 `child_process` 的启动 API。测试用 TypeScript 的进程内转换加载时间轴与音效代码，不调用 esbuild。新增无需桌面的 `.test.mjs` 自动进入 CI；需要 Electron 或原生辅助程序的检查必须显式列入 desktop 集合。`test:all` 也不会自动运行所有独立 `.cjs` 实模/原生输入脚本，涉及这些行为时仍需单独验收。
 
 CI 保留真实回环 MCP/WebSocket、DSH Session Controller 测试宿主、配置、行为和假鼠标管道故障释放检查。`mouse-input-native.test.mjs` 单独运行真实 .NET 观察器，原 `mouse-input.test.mjs` 只验证注入进程的协议。桌面进程启动和父 PID 读取失败不能通过取消存活校验掩盖；CI 成功也不证明真实鼠标或模型画面成功。
 
@@ -366,7 +392,9 @@ CI 保留真实回环 MCP/WebSocket、DSH Session Controller 测试宿主、配�
 | 行为与配置 | `behavior.test.mjs`、`model-tuning.test.mjs`、`expression-*.test.mjs` | 状态优先级、取消、渐退、范围和重置 |
 | 选择指南 | `performance-guide.test.mjs` | 25/12/12 目录完整匹配、推荐 ID 有效、常用显示名、不可变元数据和紧凑文本预算；不证明实模姿态正确 |
 | 服务生产边界 | `server.test.mjs`、`production-events.test.mjs` | 真实 HTTP/WS、鉴权、事件、manifest 名称到资源的链路 |
+| 来源解析与错误 | `provider-resolution.test.mjs`、`provider-errors.test.mjs`、`chat-error-message.test.mjs` | 自动/手动矩阵、MCP-only、DSH 断线保持、错误分流及安全诊断 |
 | 桌面 IPC/UI | `desktop-tuning.test.mjs`、`desktop-toggle.test.mjs`、`expression-menu.test.mjs` | 独立 profile 的真实 Electron/React 事件、持久化及菜单边界；依赖先构建 dist |
+| 双通道与设置菜单 | `desktop-provider.test.mjs`、`desktop-settings-select.test.mjs` | 实际 React 中连接/重连、草稿、手选优先、禁用项、窗口内菜单和键盘操作 |
 | 几何和辅助进程 | `pet-input.test.mjs`、`mouse-input.test.mjs`；桌面入口的 `mouse-input-native.test.mjs` | 缩放、命中形状、边界和假管道故障释放；另行验证真实辅助进程 |
 | DSH home 与受限构建 | `dsh-home.test.mjs`、`restricted-build.test.mjs` | 自定义 home、显式 cwd、已有会话复用；进程内打包、CSS 顺序与 ZIP 边界 |
 | 悬浮球采样 | `toggle-drag.test.mjs`、`desktop-toggle.test.mjs` | 注入物理源验证无 renderer move 仍跟随、抓取偏移、取消、迟到事件及轻点分流；不冒充系统鼠标实测 |
@@ -417,6 +445,10 @@ npm run package
 | stop 后旧回复继续 | service requestId、Pet sequence、SpeechPlayer generation、资源加载版本 | 只清字幕不等于取消工作 |
 | 重置微调后又出现旧值 | 完整快照是否错误地按 patch merge、nested null 删除语义 | 不靠重复发 reset 掩盖所有权问题 |
 | 下拉选择器越出窗口 | portal 测量、viewport clamp、最大高度、滚动与 no-drag | 不退回会被系统放大的原生 select |
+| MCP 可表演但不能聊天 | `performance` 与 `dsh.chatAvailable` 分别查看；检查桥的 `chat:true` 与 Session Controller | 不把 MCP 连接或状态心跳当作对话可用 |
+| 连接 DSH 后仍显示旧 Codex | `providerSource`、保存的 `provider`；旧文件无来源标记时保守保留选择 | 用户切换一次自动模式即可；不删除整份用户配置 |
+| DSH 断线后不能发送 | `providerEffective:dsh`、`chatStatus` 与重连情况 | 禁用发送和保留 DSH 是预期，不应自动换 Codex |
+| Codex 已登录仍失败 | 手动 Codex 路径的错误码、安全 `diagnostic`、`exitCode` | 登录成功不证明进程初始化、临时目录访问和模型权限均可用 |
 | 更新后设置“丢失” | userData 路径/品牌迁移、JSON 校验、实际启动的是哪个版本 | 不先删除用户配置 |
 | API 正常但无中文语音 | TTS provider；晓伊联网状态；Windows voice 列表；自定义 TTS base/model | 聊天 API 不必然包含语音服务 |
 

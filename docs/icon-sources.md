@@ -1,6 +1,8 @@
 # 图标来源与格式
 
-更新：2026-11-01。
+按 **0.18.0** 核对：**2026-11-01**。[文档导航](README.md)
+
+本次核对下列本地文件的尺寸／校验记录及源码使用位置；图标资产没有因对话来源或菜单更新而更换。
 
 ## 悬浮球：DeepSeek 官方标志
 
@@ -32,7 +34,7 @@ Use case: identity-preserve. Asset type: transparent square Windows application 
 
 ## 打包接入
 
-Vite 会将 `public/icons/` 复制到 `dist/icons/`。Electron 窗口使用 `dist/icons/app.ico`，托盘读取头像 PNG；Windows EXE 资源使用 `public/icons/app.ico`。`scripts/package.mjs` 在复制 Electron 可执行文件后，调用开发依赖 `rcedit` 的本地 Windows 工具写入图标和产品名称/版本；不会修改 `node_modules/electron` 的原始程序。该工具只用于打包，发行包不包含它。上游工具已归档，版本由锁文件固定，后续替换时须验证 EXE 图标和版本资源。
+普通 Vite 构建和进程内受限构建都会将 `public/icons/` 复制到 `dist/icons/`。Electron 窗口使用 `dist/icons/app.ico`，托盘读取头像 PNG；Windows EXE 资源使用 `public/icons/app.ico`。`scripts/package.mjs` 在复制 Electron 可执行文件后，调用开发依赖 `rcedit` 的本地 Windows 工具写入图标和产品名称/版本；不会修改 `node_modules/electron` 的原始程序。该工具只用于打包，发行包不包含它。版本由锁文件固定，后续替换时须验证 EXE 图标和版本资源。
 
 校验值：
 

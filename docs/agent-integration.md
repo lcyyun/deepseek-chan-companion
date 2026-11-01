@@ -1,5 +1,7 @@
 # 智能体与语音接入
 
+最近校对：2026-11-01，按应用 0.18.0 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
+
 给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.18.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
@@ -8,9 +10,13 @@
 
 首次安装保存 `provider:"unconfigured", providerSource:"auto"`。有效来源由服务端解析：可用 DSH 聊天桥优先；只检测到 DSH MCP 时显示表演已连接、聊天桥未启用；没有 DSH 时保持未连接。自动模式不检测或调用 Codex。DSH 聊天桥使用过后由 `autoProvider:"dsh"` 记忆来源，断线和重启保持 DSH，不改走其他提供方。
 
-`GET /api/settings`、`GET /api/state` 返回同一连接快照：`providerEffective`、`providerSource`、`providerReason`、`chatAvailable`、`chatStatus`、`chatMessage`，以及独立的 `performance` 和 `dsh`。客户端显示／发送判断使用有效来源和 `chatAvailable`，不要只看保存的 `provider`。`performance.connected` 表示最近 65 秒的已认证 MCP 活动；它是无会话 Streamable HTTP 的活动判定，不能证明聊天桥在线。`dsh.chatAvailable` 还要求实际聊天桥声明 Session Controller 可用，模型凭据问题在真实请求时单独报告。
+`GET /api/settings`、`GET /api/state` 返回同一连接快照：`providerEffective`、`providerSource`、`providerReason`、`chatAvailable`、`chatStatus`、`chatMessage`，以及独立的 `performance` 和 `dsh`。客户端显示／发送判断使用有效来源和 `chatAvailable`，不要只看保存的 `provider`。`performance.connected` 表示最近 65 秒的已认证 MCP 活动；它是无会话 Streamable HTTP 的活动判定，空闲超时会变为未连接，新的 MCP 调用会续期。无法区分同一来源范围内的多个客户端时，只记录通用 MCP 活动，不猜它属于 DSH。
+
+`chatAvailable` 表示本地条件允许尝试对话，不是账户或模型已通过健康检查：DSH 要求聊天桥及 Session Controller 就绪；API 要求已填写地址和模型；Codex 仅在显式选择后允许调用，不做启动探测。模型权限、凭据和网络问题在实际请求时报告。新 DSH 桥显式发送 `sessionControllerAvailable:true`；旧桥省略该字段时按旧版已先验证宿主接口的契约兼容，显式 `false` 不会被当作聊天可用。
 
 有用户接入授权时，可通过带配对码的 `PUT /api/settings` 设置 `{"provider":"dsh","providerSource":"user"}`、`{"provider":"codex","providerSource":"user"}`，或配置 API 及地址、模型、密钥。旧客户端只提交 `provider` 也视为手动选择。恢复自动模式使用 `{"provider":"unconfigured","providerSource":"auto"}`；明确停用内置对话使用 `{"provider":"unconfigured","providerSource":"user"}`，均保留其他配置。运行时状态广播不覆盖设置页未保存的编辑。
+
+只调整回复长度或声音时，仅提交要改的字段，例如 `{"verbosity":"brief"}`。若保存完整表单，必须保留原 `providerSource`，否则只带 `provider` 会被视为新的手动选择。`providerEffective`、`chatAvailable`、`performance`、`dsh` 是返回值，`autoProvider` 是服务内部记忆，不应把它们当作配置入口。有效来源切换会取消旧生成并清空服务内的对话历史，界面已显示的消息与草稿不会因此自动删除。
 
 旧配置没有 `providerSource` 时，无法证明保存的 Codex 是默认还是手动选择；升级保守保留已有有效提供方，用户可选择一次自动模式。未配置请求返回 `PROVIDER_NOT_CONFIGURED`；DSH 连接／凭据／取消问题返回 DSH 专属错误，不进入 Codex 适配器。不可用时禁用发送，草稿和外部 MCP 表演仍保留。配对码、密钥和原始错误输出不进入示例或日志。
 
@@ -18,7 +24,7 @@
 
 只换表情用 `avatar_expression({emotion:"happy"})`，只做肢体用 `avatar_body({animation:"chest-right"})`；分别传 `{active:false}` 结束对应预览，不停止另一通道或说话。HTTP 使用同字段，另加 `type:"expression"` 或 `type:"body"`。身体动画 ID 以 `bodyAnimations` 能力清单为准。常规 `avatar_speak` 自带肢体编排，不必同时重复发送身体指令。
 
-### 0.14 能力目录中的选择指南
+### 能力目录中的选择指南
 
 `GET /api/capabilities` 和 `avatar_capabilities({})` 返回同一份选择信息。`expressionPresets[]`、`bodyAnimations[]`、`combinations[]` 每项按原 `id` 增加 `tags`、`useWhen`、`avoidWhen`、`recommendedEmotions`、`recommendedBody`，六个常用组合另有 `displayName`。原来的标题、描述、时长、手型等字段保留。
 
@@ -28,7 +34,7 @@
 
 ### 说话肢体选择
 
-`avatar_speak` 与 HTTP `type:"speak"` 新增可选 `bodyAnimation`：省略或 `auto` 使用 `intent/gesture/text` 本地规划；`none` 关闭本段说话肢体编排；具体 ID 选择对应姿态及其默认手型。左右均指画面左右。能力表 `speechGestures.bodyAnimation` 给出完整取值：
+`avatar_speak` 与 HTTP `type:"speak"` 支持可选 `bodyAnimation`：省略或 `auto` 使用 `intent/gesture/text` 本地规划；`none` 关闭本段说话肢体编排；具体 ID 选择对应姿态及其默认手型。左右均指画面左右。能力表 `speechGestures.bodyAnimation` 给出完整取值：
 
 `auto / none / explain / think / reassure / happy / shy / listen / chest-left / chest-right / chest-both / pointer-left / pointer-right / talk`
 
@@ -42,7 +48,7 @@
 
 上例可直接传给 `avatar_speak`，HTTP 使用时另加 `type:"speak"`。聊天提供方返回的严格 JSON schema 要求每个 `segments` 项包含 `bodyAnimation`，通常填 `auto`；旧提供方省略该字段时，服务归一化仍按 `auto` 兼容。手臂表现来自已有姿态与完整手臂镜像，并不开放自由骨骼或逐帧参数控制。
 
-### 0.13 说话开场组合
+### 说话开场组合
 
 `speak.combination` 与回复段落的 `combination` 可选 `auto/none` 或 `greet/explain/agree/disagree/curious/reassure/shy/playful/surprised/cuddle/think/idea`。这是已有情境预设的动作与表情组合，不是独立肢体 ID。能力表 `combinations` 提供预设元数据，`speechCombinations.selection` 提供允许值。MCP/HTTP 可省略，默认 `auto`；严格回复 schema 要求填写该字段，旧回复缺失时仍按 `auto` 兼容。
 
@@ -64,6 +70,8 @@ HTTP、MCP和聊天结构化回复共用能力表：`intent`支持`neutral/greet
 
 DeepSeek Harness 的示例在 `integrations/dsh/cordis.patch.example.yml`。校正其中绝对插件路径后，将它作为 `dsh web --patch <绝对路径>` 的覆盖层。MCP 客户端负责显式表演，附带的 Cordis 插件负责将回合开始、非角色工具调用和回合结束映射成角色状态。状态观察部分只发送会话ID和状态，不上传会话正文；下述双向聊天桥会把桌宠问题及已授权页面内容交给DSH，并回传该回合的回答。多会话时可用 `sessionId` 限定状态观察来源。桌宠关闭不会阻断DSH。
 
+加载完整项目或便携包中的集成目录，保留 `live2d-bridge.mjs` 相邻的 `home-paths.mjs`、`chat-errors.mjs`，并确保能解析项目依赖 `ws`。更新文件后需重新加载 DSH 插件／重启对应测试 profile，已运行的旧模块不会因 Git 更新自动替换。
+
 DSH接入依据官方 [MCP客户端](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)、[插件加载](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md) 和 [事件接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/framework/events.md)。DSH仍在快速迭代，首次接入需使用你安装的版本验证。
 
 插件的`chat:true`开启双向聊天桥（当前插件默认启用，`chat:false`关闭）。它调用官方`ctx.sessionController.create/prompt/cancel`，在 DSH home 下的 `live2d-companion` 创建独立桌宠会话。目录优先级为显式 `chatCwd` → `dshHome/live2d-companion` → `$DSH_HOME/live2d-companion` → `~/.dsh/live2d-companion`；支持 `~` 展开，桥加载时固定路径，自定义 home 不会写入默认 home。也可配置`chatSessionId`复用专门会话，此时不创建目录。`sessionId`仅过滤状态观察来源，不能代替`chatSessionId`。服务通过认证WebSocket发送问题，插件以内部`requestId`关联用户消息及同一回合的最终助手回复，返回真实结果；停止会取消该回合。桥未连接时明确报错，不伪造回复。契约依据[官方Session Controller](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/api/session-controller/src/index.ts)及[DSH home-paths](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md)。
@@ -72,7 +80,8 @@ DSH接入依据官方 [MCP客户端](https://github.com/deepseek-ai/deepseek-har
 
 ## 桌宠内聊天
 
-- **Codex：** 优先使用项目附带的官方Codex原生可执行文件和本机登录，便携包不要求另装Node；仅沿用用户配置中的模型名，其余工具及项目配置不继承。每次调用通过独立应用数据目录、只读沙箱、结构化JSON输出运行；禁用Shell、Apps、多智能体、Hooks和远程插件，可开启实时网页搜索。提示词通过标准输入传递，不拼接Shell命令。取消会结束子进程树。此调用不是你正在使用的Codex聊天，不继承该聊天上下文。
+- **DeepSeek Harness：** 自动模式优先使用已就绪的聊天桥；手动固定为 DSH 后也不会因断线切到其他来源。MCP 表演与状态心跳不能替代聊天桥；不可用时禁用发送并显示对应原因。
+- **Codex：** 仅手动选择后使用项目附带的官方Codex原生可执行文件和本机登录，便携包不要求另装Node；仅沿用用户配置中的模型名，其余工具及项目配置不继承。每次调用通过独立应用数据目录、只读沙箱、结构化JSON输出运行；禁用Shell、Apps、多智能体、Hooks和远程插件，可开启实时网页搜索。提示词通过标准输入传递，不拼接Shell命令。取消会结束子进程树。此调用不是你正在使用的Codex聊天，不继承该聊天上下文。
 - **兼容API：** 填入Base URL、模型名和API Key，调用`/chat/completions`的JSON模式。需模型支持JSON输出。普通兼容API通路没有默认网页搜索工具；不会假称已经联网。
 - 默认简短回复，通常一两句。最多三段依次朗读，详细说明放`details`供点击展开，不自动朗读详情。提供`brief`、`balanced`、`detailed`三档预算。回答超出朗读预算时最多做一次语义改写，完整原文转入详情，不机械截断句子。
 
@@ -92,7 +101,9 @@ API密钥仅在服务端使用。有Electron系统加密回调时加密保存；
 
 每次重新开启返回新的`sessionId`，扩展随页面提交该值；旧会话内容会被拒绝，防止关闭后静默恢复跟随。切换页面URL或选区、关闭或过期会取消旧的陪看生成；同页定时刷新不会打断生成。陪看回复包含`mode:watch`、`contextUrl`和`watchSessionId`，播放器可据此停止旧页面的语音。
 
-`POST /api/chat {"text":"解释这一段","mode":"watch","verbosity":"brief"}` 将当前新鲜网页内容作为不可信数据供模型分析。页面内容不能授权工具操作，也不会被当作系统指令。Codex模式可根据用户问题搜索相关资料；普通API模式只分析提供的内容。上下文上传本身不会触发模型付费请求或自动发言，主动短评应由界面的去重与冷却控制。
+`POST /api/chat {"text":"解释这一段","mode":"watch","verbosity":"brief"}` 将当前新鲜网页内容作为不可信数据供模型分析。页面内容不能授权工具操作，也不会被当作系统指令。Codex模式可根据用户问题搜索相关资料；DSH 取决于已授权的检索工具；普通API模式只分析提供的内容。
+
+服务端接收页面本身不直接调用模型，但**运行中的桌宠会尝试主动短评**：收到页面更新后等待约 3.5 秒；只有一起看仍开启、`chatAvailable=true`、角色空闲、该 URL 尚未自动评论且距上次尝试至少 60 秒时，才提交一次简短 watch 请求。该请求仍可能计入所选提供方用量。关闭一起看会清空页面并取消待执行短评；不要另开高频轮询来重复触发。
 
 ## 本地HTTP与WebSocket协议
 
@@ -114,3 +125,5 @@ API密钥仅在服务端使用。有Electron系统加密回调时加密保存；
 | POST `/api/bridge/event` | 原生插件心跳及角色状态 |
 
 WebSocket事件：`command`含`command`；`chat`含`reply`与`requestId`（和`reply.requestId`相同）；`state`含完整状态对象（对象内`state`为状态枚举，`requestId`为当前生成请求编号，没有请求时为`null`）；`chat-progress`含`stage`与`requestId`；`watch-context`含页面`context`。新问题会取消前一个请求；已取消、被替换或已结束请求的迟到进度和结果不再广播。前端仍应按请求编号忽略本地队列中的旧事件。只有桌宠窗口播放`chat`，聊天面板仅展示，防止重复朗读。
+
+连接变化使用 `state` 广播，不作为用户保存设置；客户端应将连接状态与编辑中的配置表单分开。配置保存后发送 `settings` 事件。DSH 专属错误、自动／手动来源示例和分层排查见[DSH 操作手册](dsh-agent-guide.md#11-故障定位)。

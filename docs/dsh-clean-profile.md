@@ -1,5 +1,7 @@
 # DSH 干净 profile 接入与受限环境验收
 
+最近校对：2026-11-01，按应用 0.18.0 核对。返回[文档目录](README.md)；完整命令契约见[DSH 操作手册](dsh-agent-guide.md)。
+
 适用于大肥鱼 0.18.0。用户此前已反馈在 **DeepSeek Harness 0.2.1-rc.2 的全新 profile** 中完成真实端到端验证：MCP 十个工具、状态桥、双向聊天和真实模型渲染均正常。该记录来自用户实机验收；0.18 新增的来源解析、断线重连与错误分流使用隔离测试宿主验收，不将自动测试称作真实 DSH 账号验证。
 
 ## 1. 先选择运行环境
@@ -17,7 +19,7 @@ CI 入口不会启动 Electron、.NET 观察器、Codex CLI、DSH 模型进程�
 
 ## 2. 无构建子进程的源码准备
 
-普通 Windows 终端仍可使用 README 中的 `npm ci`、`npm run setup:live2d`、`npm run build`。DSH 作业中可用以下路径：
+使用 Node.js 22.12 或更新版本。普通 Windows 终端仍可使用 README 中的 `npm ci`、`npm run setup:live2d`、`npm run build`。DSH 作业中可用以下路径：
 
 ```powershell
 # 在项目根目录；已有完整依赖时可省略安装。
@@ -70,7 +72,7 @@ dsh --version
 
 1. 在正常桌面会话启动大肥鱼，选择本机模型，确认角色可见。打开设置复制配对码。
 2. 在上面已设置 `DSH_HOME` 的 PowerShell 中，按[操作手册第 3 节](dsh-agent-guide.md#3-本地连接与鉴权)将配对码放入 `L2D_BRIDGE_TOKEN`。不要输出该变量或把它写进仓库。
-3. 配置中的插件路径须指向完整项目或便携包中的插件目录，保留相邻 `home-paths.mjs` 以及可解析的 `ws` 依赖。不要单独复制一个桥文件。
+3. 配置中的插件路径须指向完整项目或便携包中的插件目录，保留相邻 `home-paths.mjs`、`chat-errors.mjs` 以及可解析的 `ws` 依赖。不要单独复制一个桥文件。更新源码后重新加载插件／重启这个测试 profile；正在运行的旧桥不会自动换成新版。
 4. 保持 `chat: true`、`searchTools: []`，先验证基础连接。避免在这个测试配置中设置指向常用目录的 `chatCwd` 或 `dshHome`。
 5. 先在同一个终端创建配置副本：
 
@@ -86,6 +88,8 @@ dsh web --patch $dshPatch
 ```
 
 第一次完成桌宠双向聊天后，自动创建的工作目录应位于 `$DSH_HOME/live2d-companion`。状态连接和 MCP 握手本身不必创建聊天目录。
+
+全新桌宠配置默认“自动 · 优先 DeepSeek Harness”。DSH 聊天桥就绪后会自动用于对话；只连接 MCP 时保持聊天不可用，不调用 Codex。这个 DSH home 是新的，并不代表桌宠配置也是新的：若桌宠沿用旧的手动 API／Codex 来源，先征得用户接入意图后在设置中改为自动，或按操作手册设置 `providerSource:"auto"`。不要为测试删除桌宠原有配置。
 
 ## 5. 按通路验收
 
@@ -104,6 +108,18 @@ dsh web --patch $dshPatch
 
 网页搜索单独验收：只有配置了已安装工具的精确 `searchTools` 名称，且真实工具成功返回，才记录“搜索通过”。空列表下搜索能力关闭，不属于基础连接故障。
 
+可先只读取连接状态，不发起模型请求：
+
+```powershell
+$bridgeHeaders = @{ Authorization = "Bearer $env:L2D_BRIDGE_TOKEN" }
+Invoke-RestMethod 'http://127.0.0.1:39181/api/state' -Headers $bridgeHeaders |
+  Select-Object providerEffective, providerSource, chatAvailable, chatStatus, chatMessage,
+    @{Name='mcpRecent';Expression={$_.performance.connected}},
+    @{Name='dshChatReady';Expression={$_.dsh.chatAvailable}}
+```
+
+`mcpRecent` 基于最近 65 秒的已认证 MCP 活动，空闲超时不代表配置已丢失；重新调用 `avatar_state` 可续期。`dshChatReady` 表示桥在线并声明宿主接口可用，模型凭据、配额及语音合成还需分别验收。默认晓伊需要联网，语音失败与 DSH 模型失败不是同一个问题。
+
 ## 6. 已知作业环境错误
 
 | 错误 | 含义和处理 |
@@ -113,6 +129,8 @@ dsh web --patch $dshPatch
 | `spawn EPERM` | 常规 Vite/esbuild、原生解压或辅助进程启动被限制；源码构建改用 restricted 入口，桌面程序本身仍需要相应运行环境 |
 | 桥已心跳，但不能聊天 | 查看 `providerEffective`、`chatAvailable`、`dsh.chatAvailable`；检查 `chat:true`、Session Controller、专用会话模型配置。状态心跳和 MCP 都不是聊天可用证明 |
 | 升级后仍显示旧 Codex | 旧文件没记录是否手选，升级保留已有来源。设置中选一次“自动 · 优先 DeepSeek Harness”并保存；不要删除模型／配对配置 |
-| Codex 已登录却初始化失败 | 仅在手动 Codex 模式查 `CODEX_PERMISSION_DENIED/INIT_FAILED`、安全诊断摘要与退出码；登录成功不代表作业可以启动进程或访问临时目录 |
+| DSH 模型／凭据未配置 | `DSH_MODEL_NOT_CONFIGURED`：检查本次 DSH home 内的模型和凭据；不能拿常用 profile 的登录状态证明新 profile 可用 |
+| DSH 回合取消／格式异常 | 分别查 `DSH_TURN_CANCELLED`、`DSH_TURN_TIMEOUT`、`DSH_INVALID_REPLY`；不循环重发已取消的请求 |
+| Codex 已登录却初始化失败 | 仅在手动 Codex 模式查 `CODEX_PERMISSION_DENIED` / `CODEX_INIT_FAILED`、安全诊断摘要与退出码；登录成功不代表作业可以启动进程或访问临时目录 |
 
 记录验收结果时分别写明 DSH 版本、测试 profile、模型提供方、MCP／聊天／搜索／渲染结果，以及使用的测试命令。保留脱敏错误和退出码，不记录配对码、API Key 或私人聊天正文。
