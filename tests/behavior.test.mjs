@@ -544,6 +544,32 @@ test('basin is persistent, replaces petting, and survives state changes and rese
   assert.equal(runtime.params.ParamEyeLOpen, 0);
 });
 
+test('glasses and small form are persistent, switch styles, and survive reset', () => {
+  const { behavior, advance } = fixture();
+  assert.equal(behavior.isGlassesEnabled, false);
+  behavior.setGlassesEnabled(true, 'black');
+  assert.equal(behavior.activeExpressions.has('黑框眼镜'), true);
+  behavior.setGlassesEnabled(true, 'monocle');
+  assert.equal(behavior.activeExpressions.has('黑框眼镜'), false);
+  assert.equal(behavior.activeExpressions.has('单片眼镜'), true);
+  behavior.setSmallFormEnabled(true);
+  assert.equal(behavior.isSmallFormEnabled, true);
+  assert.equal(behavior.activeExpressions.has('体型2'), true);
+  behavior.setState('thinking'); advance(1);
+  assert.equal(behavior.activeExpressions.has('体型2'), true);
+  assert.equal(behavior.activeExpressions.has('单片眼镜'), true);
+  assert.equal(behavior.activeExpressions.has('加载'), true);
+  behavior.reset();
+  assert.equal(behavior.isGlassesEnabled, true);
+  assert.equal(behavior.isSmallFormEnabled, true);
+  assert.equal(behavior.activeExpressions.has('单片眼镜'), true);
+  assert.equal(behavior.activeExpressions.has('体型2'), true);
+  behavior.setGlassesEnabled(false); advance(.1);
+  behavior.setSmallFormEnabled(false); advance(.1);
+  assert.equal(behavior.activeExpressions.has('单片眼镜'), false);
+  assert.equal(behavior.activeExpressions.has('体型2'), false);
+});
+
 test('rapid basin taps restart one bounded response, with no stale queue after the last tap', () => {
   const { behavior, runtime, events, advance } = fixture();
   behavior.setBasinEnabled(true);

@@ -358,7 +358,7 @@ else {
     if(process.env.COMPANION_SHOW_CHAT==='1')chat.once('ready-to-show',()=>chat.show());
   }).catch(error=>{console.error(error);dialog.showErrorBox('大肥鱼启动失败',String(error.message||error));app.quit();});
 }
-ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,modelTuning:config.modelTuning};});
+ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,modelTuning:config.modelTuning};});
 ipcMain.handle('window-control',async(event,action,data)=>{
   if(!roles.has(event.sender.id))throw new Error('未知窗口');
   switch(action){
@@ -385,6 +385,9 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
     case 'basin-enabled':config.basinEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'basin-enabled',enabled:config.basinEnabled});return config.basinEnabled;
+    case 'glasses-enabled':config.glassesEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'});return {enabled:config.glassesEnabled,style:config.glassesStyle==='monocle'?'monocle':'black'};
+    case 'glasses-style':config.glassesStyle=data==='monocle'?'monocle':'black';saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled===true,style:config.glassesStyle});return config.glassesStyle;
+    case 'small-form-enabled':config.smallFormEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'small-form',enabled:config.smallFormEnabled});return config.smallFormEnabled;
     case 'model-tuning':config.modelTuning=sanitizeModelTuning(data,config.modelTuning);saveConfig();for(const win of [pet,chat,toggle])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'model-tuning',tuning:config.modelTuning});return config.modelTuning;
     case 'chest-reaction':if(![1,2,3,4].includes(data))throw new Error('点击反应不存在');if(pet&&!pet.isDestroyed())pet.webContents.send('desktop-event',{type:'chest-preview',stage:data});return true;
     case 'suspend-tracking':if(roles.get(event.sender.id)==='pet')suppressTracking();break;
@@ -395,7 +398,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'open-url':openSafe(data);break;
     case 'copy-pairing':clipboard.writeText(service.token);return true;
     case 'reset-position':resetPosition();break;
-    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
+    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
     case 'quit':app.quit();break;
     default:throw new Error('不支持的操作');
   }

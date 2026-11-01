@@ -132,6 +132,9 @@ export class BehaviorController {
     this.pupilScale = 1;
     this.handForegroundWeight = 0;
     this.basinEnabled = false;
+    this.glassesEnabled = false;
+    this.glassesStyle = 'black';
+    this.smallFormEnabled = false;
     this.knockStarted = -Infinity;
     this.knockCount = 0;
     this.chestReaction = null;
@@ -154,6 +157,9 @@ export class BehaviorController {
   get isPetting() { return this.petting.active; }
   get isPointerTracking() { return this.tracking.active; }
   get isBasinEnabled() { return this.basinEnabled; }
+  get isGlassesEnabled() { return this.glassesEnabled; }
+  get glassesStyleName() { return this.glassesStyle; }
+  get isSmallFormEnabled() { return this.smallFormEnabled; }
   get isChestReaction() { return Boolean(this.chestReaction); }
   get isChestAwaitingPetting() { return this.completedChestStage === 3 && !this.chestHeartArmed && !this.chestReaction; }
   get isChestHeartArmed() { return this.completedChestStage === 3 && this.chestHeartArmed; }
@@ -383,6 +389,26 @@ export class BehaviorController {
     this.basinEnabled = next;
     this.setPetting(false);
     this.cancelBasinKnock();
+    this._syncExpressions();
+  }
+
+  /** Persistent eyewear; independent from face expressions and speech. */
+  setGlassesEnabled(enabled, style = this.glassesStyle) {
+    if (this.destroyed) return;
+    const next = Boolean(enabled);
+    const nextStyle = style === 'monocle' ? 'monocle' : 'black';
+    if (next === this.glassesEnabled && nextStyle === this.glassesStyle) return;
+    this.glassesEnabled = next;
+    this.glassesStyle = nextStyle;
+    this._syncExpressions();
+  }
+
+  /** Persistent small form. It must leave face and body lanes independent. */
+  setSmallFormEnabled(enabled) {
+    if (this.destroyed) return;
+    const next = Boolean(enabled);
+    if (next === this.smallFormEnabled) return;
+    this.smallFormEnabled = next;
     this._syncExpressions();
   }
 
@@ -960,6 +986,8 @@ export class BehaviorController {
     const desired = new Set(this.actionExpressions);
     const touched = this.petting.active || this.petWeight > 0.03;
     if (this.basinEnabled) desired.add('钢盆');
+    if (this.glassesEnabled) desired.add(this.glassesStyle === 'monocle' ? '单片眼镜' : '黑框眼镜');
+    if (this.smallFormEnabled) desired.add('体型2');
     if (this._state === 'thinking') desired.add('加载');
     if (touched) desired.delete('屑屑眼');
     for (const name of this.activeExpressions) if (!desired.has(name)) this._callRuntime('setExpression', name, false);
