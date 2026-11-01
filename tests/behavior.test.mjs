@@ -544,6 +544,11 @@ test('basin is persistent, replaces petting, and survives state changes and rese
   assert.equal(runtime.params.ParamEyeLOpen, 0);
 });
 
+test('the thinking-to-idea flourish stays long enough to notice', () => {
+  const idea = BEHAVIOR_PRESETS.find(preset => preset.id === 'idea');
+  assert.equal(idea.command.durationMs, 3400);
+});
+
 test('glasses and small form are persistent, switch styles, and survive reset', () => {
   const { behavior, advance } = fixture();
   assert.equal(behavior.isGlassesEnabled, false);

@@ -11,6 +11,22 @@
   font-size: 13px;
   line-height: 1.65;
 }
+.speech-bubble.idea {
+  border-color: #e8c46e;
+  background: rgba(255, 252, 240, .97);
+  box-shadow: 0 6px 22px #a8791b22, 0 0 0 3px #f6d98a22;
+}
+.idea-bulb {
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 16px;
+  transform-origin: 50% 80%;
+  animation: idea-bulb-pulse 1.1s ease-in-out infinite;
+}
+@keyframes idea-bulb-pulse {
+  0%, 100% { transform: scale(1) rotate(-4deg); opacity: .82; }
+  50% { transform: scale(1.18) rotate(4deg); opacity: 1; }
+}
 .pet-stage { touch-action: none; user-select: none; }
 .pet-stage.dragging { border: 0; border-radius: 0; background: transparent; }
 .drag-frame { position: absolute; border: 1px dashed #8eb9f6; border-radius: 22px; background: transparent; pointer-events: none; }

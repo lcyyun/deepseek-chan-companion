@@ -18,7 +18,7 @@ export const BEHAVIOR_PRESETS = Object.freeze([
   { id: 'surprised', title: '有点惊讶', command: { type: 'perform', intent: 'surprised', emotion: 'surprised', durationMs: 1700 } },
   { id: 'cuddle', title: '撒娇捧胸', command: { type: 'perform', intent: 'cuddle', emotion: 'happy', durationMs: 4200 } },
   { id: 'think', title: '冥思苦想', command: { type: 'perform', intent: 'think', emotion: 'puzzled', gesture: 'pointer', durationMs: 6000 } },
-  { id: 'idea', title: '想到了', command: { type: 'perform', intent: 'idea', emotion: 'happy', gesture: 'pointer', durationMs: 1800 } },
+  { id: 'idea', title: '想到了', command: { type: 'perform', intent: 'idea', emotion: 'happy', gesture: 'pointer', durationMs: 3400 } },
 ]);
 
 const STATES = new Set(['idle', 'thinking', 'listening', 'speaking']);

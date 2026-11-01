@@ -32,11 +32,14 @@ const ACTIONS=[
   {title:'讲个重点',sub:'我有一个想法',icon:'☝',command:{intent:'explain',gesture:'pointer',emotion:'happy'}},
   {title:'有点害羞',sub:'脸红一下',icon:'♡',command:{intent:'shy',emotion:'shy'}},
   {title:'冥思苦想',sub:'再让我想一想',icon:'✧',command:{intent:'think',emotion:'puzzled',gesture:'pointer',durationMs:6000}},
-  {title:'想到了',sub:'有答案啦',icon:'💡',command:{intent:'idea',emotion:'happy',gesture:'pointer',durationMs:1800}},
+  {title:'想到了',sub:'有答案啦',icon:'💡',command:{intent:'idea',emotion:'happy',gesture:'pointer',durationMs:3400}},
   {title:'撒娇捧胸',sub:'陪我一小会',icon:'♡',command:{intent:'cuddle',emotion:'happy',durationMs:4200}},
   {title:'温柔安慰',sub:'慢慢来就好',icon:'☁',command:{intent:'reassure',gesture:'chest',emotion:'gentle'}},
   {title:'逗逗猫草',sub:'放松一小会',icon:'♧',command:{intent:'playful',gesture:'foxtail',emotion:'happy'}},
 ];
+const IDEA_ACTION_MS = 3400;
+const IDEA_WAIT_MS = 3200;
+
 function AvatarIcon({size=28}:{size?:number}){return <img width={size} height={size} src="/icons/app-avatar.png" alt="大肥鱼" draggable={false} style={{objectFit:"contain"}}/>}
 function useDesktop(){return window.companion;}
 
@@ -112,7 +115,7 @@ function Pet(){
   const [petting,setPetting]=useState(false),[headHover,setHeadHover]=useState(false),[guardRects,setGuardRects]=useState<any[]>([]);
   const [modelRegion,setModelRegion]=useState<any>(null);
   const [,refreshPlacement]=useState(0);
-  const [status,setStatus]=useState('正在唤醒大肥鱼…'),[error,setError]=useState(''),[bubble,setBubble]=useState(''),[drag,setDrag]=useState(false),[ready,setReady]=useState(false);
+  const [status,setStatus]=useState('正在唤醒大肥鱼…'),[error,setError]=useState(''),[bubble,setBubble]=useState(''),[idea,setIdea]=useState(false),[drag,setDrag]=useState(false),[ready,setReady]=useState(false);
   const autoWatch=useRef({lastAt:0,url:'',timer:undefined as any});
   function setState(state:string){activeState.current=state;if(state==='error'){behavior.current?.interrupt();behavior.current?.setState('idle');}else behavior.current?.setState(state);setStatus(stateNames[state]||state);}
   const trackingBlocked=useRef(false);
@@ -142,7 +145,7 @@ function Pet(){
   function stop(){
     remember(discardedRequests.current,thinking.current.requestId);remember(discardedRequests.current,presentation.current.requestId);
     thinking.current={requestId:null,pending:false};presentation.current={phase:'idle',requestId:null};cancelPresentationWait();clearFaceTimeline();clearGestureTimeline();
-    trackingBlocked.current=true;behavior.current?.setPointerTracking(false);window.companion?.control('suspend-tracking').catch(()=>{});endPointer(true);sequence.current++;speakingPage.current='';pendingReply.current=null;pendingCommand.current=null;speaker.current.stop();basinSound.current.stop();behavior.current?.interrupt();setBubble('');setState('listening');
+    trackingBlocked.current=true;behavior.current?.setPointerTracking(false);window.companion?.control('suspend-tracking').catch(()=>{});endPointer(true);sequence.current++;speakingPage.current='';pendingReply.current=null;pendingCommand.current=null;speaker.current.stop();basinSound.current.stop();behavior.current?.interrupt();setBubble('');setIdea(false);setState('listening');
   }
   function beginThinking(requestId?:string){
     if(requestId&&discardedRequests.current.has(requestId))return;
@@ -254,7 +257,7 @@ function Pet(){
     remember(acceptedReplies.current,reply.id);
     const reveal=thinking.current.pending;
     thinking.current.pending=false;
-    cancelPresentationWait();clearFaceTimeline();clearGestureTimeline();behavior.current?.clearExpressionPreview();speaker.current.stop();
+    cancelPresentationWait();clearFaceTimeline();clearGestureTimeline();behavior.current?.clearExpressionPreview();speaker.current.stop();setIdea(false);
     const item={reply,turn:++sequence.current,reveal,requestId};
     presentation.current={phase:reveal?'idea':'reply',requestId};speakingPage.current=(reply as any).contextUrl||'';
     if(!behavior.current){pendingReply.current=item;return;}
@@ -264,12 +267,15 @@ function Pet(){
     if(turn!==sequence.current)return;
     const settingsPromise=api('/api/settings').catch(()=>null);
     const opening=planSpeechCombination(reply.segments[0],{frequency:modelTuning.current.gestureFrequency});
-    if(reveal&&!opening){
+    if(reveal){
       // Leave a small choreography overlap so the first spoken gesture can take
       // over before an animation-frame completion callback closes the same hand.
-      behavior.current?.applyCommand({type:'perform',intent:'idea',emotion:'happy',gesture:'pointer',intensity:.7,durationMs:2000,replyIntro:true});
-      setState('idle');setStatus('想到了');setBubble('想到了！');
-      if(!await waitForPresentation(1800,turn))return;
+      behavior.current?.applyCommand({type:'perform',intent:'idea',emotion:'happy',gesture:'pointer',intensity:.7,durationMs:IDEA_ACTION_MS,replyIntro:true});
+      setState('idle');setStatus('想到了');setBubble('想到了！');setIdea(true);
+      const finished=await waitForPresentation(IDEA_WAIT_MS,turn);
+      if(turn!==sequence.current)return;
+      setIdea(false);
+      if(!finished)return;
     }
     const settings=await settingsPromise;if(turn!==sequence.current)return;
     presentation.current={phase:'reply',requestId};
@@ -326,7 +332,7 @@ function Pet(){
       }
       if(turn!==sequence.current)return;
     }
-    if(turn===sequence.current){clearGestureTimeline();presentation.current={phase:'idle',requestId};setState('idle');api('/api/command',{type:'state',state:'idle'}).catch(()=>{});setTimeout(()=>{if(turn===sequence.current)setBubble('');},2200);}
+    if(turn===sequence.current){clearGestureTimeline();presentation.current={phase:'idle',requestId};setState('idle');api('/api/command',{type:'state',state:'idle'}).catch(()=>{});setTimeout(()=>{if(turn===sequence.current)setBubble('');},2200);setIdea(false);}
   }
   useEffect(()=>{
     let disposed=false;
@@ -399,7 +405,7 @@ function Pet(){
       const key=JSON.stringify({revision,head,regions:regions.map(v=>({x:Math.round(v.x/4)*4,y:Math.round(v.y/4)*4,width:Math.ceil(v.width/4)*4,height:Math.ceil(v.height/4)*4}))});
       if(key!==lastShape){lastShape=key;if(r)setModelRegion({body,head});setGuardRects(regions);window.companion?.control('pet-hit-regions',{regions,body,fullBody,revision}).catch(()=>{});}
     },100);
-    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
+    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
   },[]);
   dragEnabled.current=drag;
   const anchor=modelRegion?.head||{x:(petPlacement.current?.centerX??innerWidth/2)-80,y:(petPlacement.current?.centerY??innerHeight/2)-250,width:160,height:160};
@@ -409,7 +415,7 @@ function Pet(){
   return <main ref={stage} className={'pet-stage '+(drag?'dragging ':'')+(headHover?'head-hover ':'')+(petting?'petting ':'')} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={e=>{if(pointer.current?.id===e.pointerId){pointer.current.travel=Math.max(pointer.current.travel,Math.hypot(e.clientX-pointer.current.startClientX,e.clientY-pointer.current.startClientY));endPointer(false,true);}}} onPointerCancel={e=>{if(pointer.current?.id===e.pointerId)endPointer(true);}} onLostPointerCapture={e=>{if(pointer.current?.id===e.pointerId&&pointer.current.captured&&!e.currentTarget.hasPointerCapture(e.pointerId))endPointer(true);}} onPointerLeave={()=>setHeadHover(false)} onContextMenu={e=>e.preventDefault()}>
     {guardRects.map((r,i)=><div key={i} className="input-guard" style={{left:r.x-18,top:r.y-18,width:r.width+36,height:r.height+36}}/>)}
     {drag&&modelRegion&&<div className="drag-frame" style={{left:modelRegion.body.x-12,top:modelRegion.body.y-12,width:modelRegion.body.width+24,height:modelRegion.body.height+24}}/>}
-    {bubble&&<div className="speech-bubble" style={captionStyle}>{bubble}</div>}
+    {bubble&&<div className={'speech-bubble'+(idea?' idea':'')} style={captionStyle}>{idea&&<span className="idea-bulb" aria-hidden="true">💡</span>}{bubble}</div>}
     {petting&&!bubble&&<div className="pat-feedback" style={{left:captionLeft+captionWidth/2,top:Math.max(8,anchor.y-55)}}><span>♡</span> 摸摸头… <span>♡</span></div>}
     <canvas ref={canvas} className="avatar-canvas"/>
     {!ready&&<div className="model-status" style={{left:captionLeft,top:Math.max(8,(petPlacement.current?.centerY??innerHeight/2)-100),width:captionWidth}}><AvatarIcon size={40}/><strong>{status}</strong>{error&&<span>{error}</span>}</div>}
