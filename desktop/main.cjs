@@ -73,9 +73,14 @@ function scheduleToggleShape() {
 function setPetTopmost(next) {
   if (!pet || pet.isDestroyed()) return;
   const value = next === true;
-  if (petTopmost === value) return;
+  if (petTopmost === value) {
+    if (value && !pet.isVisible()) pet.showInactive();
+    return;
+  }
   petTopmost = value;
+  if (value && !pet.isVisible()) pet.showInactive();
   pet.setAlwaysOnTop(value, 'screen-saver');
+  if (value) pet.moveTop();
 }
 function syncPetTopmost() {
   if (!pet || pet.isDestroyed()) return;
@@ -325,6 +330,8 @@ else {
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
     pet.on('hide',()=>{suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'input-cancel'});});
     pet.once('ready-to-show',()=>{pet.showInactive();syncPetTopmost();layoutTools();broadcastScale();});
+    pet.webContents.once('did-finish-load',()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())pet.showInactive();});
+    setTimeout(()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())pet.showInactive();},1200).unref?.();
     toggle.once('ready-to-show',()=>{layoutTools();toggle.showInactive();toggle.setAlwaysOnTop(true,'screen-saver');});
     toggle.webContents.on('did-start-loading',()=>{if(toggleGesture)finishToggleDrag('cancel');});
     toggle.webContents.on('render-process-gone',()=>{if(toggleGesture)finishToggleDrag('cancel');});
