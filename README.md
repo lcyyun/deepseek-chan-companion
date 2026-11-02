@@ -2,7 +2,9 @@
 
 在 Windows 桌面陪你聊天、做小动作、一起看网页的 Live2D 平台。角色文件从本机加载，大模型通过结构化指令驱动表情、视线和已有手势；声音按实际播放音频驱动嘴型。
 
-**当前版本：0.19.2。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+**当前版本：0.20.0。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+
+0.20.0 增加用户级启动与连接：便携版和桌面快捷方式、首次启动向导、应用内 DSH 一键连接、B 会话持久化、A 会话列表，以及不依赖环境变量的 token 文件；连接正在运行的 DSH 前会显示 3 秒倒计时警示。
 
 0.19.2 收紧 DSH 原生 `avatar_reply` 的工具字段：意图、表情、手势、组合、肢体必须使用真实 ID，不再接受 `hand_on_chest` 这类自造名字；并修正“害羞抚胸”被当成仅表情的问题——`gesture: chest` 会自动落到 `reassure` 抚胸组合，后续 `bodyAnimation: talk` 接娓娓道来。
 
@@ -12,7 +14,7 @@
 
 0.18.1 修复 DSH 聊天回合的表演被桥接状态命令的 requestId 覆盖，导致只显示文字、不播放表情/肢体/语音的问题；同时把“已注册但暂时没有工具调用”的 MCP 客户端显示为 `MCP 已接入 · 空闲`，不再在 65 秒空闲后误报 `MCP 未连接`。
 
-文档核对：**2026-11-01**。完整目录见[文档导航](docs/README.md)，各版变化见[版本记录](docs/changelog.md)。
+文档核对：**2026-11-02**。完整目录见[文档导航](docs/README.md)，各版变化见[版本记录](docs/changelog.md)。
 
 聊天窗口分别显示 **表演：MCP 状态** 和 **对话：当前来源**。首次使用自动模式，DSH 聊天桥就绪后自动接入；仅连 MCP 时提示启用 `chat: true`，断线后保留 DSH 并等待重连。Codex 只由用户手动选择，不做自动回退。“对话来源”和“回复节奏”使用窗口内可滚动选项面板，修改后点“保存设置”。
 
@@ -88,7 +90,7 @@ npm test
 
 `npm test` / `npm run test:ci` 默认在当前 Node 进程检查行为、配置、MCP 和桥接，不启动 Electron、原生鼠标观察器或模型 CLI；需要可写临时目录和回环端口。真实桌面检查用正常 Windows 会话中的 `npm run test:desktop`，完整回归用 `npm run test:all`。受限构建使用 Rollup + TypeScript 及 JavaScript 解压，不需要管理员权限；桌面运行和打包仍需相应的 Windows 环境。干净安装、`spawn EPERM` 和 `0x80000003` 的说明见 [DSH 环境准备](docs/dsh-clean-profile.md)。
 
-打开悬浮球 → 设置 → 桌宠与模型，选择包含 `.model3.json` 的模型文件夹。首次启动使用“自动 · 优先 DeepSeek Harness”：检测到可用聊天桥后显示 DSH，未接入时显示“未连接”。也可以让自己的智能体按[接入指南](docs/agent-integration.md)配置，或手动选择 API、DSH、Codex。仅看桌宠、预览表情、摸头、敲盆，以及由外部智能体通过 MCP 操控角色，都不要求聊天桥可用。表演与对话连接分别显示，完整双向聊天与搜索取决于所选提供方。
+首次启动会先显示向导：选择包含 `.model3.json` 的模型文件夹，再连接 DSH 或稍后在设置里选择 API/Codex。之后双击“大肥鱼”即可启动，不需要智能体帮你启动。默认使用“自动 · 优先 DeepSeek Harness”：检测到可用聊天桥后显示 DSH，未接入时显示“未连接”。也可以按[接入指南](docs/agent-integration.md)手工配置，或手动选择 API、DSH、Codex。仅看桌宠、预览表情、摸头、敲盆，以及由外部智能体通过 MCP 操控角色，都不要求聊天桥可用。表演与对话连接分别显示，完整双向聊天与搜索取决于所选提供方。
 
 仓库不含 `node_modules`、Cubism SDK 下载缓存、生成的渲染库、便携发行包、模型原件、用户配置或登录凭据。安装依赖和运行 `setup:live2d` 会重建必要运行库；便携包使用后文命令生成。模型授权和第三方许可证不会因为仓库私有而改变。
 
@@ -123,6 +125,28 @@ npm run package
 ```
 
 打包会构建界面，复用已安装的 Electron，复制生产依赖及运行库。它不会包含用户模型、SDK 源码压缩包、API 密钥或用户数据。重新打包前请关闭使用该打包目录运行的程序，避免 Windows 锁定文件。未做安装器和代码签名。
+
+生成桌面和开始菜单快捷方式（不需要管理员权限）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
+```
+
+之后直接双击“大肥鱼”即可启动，不需要每次让智能体启动。第一次启动会显示设置向导，选择模型和对话来源；模型只需要选一次。
+
+## 连接 DSH
+
+在“设置 → 连接 DeepSeek Harness”里点“连接 DSH”。应用会：
+
+1. 检测本机 DSH CLI 和 `DSH_HOME`
+2. 生成自己的 patch 和本地 token 文件
+3. 用同一个 DSH profile 启动或复用 DSH
+4. 选择“新建独立桌宠会话”或“接到已有会话”
+5. 做 MCP 与聊天桥健康检查
+
+不会创建独立的 DSH 实例，也不会默认使用另一个 home/profile。连接正在运行的 DSH 前会显示 3 秒倒计时警示：“请先完成任务并保存”，只有点“我已知晓并确定”才会重启；点“取消”不会动 DSH。B 模式会把新建会话 ID 写入本地 session 文件，重启后复用；A 模式会列出最近的会话供选择。
+
+旧的长提示词 JSON 桥仍保留在高级兼容模式中，作为旧 DSH/外部客户端的回退和效果对照；正常 DSH 连接使用 `avatar_reply` 原生工具。
 
 ## 加载本地模型
 

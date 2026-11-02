@@ -1,6 +1,6 @@
 {
   "name": "deepseek-chan-companion",
-  "version": "0.19.2",
+  "version": "0.20.0",
   "private": true,
   "description": "大肥鱼 · DeepSeek-chan 本地桌面伙伴",
   "main": "desktop/main.cjs",
@@ -10,6 +10,7 @@
     "dev": "npm run build && electron .",
     "test": "node scripts/test.mjs ci",
     "package": "node scripts/package.mjs",
+    "shortcut": "powershell -ExecutionPolicy Bypass -File scripts/create-desktop-shortcut.ps1",
     "setup:live2d": "node scripts/setup-live2d.mjs",
     "test:ci": "node scripts/test.mjs ci",
     "test:desktop": "node scripts/test.mjs desktop",

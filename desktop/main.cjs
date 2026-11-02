@@ -7,6 +7,7 @@ const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement
 const { startMouseInput } = require('./mouse-input.cjs');
 const { createToggleDragSession } = require('./toggle-drag.cjs');
 const { createPetPointerSession } = require('./pet-pointer-session.cjs');
+const dshConnect = require('./dsh-connect.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
 app.setName('大肥鱼 · DeepSeek-chan');
@@ -16,7 +17,7 @@ if (path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
   require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
 }
 let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;
-let config = {}, dataDir, configFile, failures = [], lastSaved = 0;
+let config = {}, dataDir, configFile, failures = [], lastSaved = 0, dshManagedPid = 0, setupRequired = false;
 let sanitizeModelTuning;
 const roles = new Map();
 let inputRegions = [], pointerLocked = false, shapeKey = '';
@@ -299,12 +300,48 @@ function registerKeys(){
   for(const [key,fn] of bindings)if(!globalShortcut.register(key,fn))failures.push(key);
 }
 
+async function connectDsh(payload = {}) {
+  const mode = payload.mode === 'existing' ? 'existing' : 'new';
+  const info = await dshConnect.detectDsh(config);
+  if (!info.cli) throw new Error('没有找到 DSH。请先安装 DeepSeek Harness，或在设置中填写 DSH CLI 路径。');
+  if (!info.homeExists) throw new Error(`没有找到 DSH_HOME：${info.home}。请先运行一次 DSH，或填写正确的 DSH_HOME。`);
+  const bridgeConnected = service.getState().dsh?.connected === true;
+  if (bridgeConnected && payload.restart !== true) return { ok: true, connected: true, alreadyConnected: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT };
+  if (info.running && payload.restart !== true) return { ok: false, requiresRestart: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT, openPorts: info.open };
+  let port = info.open[0] || Number(config.dshPort) || dshConnect.DEFAULT_PORT;
+  if (info.running && info.open.includes(port)) {
+    dshConnect.stopDsh({ port, managedPid: dshManagedPid });
+    await dshConnect.waitForPortClosed(port, 10000);
+  }
+  const patch = dshConnect.writePatch({
+    root: ROOT, dataDir, serviceUrl: service.url, token: service.token,
+    mode, sessionId: payload.sessionId, sessionFile: dshConnect.sessionFile(dataDir), port,
+  });
+  const child = dshConnect.startDsh({ cli: info.cli, home: info.home, patch, port, logFile: path.join(dataDir, 'logs', 'dsh.log') });
+  dshManagedPid = Number(child.pid) || 0;
+  config.dshPort = port;
+  config.dshMode = mode;
+  if (mode === 'existing') config.dshSessionId = String(payload.sessionId || '');
+  else delete config.dshSessionId;
+  saveConfig();
+  try {
+    await dshConnect.waitForPort(port, 30000);
+    await dshConnect.waitForBridge(service, 45000);
+  } catch (error) {
+    throw new Error(`${error.message}\n日志：${path.join(dataDir, 'logs', 'dsh.log')}`);
+  }
+  return { ok: true, connected: true, mode, port, patch, log: path.join(dataDir, 'logs', 'dsh.log') };
+}
+
 if(!app.requestSingleInstanceLock())app.quit();
 else {
   app.on('second-instance',()=>{if(chat){layoutTools();chat.show();chat.focus();}});
   app.whenReady().then(async()=>{
     dataDir=app.getPath('userData');fs.mkdirSync(dataDir,{recursive:true});configFile=path.join(dataDir,'desktop.json');
-    try{config=JSON.parse(fs.readFileSync(configFile,'utf8'));}catch{}
+    let hadConfig=true;
+    try{config=JSON.parse(fs.readFileSync(configFile,'utf8'));}catch{config={};hadConfig=false;}
+    if(!hadConfig)config.firstRun=true;
+    setupRequired=config.setupCompleted!==true&&(hadConfig===false||config.firstRun===true);
     ({sanitizeModelTuning}=await import(pathToFileURL(path.join(ROOT,'src/shared/model-tuning.mjs')).href));
     config.modelTuning=sanitizeModelTuning(config.modelTuning);
     petPinned=config.petPinned===true;
@@ -359,10 +396,10 @@ else {
     tray.setContextMenu(Menu.buildFromTemplate([{label:'打开聊天   Ctrl+Alt+Space',click:showChat},{label:'显示桌宠',click:()=>pet.showInactive()},{label:'移动桌宠',click:()=>setDragMode(!dragMode)},{label:'恢复位置',click:resetPosition},{label:'悬浮球跟随桌宠',click:followToggle},{label:'停止说话和动作',click:()=>service.dispatch({type:'stop'})},{type:'separator'},{label:'退出大肥鱼',click:()=>app.quit()}]));
     tray.on('double-click',showChat);registerKeys();
     initializeMouseTracking();
-    if(process.env.COMPANION_SHOW_CHAT==='1')chat.once('ready-to-show',()=>chat.show());
+    if(process.env.COMPANION_SHOW_CHAT==='1'||setupRequired)chat.once('ready-to-show',()=>chat.show());
   }).catch(error=>{console.error(error);dialog.showErrorBox('大肥鱼启动失败',String(error.message||error));app.quit();});
 }
-ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,modelTuning:config.modelTuning};});
+ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,setupRequired,modelTuning:config.modelTuning};});
 ipcMain.handle('window-control',async(event,action,data)=>{
   if(!roles.has(event.sender.id))throw new Error('未知窗口');
   switch(action){
@@ -409,6 +446,11 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'open-extension':await shell.openPath(path.join(ROOT,'extension'));break;
     case 'open-url':openSafe(data);break;
     case 'copy-pairing':clipboard.writeText(service.token);return true;
+    case 'setup-complete':config.setupCompleted=true;config.firstRun=false;setupRequired=false;saveConfig();return true;
+    case 'dsh-status':{const info=await dshConnect.detectDsh(config);return{...info,bridgeConnected:service.getState().dsh?.connected===true,chatAvailable:service.getState().dsh?.chatAvailable===true,sessions:dshConnect.listSessions(info.home),patchPath:path.join(dataDir,'dsh','live2d.patch.yml'),logPath:path.join(dataDir,'logs','dsh.log'),mode:config.dshMode||'',savedSessionId:config.dshSessionId||''};}
+    case 'dsh-sessions':{const info=await dshConnect.detectDsh(config);return dshConnect.listSessions(info.home);}
+    case 'dsh-connect':return await connectDsh(data||{});
+    case 'dsh-open':{const port=Number(config.dshPort)||dshConnect.DEFAULT_PORT;await shell.openExternal(`http://127.0.0.1:${port}/`);return true;}
     case 'reset-position':resetPosition();break;
     case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
     case 'quit':app.quit();break;

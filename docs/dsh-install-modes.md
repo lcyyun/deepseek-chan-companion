@@ -2,6 +2,20 @@
 
 本页给安装智能体使用。安装桌宠插件前，**不要替用户默认选择模式**，先问清楚，再开始写配置。
 
+## 先在应用里连接
+
+大肥鱼 0.20 起，用户入口是「设置 → 连接 DeepSeek Harness」或首次启动向导。应用会：
+
+1. 检测 DSH CLI 和 `DSH_HOME`
+2. 生成自己的 patch、token 文件和 B 模式的 session 文件
+3. 用同一个 DSH home/profile 启动或复用 DSH，**不新建独立实例**
+4. 健康检查 MCP 和聊天桥
+5. 如果 DSH 正在运行，先显示 3 秒倒计时警示；用户必须点“我已知晓并确定”才会重启，点“取消”不会动 DSH
+
+应用生成的 patch 使用 `tokenFile`，不需要 `L2D_BRIDGE_TOKEN`。B 模式会在 `dsh/chat-session.txt` 保存会话 ID，重启后复用；A 模式在界面里列出最近会话并写入 `chatSessionId`。
+
+下面的手工配置段落仍然适用于智能体安装、旧 DSH 或需要排查的场景。
+
 ## 先问用户
 
 ```text

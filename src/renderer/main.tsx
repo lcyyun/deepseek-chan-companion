@@ -25,6 +25,8 @@ import './style.css';
 import './pet.css';
 import './voice-settings.css';
 import './provider-setup.css';
+import './setup.css';
+import { DshConnectPanel, SetupWizard } from './setup-panel';
 
 const stateNames: Record<string,string>={idle:'在你身边',thinking:'正在想…',listening:'在听你说',speaking:'说给你听',error:'需要看一下设置'};
 const ACTIONS=[
@@ -427,7 +429,7 @@ function Pet(){
 
 interface Message {id:string;role:'user'|'assistant'|'system';text:string;details?:string;sources?:any[];automatic?:boolean;}
 function Chat(){
-  const desktop=useDesktop(),[tab,setTab]=useState('chat'),[messages,setMessages]=useState<Message[]>([]),[input,setInput]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[settings,setSettings]=useState<any>(null),[watch,setWatch]=useState(false),[pinned,setPinned]=useState((credentials() as any).petPinned===true),[page,setPage]=useState<any>(null),[state,setState]=useState('idle'),[notice,setNotice]=useState('');
+  const desktop=useDesktop(),[tab,setTab]=useState('chat'),[messages,setMessages]=useState<Message[]>([]),[input,setInput]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[settings,setSettings]=useState<any>(null),[watch,setWatch]=useState(false),[pinned,setPinned]=useState((credentials() as any).petPinned===true),[page,setPage]=useState<any>(null),[state,setState]=useState('idle'),[notice,setNotice]=useState(''),[setupRequired,setSetupRequired]=useState((credentials() as any).setupRequired===true);
   const inputRef=useRef<HTMLTextAreaElement>(null),bottom=useRef<HTMLDivElement>(null),seen=useRef(new Set<string>());
   const [connection,setConnection]=useState<any>(null),previousConnection=useRef<any>(null),effectiveRef=useRef('unconfigured'),autoDshNotified=useRef(false);
   const providerEffective=connection?.providerEffective||'unconfigured',providerReady=connection?.chatAvailable===true;
@@ -455,6 +457,7 @@ function Chat(){
   async function togglePin(){const next=!pinned;setPinned(next);try{await window.companion?.control('pet-pin',next);}catch(e:any){setPinned(!next);setError(e.message);}}
   const provider=chatProviderLabel(providerEffective);
   return <div className="chat-shell">
+    {setupRequired&&<SetupWizard onDone={()=>setSetupRequired(false)}/>}
     <header className="window-header"><div className="brand-icon"><AvatarIcon size={26}/></div><div className="brand-title"><strong>大肥鱼</strong><span>DeepSeek-chan · 桌面伙伴</span></div><button className={'icon-button pin-button'+(pinned?' active':'')} title={pinned?'取消桌宠置顶':'让桌宠悬浮在其他窗口上方'} aria-label={pinned?'取消桌宠置顶':'置顶桌宠'} aria-pressed={pinned} onClick={togglePin}>📌</button><button className="icon-button" title="收起窗口" aria-label="收起窗口" onClick={()=>desktop?.control('hide-chat')}>−</button></header>
     <ConnectionStatus connection={connection}/>
     <nav className="tabs">{[['chat','聊一会'],['actions','肢体'],['expressions','小表情'],['tuning','调节'],['settings','设置']].map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</nav>
@@ -499,6 +502,7 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
       {value:'unconfigured',label:'暂不启用桌宠对话',description:'保留本地互动和外部 MCP 表演'},
     ]}/>
     <div className="info-box provider-setup" data-provider-summary>{connectionMessage(connection)}</div>
+    <DshConnectPanel onConnected={onSaved}/>
     {form.provider==='api'&&<><label>API 地址<input placeholder="https://api.deepseek.com" value={form.baseUrl||''} onChange={e=>set('baseUrl',e.target.value)}/></label><label>模型名称<input placeholder="填写服务提供的模型 ID" value={form.model||''} onChange={e=>set('model',e.target.value)}/></label><label>API Key<input type="password" autoComplete="off" placeholder={settings?.hasApiKey?'已保存，留空保持':'只保存在本机加密存储'} value={form.apiKey||''} onChange={e=>set('apiKey',e.target.value)}/></label></>}
     {providerChoice==='codex'&&<div className="info-box">已手动选择 Codex，保存后使用本机 CLI 与登录配置。启动失败会提示权限、初始化或认证原因。</div>}
     {providerChoice==='dsh'&&<div className="info-box">使用已连接的 DSH 聊天桥。断线后保持 DSH，等待重连；MCP 表演与聊天可用状态分别显示。</div>}

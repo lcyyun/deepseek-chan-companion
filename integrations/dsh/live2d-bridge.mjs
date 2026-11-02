@@ -1,5 +1,7 @@
 /** Optional DeepSeek Harness Cordis plugin. It observes committed session events only. */
 import { mkdir } from 'node:fs/promises';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { WebSocket } from 'ws';
 import { resolveCompanionChatCwd } from './home-paths.mjs';
 import { dshWireFailure } from './chat-errors.mjs';
@@ -9,8 +11,13 @@ export const inject = ['sessionController', 'tools'];
 
 export function apply(ctx, config = {}) {
   const baseUrl = String(config.baseUrl || process.env.L2D_BRIDGE_URL || 'http://127.0.0.1:39181').replace(/\/$/, '');
-  const token = config.token || process.env.L2D_BRIDGE_TOKEN;
-  if (!token) throw new Error('Set L2D_BRIDGE_TOKEN before loading the DeepSeek-chan bridge.');
+  let token = config.token || process.env.L2D_BRIDGE_TOKEN;
+  if (!token && config.tokenFile) {
+    try { token = readFileSync(String(config.tokenFile), 'utf8').trim(); } catch (error) {
+      throw new Error(`Cannot read the DeepSeek-chan bridge token file: ${error.message}`);
+    }
+  }
+  if (!token) throw new Error('Set a bridge token or tokenFile before loading the DeepSeek-chan bridge.');
   const parsed = new URL(baseUrl);
   if (!['127.0.0.1', 'localhost'].includes(parsed.hostname) || parsed.protocol !== 'http:') throw new Error('The Live2D bridge must use a loopback HTTP URL.');
   const active = new Map();
@@ -83,10 +90,22 @@ export function attachChatBridge(ctx, config) {
   async function session() {
     if (config.chatSessionId) return String(config.chatSessionId);
     if (!sessionPromise) sessionPromise = (async () => {
+      if (config.sessionFile) {
+        try {
+          const saved = readFileSync(String(config.sessionFile), 'utf8').trim();
+          if (/^session-[A-Za-z0-9-]+$/.test(saved)) { ownedSessions.add(saved); return saved; }
+        } catch {}
+      }
       await mkdir(chatCwd, { recursive: true });
       const result = await ctx.sessionController.create({ cwd: chatCwd, ...(config.agentPreset ? { agentPreset: config.agentPreset } : {}) });
-      ownedSessions.add(String(result.sessionId));
-      return String(result.sessionId);
+      const id = String(result.sessionId);
+      ownedSessions.add(id);
+      if (config.sessionFile) {
+        const file = String(config.sessionFile);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, id, { mode: 0o600 });
+      }
+      return id;
     })().catch(err => { sessionPromise = null; throw err; });
     return sessionPromise;
   }

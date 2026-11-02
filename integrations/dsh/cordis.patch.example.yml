@@ -1,5 +1,6 @@
 # Replace the plugin's absolute path with your checkout path.
-# Set L2D_BRIDGE_TOKEN in the DSH process environment; never commit a real token.
+# Set L2D_BRIDGE_TOKEN in the DSH process environment, or use tokenFile below.
+# Never commit a real token or a generated patch containing one.
 # Set DSH_HOME before starting DSH to isolate its profile and companion workspace.
 - insert:
     - id: live2d-mcp
@@ -18,10 +19,14 @@
         # Native tool mode. The agent chats normally and calls avatar_reply once
         # per turn when performance is wanted; no long JSON prompt is injected.
         native: true
+        # Preferred manual option: a local token file instead of an env variable.
+        # The app-generated patch uses this automatically.
+        # tokenFile: C:/Users/you/AppData/Roaming/大肥鱼 · DeepSeek-chan/bridge-token
         # Ask the user first: A = existing conversation, B = new dedicated pet.
         # A: put the selected existing session here.
-        # B: omit this, let DSH create the companion, then save the generated ID here.
+        # B: omit chatSessionId and use sessionFile; the bridge writes the new ID.
         # chatSessionId: your-conversation-session-id
+        # sessionFile: C:/path/to/companion/session.txt
         # Default: <DSH_HOME>/live2d-companion; without DSH_HOME: ~/.dsh/live2d-companion.
         # Optional explicit overrides (normally leave unset for profile isolation):
         # dshHome: C:/path/to/isolated-dsh-home

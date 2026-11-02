@@ -1,8 +1,8 @@
 # 智能体与语音接入
 
-最近校对：2026-11-02，按应用 0.19.0 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
+最近校对：2026-11-02，按应用 0.20.0 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
 
-给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十一个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.19.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
+给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十一个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.20.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
 
 大肥鱼 · DeepSeek-chan 桌宠启动后提供 `http://127.0.0.1:39181`。在设置页复制配对码，将它作为 `Authorization: Bearer <配对码>`。Windows 默认应用数据目录为 `%APPDATA%\大肥鱼 · DeepSeek-chan`，升级兼容旧品牌目录迁移，以界面诊断中的 `dataDir` 为准。配对码重启后不变；不要放进仓库或截图。服务只监听回环地址。
 
@@ -75,6 +75,10 @@ DeepSeek Harness 的示例在 `integrations/dsh/cordis.patch.example.yml`。校�
 DSH接入依据官方 [MCP客户端](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)、[插件加载](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md) 和 [事件接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/framework/events.md)。DSH仍在快速迭代，首次接入需使用你安装的版本验证。
 
 安装前先按[DSH 安装模式](dsh-install-modes.md)询问用户选 A“接到已有会话”还是 B“新建独立桌宠会话”；不要默认。A 还要让用户选择具体会话。两种模式都推荐 `native: true`，由智能体在正常聊天中按需调用一次 `avatar_reply`，不再把长 JSON 表演规范作为每轮用户消息注入会话。
+
+应用内「连接 DeepSeek Harness」会检测 CLI/`DSH_HOME`、生成 patch 并使用同一个 profile 启动或复用 DSH，不新建独立实例；连接正在运行的 DSH 前后会显示 3 秒警示并要求用户确认。手工配置时可用 `tokenFile` 代替环境变量；B 模式可用 `sessionFile` 保存新建的会话 ID，A 模式使用 `chatSessionId`。
+
+插件支持 `tokenFile`（本地 token 文件）作为 `L2D_BRIDGE_TOKEN` 的替代；B 模式支持 `sessionFile`，首次创建后写入会话 ID，重启复用。应用内连接默认使用这两项。
 
 插件的`chat:true`开启双向聊天桥（当前插件默认启用，`chat:false`关闭）。它调用官方`ctx.sessionController.create/prompt/cancel`，在 DSH home 下的 `live2d-companion` 创建独立桌宠会话。目录优先级为显式 `chatCwd` → `dshHome/live2d-companion` → `$DSH_HOME/live2d-companion` → `~/.dsh/live2d-companion`；支持 `~` 展开，桥加载时固定路径，自定义 home 不会写入默认 home。也可配置`chatSessionId`复用专门会话，此时不创建目录。`sessionId`仅过滤状态观察来源，不能代替`chatSessionId`。服务通过认证WebSocket发送问题，插件以内部`requestId`关联用户消息及同一回合的最终助手回复，返回真实结果；停止会取消该回合。桥未连接时明确报错，不伪造回复。契约依据[官方Session Controller](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/api/session-controller/src/index.ts)及[DSH home-paths](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md)。
 
