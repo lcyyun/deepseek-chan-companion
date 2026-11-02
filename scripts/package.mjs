@@ -8,7 +8,11 @@ import mouseInput from '../desktop/mouse-input.cjs';
 
 const run = promisify(execFile);
 const root = await realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
-const release = path.join(root, 'release');
+const releaseRoot = path.join(root, 'release');
+const args = process.argv.slice(2);
+if (args.length > 1 || args.some(arg => !arg.startsWith('--out-dir='))) throw new Error('Usage: node scripts/package.mjs [--out-dir=release/candidate]');
+const release = args[0] ? path.resolve(root, args[0].slice('--out-dir='.length)) : releaseRoot;
+if (release !== releaseRoot) assertInside(releaseRoot, release);
 const folderName = 'DeepSeek-chan-win32-x64';
 const markerName = '.companion-package.json';
 const runtimeSource = path.join(root, 'node_modules', 'electron', 'dist');
@@ -47,7 +51,15 @@ const executableBytes = await readFile(path.join(runtimeSource, 'electron.exe'))
 if (executableBytes[0] !== 0x4d || executableBytes[1] !== 0x5a) throw new Error('The installed Electron executable is not a Windows PE executable.');
 const peOffset = executableBytes.readUInt32LE(0x3c);
 if (peOffset + 6 > executableBytes.length || executableBytes.readUInt32LE(peOffset) !== 0x00004550 || executableBytes.readUInt16LE(peOffset + 4) !== 0x8664) throw new Error('The installed Electron executable is not Windows x64.');
-await mkdir(release, { recursive: true });
+// Separate candidate builds avoid replacing or deleting a running installation.
+await mkdir(releaseRoot, { recursive: true });
+await checkedExisting(root, releaseRoot);
+let ancestor = releaseRoot;
+for (const component of path.relative(releaseRoot, release).split(path.sep).filter(Boolean)) {
+  ancestor = path.join(ancestor, component);
+  if (await exists(ancestor)) await checkedExisting(releaseRoot, ancestor);
+  else await mkdir(ancestor);
+}
 await checkedExisting(root, release);
 
 console.log('Preparing the Windows mouse-button observer…');

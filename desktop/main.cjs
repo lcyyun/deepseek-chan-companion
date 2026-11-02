@@ -11,8 +11,8 @@ const dshConnect = require('./dsh-connect.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
 app.setName('大肥鱼 · DeepSeek-chan');
-// Portable builds use an ASCII LocalAppData profile. Electron's process
-// singleton lock can fail with access-denied in the older non-ASCII Roaming path.
+// Portable builds keep their profile beside the application directory. The
+// installer places both under LocalAppData; moving the EXE alone loses this data.
 const legacyProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-chan');
 const packagedProfile = path.join(path.dirname(path.dirname(process.execPath)), 'DeepSeek-chan-data');
 if (app.isPackaged) {

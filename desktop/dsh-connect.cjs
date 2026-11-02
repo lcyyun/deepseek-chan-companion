@@ -46,18 +46,102 @@ function portOpen(port, timeout = 450) {
   });
 }
 
+// Windows command-line decoding for process identification only. Do not expose
+// the arguments: an unrelated Node process may have credentials in its argv.
+function windowsArguments(commandLine) {
+  const result = []; let current = '', quoted = false, active = false;
+  for (let index = 0; index < commandLine.length; index++) {
+    const char = commandLine[index];
+    if (!quoted && /\s/.test(char)) {
+      if (active) { result.push(current); current = ''; active = false; }
+      continue;
+    }
+    active = true;
+    if (char === '\\') {
+      let end = index; while (commandLine[end] === '\\') end++;
+      const count = end - index;
+      if (commandLine[end] === '"') {
+        current += '\\'.repeat(Math.floor(count / 2));
+        if (count % 2) current += '"'; else quoted = !quoted;
+        index = end;
+      } else { current += '\\'.repeat(count); index = end - 1; }
+    } else if (char === '"') quoted = !quoted;
+    else current += char;
+  }
+  if (quoted) return [];
+  if (active) result.push(current);
+  return result;
+}
+
+function nodeEntry(commandLine) {
+  const args = windowsArguments(commandLine);
+  // Only recognize the switches used by known hosts. Unknown flags remain
+  // unknown rather than accidentally treating a flag's value as a script.
+  for (let index = 1; index < args.length; index++) {
+    const arg = args[index];
+    if (['--eval', '-e', '--import', '--require', '-r'].includes(arg)) { index++; continue; }
+    if (['--experimental-vm-modules', '--expose-internals'].includes(arg) || /^--(?:import|require)=/.test(arg)) continue;
+    if (arg === '--') return args[index + 1] || '';
+    if (arg.startsWith('-')) return '';
+    return arg;
+  }
+  return '';
+}
+
+const winPath = value => typeof value === 'string' && value ? path.win32.normalize(value.replace(/\//g, '\\')).toLowerCase() : '';
+function classifyDshProcesses(records, { localAppData = process.env.LOCALAPPDATA || '', userProfile = os.homedir(), tempDir = os.tmpdir(), systemRoot = process.env.SystemRoot || 'C:\\Windows' } = {}) {
+  const answer = (known, running, reason) => ({ processCheckKnown: known, hasDshProcess: running, processCheckReason: reason });
+  if (!Array.isArray(records)) return answer(false, false, '进程信息读取失败，无法确认 DSH 是否已启动。');
+  const codexRoot = winPath(path.win32.join(localAppData, 'OpenAI', 'Codex'));
+  const artifactRoot = winPath(path.win32.join(userProfile, '.cache', 'codex-runtimes', 'codex-primary-runtime', 'dependencies', 'node'));
+  const tempRoot = winPath(tempDir) + '\\';
+  const processes = new Map(records.map(item => [Number(item.pid), item]));
+  const under = (value, root) => value.startsWith(root + '\\') ? value.slice(root.length + 1) : '';
+  const codexExecutable = value => /^bin\\[a-z0-9_-]+\\codex\.exe$/.test(under(winPath(value), codexRoot));
+  const runtimeExecutable = value => /^runtimes\\cua_node\\[a-z0-9_-]+\\bin\\node\.exe$/.test(under(winPath(value), codexRoot));
+  let unknown = false;
+  for (const item of records) {
+    const name = String(item.name || '').toLowerCase();
+    if (['deepseek harness.exe', 'dsh.exe'].includes(name)) return answer(true, true, '检测到正在运行的 DSH 进程。');
+    if (name !== 'node.exe') continue;
+    const exe = winPath(item.executablePath), command = String(item.commandLine || '');
+    if (!exe || !command) { unknown = true; continue; }
+    const entry = winPath(nodeEntry(command));
+    if (/(?:^|\\)node_modules\\@deepseek-ai\\(?:dsh\\lib\\bin|dsh-desktop-host\\lib\\(?:cli|index))\.js$/.test(entry)) {
+      return answer(true, true, '检测到通过 Node 运行的 DSH 入口。');
+    }
+    if (exe === artifactRoot + '\\bin\\node.exe' && entry === artifactRoot + '\\node_modules\\@oai\\artifact-tool\\dist\\artifact-session\\host-daemon.mjs') continue;
+    if (!runtimeExecutable(exe)) { unknown = true; continue; }
+    const bin = path.win32.dirname(exe), parent = processes.get(Number(item.parentId));
+    const parentExe = winPath(parent?.executablePath);
+    if (entry === bin + '\\node_modules\\@oai\\cua-repl\\bin\\cua-repl.mjs' && codexExecutable(parentExe)) continue;
+    // REPL workers have ephemeral paths and inline bootstrap code. Require the
+    // exact worker location and the matching runtime's node_repl parent.
+    if (parentExe === bin + '\\node_repl.exe' && entry.startsWith(tempRoot) && /^\.tmp[a-z0-9_-]+\\(?:kernel|trusted-worker)\.js$/.test(entry.slice(tempRoot.length))) continue;
+    // CUA's local server uses a relative entry. The signed-in Codex launcher
+    // must be its parent through the standard Windows cmd.exe intermediary.
+    const grandparent = processes.get(Number(parent?.parentId));
+    if (entry === 'server.mjs' && parentExe === winPath(path.win32.join(systemRoot, 'System32', 'cmd.exe')) && codexExecutable(grandparent?.executablePath)) continue;
+    unknown = true;
+  }
+  return unknown
+    ? answer(false, false, '存在无法识别或无权读取的 Node 进程，请手动启动已登记的 DSH。')
+    : answer(true, false, '未检测到 DSH；已识别的 Codex 辅助进程不影响启动。');
+}
+
 let processProbeCache;
 function inspectDshProcesses({ fresh = false } = {}) {
   if (!fresh && processProbeCache && Date.now() - processProbeCache.at < 15000) return processProbeCache.promise;
   const promise = new Promise(resolve => {
     if (process.platform !== 'win32') return resolve({ processCheckKnown: false, hasDshProcess: false });
-    // Only names and a boolean cross this boundary. Never enumerate command
-    // lines, credentials or other applications' session content.
+    // Process metadata stays inside this detector. Only fixed status/reason
+    // strings reach the renderer or logs; no raw argv is returned.
     execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      "$p=@(Get-Process -Name 'DeepSeek Harness','dsh' -ErrorAction SilentlyContinue); if($p.Count -gt 0){'running'}elseif(@(Get-Process -Name 'node' -ErrorAction SilentlyContinue).Count -gt 0){'unknown'}else{'absent'}"],
-    { windowsHide: true, timeout: 2500, maxBuffer: 1024 }, (error, stdout) => {
-      const answer = String(stdout || '').trim();
-      resolve({ processCheckKnown: !error && ['running','absent'].includes(answer), hasDshProcess: answer === 'running' });
+      "$ErrorActionPreference='Stop'; @(Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{pid=$_.ProcessId;parentId=$_.ParentProcessId;name=$_.Name;executablePath=$_.ExecutablePath;commandLine=$(if($_.Name -eq 'node.exe'){$_.CommandLine}else{''})} }) | ConvertTo-Json -Compress"],
+    { windowsHide: true, timeout: 4000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      if (error) return resolve(classifyDshProcesses(null));
+      try { resolve(classifyDshProcesses(JSON.parse(String(stdout || '')))); }
+      catch { resolve(classifyDshProcesses(null)); }
     });
   });
   processProbeCache = { at: Date.now(), promise };
@@ -316,7 +400,7 @@ function createConnectionController({ root, getDataDir, getConfig, getService,
     }
     if (info.open?.length || info.hasDshProcess) return result(lastFailure ? 'start_failed' : 'occupied', lastFailure || '检测到现有进程或占用端口，但未完成对应桥握手。请完成首次接入或由 DSH 重新加载已配置插件；不会结束现有进程。', { requiresSetup: !installation.valid });
     if (!installation.valid) return result(installation.reason === 'upgrade' ? 'upgrade_required' : 'configure_needed', installation.message, { requiresSetup: true });
-    if (!info.processCheckKnown) return result('occupied', '无法确认是否已有 DSH 正在运行。请手动启动已登记入口，或稍后重新检查。');
+    if (!info.processCheckKnown) return result('occupied', info.processCheckReason || '无法确认是否已有 DSH 正在运行。请手动启动已登记入口，或稍后重新检查。');
     return result(lastFailure ? 'start_failed' : 'start_available', lastFailure || '已登记的 DSH 尚未运行。可手动点击启动，复用原 profile 与会话。', { canStartConfigured: true });
   }
   async function status({ fresh = false } = {}) {
@@ -393,4 +477,4 @@ async function waitForBridge(service, timeout = 30000) {
   throw new Error('DSH 已启动，但皮套聊天桥没有就绪。请检查 DSH 的模型配置和插件日志。');
 }
 
-module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, writeLauncher, listSessions, startDsh, waitForPort, waitForBridge, homeFingerprint, prepareInstallation, readInstallation, createConnectionController };
+module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, classifyDshProcesses, patchText, writePatch, sessionFile, writeLauncher, listSessions, startDsh, waitForPort, waitForBridge, homeFingerprint, prepareInstallation, readInstallation, createConnectionController };
