@@ -157,12 +157,12 @@ function waitForPort(port, timeout = 30000) {
   });
 }
 
-function waitForPortClosed(port, timeout = 8000) {
+function waitForPortClosed(port, timeout = 20000) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const tick = async () => {
       if (!(await portOpen(port))) return resolve(true);
-      if (Date.now() - started >= timeout) return reject(new Error('DSH 没有在限定时间内关闭。'));
+      if (Date.now() - started >= timeout) return reject(new Error('DSH 的端口仍在监听。请手动退出 DSH 后再连接。'));
       setTimeout(tick, 250);
     };
     tick();
@@ -190,14 +190,15 @@ function stopDsh({ port, managedPid }) {
     } catch {}
   }
   if (!pid || pid === process.pid) return false;
-  try { execFileSync('taskkill.exe', ['/PID', String(pid), '/T'], { windowsHide: true, stdio: 'ignore' }); } catch {}
+  // The user has already confirmed the restart after the countdown. Force the
+  // DSH process tree so Electron's tray/window loop cannot leave the port held.
+  try { execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch {}
   const started = Date.now();
-  while (Date.now() - started < 3000) {
+  while (Date.now() - started < 5000) {
     try { process.kill(pid, 0); } catch { return true; }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
   }
-  try { execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch {}
-  return true;
+  return false;
 }
 
 module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, listSessions, startDsh, waitForPort, waitForPortClosed, waitForBridge, stopDsh };

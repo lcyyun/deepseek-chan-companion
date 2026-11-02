@@ -14,11 +14,16 @@
 .text-button{border:0;background:none;color:#4e7fb5;font-size:11px;cursor:pointer;padding:2px}
 .dsh-status-grid{display:grid;grid-template-columns:70px 1fr;gap:3px 8px;margin:8px 0;font-size:11px;color:#5b7695}
 .dsh-status-grid b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#294c73;font-weight:600}
-.dsh-mode{display:grid;gap:6px;margin:8px 0}
-.dsh-mode label{display:block;border:1px solid #e0eaf5;border-radius:10px;padding:7px 9px;background:#fff;font-size:11px;color:#315276;cursor:pointer}
-.dsh-mode label.selected{border-color:#8bb6e8;background:#f0f7ff}
-.dsh-mode label span{display:block;margin-top:2px;color:#7790a9;font-size:10px}
-.dsh-mode input{margin-right:5px}
+.dsh-mode{display:grid;gap:7px;margin:9px 0}
+.dsh-mode label{position:relative;display:flex;align-items:flex-start;gap:9px;border:1px solid #e0eaf5;border-radius:11px;padding:9px 10px;background:#fff;font-size:11px;color:#315276;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+.dsh-mode label:hover{border-color:#b9d2eb}
+.dsh-mode label.selected{border-color:#7aaee4;background:#f2f8ff;box-shadow:0 0 0 2px rgba(90,146,207,.08)}
+.dsh-mode input{position:absolute;opacity:0;pointer-events:none;width:1px;height:1px}
+.dsh-mode-badge{flex:none;display:grid;place-items:center;width:21px;height:21px;border-radius:7px;border:1px solid #d2e1f1;background:#f5f9fe;color:#6f8fac;font-size:10px;font-weight:700}
+.dsh-mode label.selected .dsh-mode-badge{border-color:#4f8ed4;background:#4f8ed4;color:#fff}
+.dsh-mode-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+.dsh-mode-copy strong{font-size:11px;font-weight:600;color:#294c73;line-height:1.35}
+.dsh-mode-copy small{font-size:10px;line-height:1.45;color:#7a92a9;font-weight:400}
 .dsh-session-picker{margin:8px 0}
 .dsh-session-picker label{display:block;font-size:11px;color:#4e6f92}
 .dsh-session-picker input{width:100%;box-sizing:border-box;margin-top:3px;padding:6px 8px;border:1px solid #d9e5f2;border-radius:8px;font:inherit;font-size:11px}

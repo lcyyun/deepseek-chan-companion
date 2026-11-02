@@ -318,8 +318,9 @@ async function connectDsh(payload = {}) {
   if (info.running && payload.restart !== true) return { ok: false, requiresRestart: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT, openPorts: info.open };
   let port = info.open[0] || Number(config.dshPort) || dshConnect.DEFAULT_PORT;
   if (info.running && info.open.includes(port)) {
-    dshConnect.stopDsh({ port, managedPid: dshManagedPid });
-    await dshConnect.waitForPortClosed(port, 10000);
+    const stopped = dshConnect.stopDsh({ port, managedPid: dshManagedPid });
+    if (!stopped) throw new Error(`无法关闭占用端口 ${port} 的 DSH。请手动退出 DSH 后再连接。`);
+    await dshConnect.waitForPortClosed(port, 20000);
   }
   const patch = dshConnect.writePatch({
     root: ROOT, dataDir, serviceUrl: service.url, token: service.token,

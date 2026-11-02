@@ -94,9 +94,17 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
     {!status?.cli && <p className="hint warn">没有找到 DSH CLI。请先安装 DeepSeek Harness，或在高级设置中填写 DSH 路径。</p>}
     {status?.cli && !status.homeExists && <p className="hint warn">没有找到 DSH_HOME：{status.home}</p>}
     {connected && <p className="hint ok">皮套已经接到当前 DSH。可以直接聊天，或点“打开 DSH”查看会话。</p>}
-    {!connected && <div className="dsh-mode">
-      <label className={mode === 'new' ? 'selected' : ''}><input type="radio" name="dsh-mode" checked={mode === 'new'} onChange={() => setMode('new')} />新建独立桌宠会话<span>不继承当前聊天上下文；会话 ID 会自动保存。</span></label>
-      <label className={mode === 'existing' ? 'selected' : ''}><input type="radio" name="dsh-mode" checked={mode === 'existing'} onChange={() => setMode('existing')} />接到已有会话<span>继承该会话的人格和上下文；需要选择具体会话。</span></label>
+    {!connected && <div className="dsh-mode" role="radiogroup" aria-label="选择会话模式">
+      <label className={mode === 'existing' ? 'selected' : ''}>
+        <input type="radio" name="dsh-mode" checked={mode === 'existing'} onChange={() => setMode('existing')} />
+        <span className="dsh-mode-badge">A</span>
+        <span className="dsh-mode-copy"><strong>接到已有会话</strong><small>继承该会话的人格和上下文；需要选择具体会话。</small></span>
+      </label>
+      <label className={mode === 'new' ? 'selected' : ''}>
+        <input type="radio" name="dsh-mode" checked={mode === 'new'} onChange={() => setMode('new')} />
+        <span className="dsh-mode-badge">B</span>
+        <span className="dsh-mode-copy"><strong>新建独立桌宠会话</strong><small>不继承当前聊天上下文；会话 ID 会自动保存。</small></span>
+      </label>
     </div>}
     {!connected && mode === 'existing' && <div className="dsh-session-picker">
       <label>已有会话 ID<input value={sessionId} onChange={e => setSessionId(e.target.value)} placeholder="session-..." /></label>
