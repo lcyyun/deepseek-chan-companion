@@ -17,6 +17,7 @@ export async function handleMcp(req, res, parsedBody, service) {
     `Enum combination: ${CAPABILITIES.speechCombinations.selection.join(', ')}.`,
     'Priority: explicit bodyAnimation wins over gesture; bodyAnimation none disables gesture for that segment; combination is the per-segment opening; expressionCues is independent face timing. Segment-level intensity is ignored.',
     `Known issues: ${CAPABILITIES.knownIssues.join(' ')}`,
+    CAPABILITIES.specialExpressions,
     'The tool result includes warnings when a field is ignored or unknown; adjust the next call instead of guessing.',
   ].join(' ');
   server.registerTool('avatar_capabilities', { description: 'Read character IDs, tags, useWhen/avoidWhen, recommended face/body pairings and the short performanceGuide. Prefer a fitting opening combination, then independent face/body for remaining speech. Tags are selection guidance, not command IDs.', inputSchema: {} }, async () => result(service.capabilities));

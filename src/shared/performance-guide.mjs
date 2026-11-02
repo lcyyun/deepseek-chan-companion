@@ -69,6 +69,8 @@ export const PERFORMANCE_GUIDE_BRIEF = '按自己的意图语气选动作，不�
 
 export const EXPRESSION_HOLD_GUIDE = '表情停留：expressionCues.at 是段内语音进度(0–0.9)，实际持续≈比例×该段语音时长。需要停留的脸红/害羞/窘迫/惊讶：台词尽量写到约30字以上；在0、约0.45、约0.85锚定同一或相近情绪；强度约0.8–0.85→0.65–0.75→0.55–0.6；单段最多4个cue，不再叠加。跨段延续优先“长台词+多锚点”，不要靠增加段数，避免动作重入和口型重置。';
 
+export const SPECIAL_EXPRESSION_GUIDE = '特殊表情：爱心眼love是表白级，只在用户明确表达爱意、亲昵告白或主动要求时使用；每轮最多一次，强度约0.7–0.85。普通感谢、夸奖、好消息、工作讨论和悲伤严肃场景改用happy/joyful/gentle/playful，不要用爱心眼冒充热情。';
+
 export const PERFORMANCE_GUIDE = Object.freeze({
   modes: Object.freeze({
     face: Object.freeze({ fields: 'emotion / expressionCues', description: '只控制面部；小表情预览不带肢体，语音保持口型优先。' }),
