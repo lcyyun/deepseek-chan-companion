@@ -2,11 +2,13 @@
 
 在 Windows 桌面陪你聊天、做小动作、一起看网页的 Live2D 平台。角色文件从本机加载，大模型通过结构化指令驱动表情、视线和已有手势；声音按实际播放音频驱动嘴型。
 
-**当前版本：0.21.1。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+**当前版本：0.22.0。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
 
 **纯净电脑安装验收：** 仓库已公开，可直接克隆，无需 GitHub 登录。目前尚未发布 GitHub Release 安装包，请先按下方[从源码开始](#从源码开始)准备环境、构建和启动；也可以把仓库地址交给自己的智能体，按 README 完成安装。Live2D 模型与 DSH 模型配置由使用者自行提供。
 
 第一次使用发行版，请先看[发行版快速开始](docs/release-quickstart.md)：解压完整程序、选择自己的模型，再完成一次 DSH 会话接入。发行包不包含个人模型、会话、配对码或登录凭据。普通使用不需要安装 Node.js，也不需要管理员权限。
+
+0.22.0 优化高刷新率和 16GB 电脑：减少重复渲染、贴图占用及原生窗口更新，隐藏桌宠时暂停绘制。设置 → 性能与画质新增自动、均衡、省资源和高清；默认自动模式在不超过 20GiB 内存的电脑上使用均衡档，均衡和高清均以 60 帧为上限。实测方法和数据见[性能优化与验收](docs/render-performance.md)。
 
 0.21.0 将日常连接改为固定流程：首次配置一次，之后直接“连接／重新连接”。桌宠重启时桥自动认证、重新发现 MCP 工具，并单独确认 DSH 工具注册；保留 A/B 会话，不调用模型来安排重连。只有明确点击“启动已配置的 DSH”才尝试启动已登记实例，遇到现有未知进程或占用端口不会强行启动，更不会结束 DSH。旧桥仍可聊天，首次升级需要重新加载一次；详见[连接与自动恢复](docs/dsh-reconnect.md)。
 
@@ -116,7 +118,7 @@ flowchart LR
 
 ## 启动
 
-已打包的便携版：将 ZIP 完整解压到普通用户目录，再运行 `Install.ps1` 创建快捷方式，或直接双击 `DeepSeek-chan.exe`。安装脚本按版本写入 `%LOCALAPPDATA%\Programs\DeepSeekChan\app-0.21.1`；旧版本目录保留。请保留整个程序目录，不能只移动 exe，也不要在压缩包预览中运行。源码打包输出位于 `release/DeepSeek-chan-win32-x64`。
+已打包的便携版：将 ZIP 完整解压到普通用户目录，再运行 `Install.ps1` 创建快捷方式，或直接双击 `DeepSeek-chan.exe`。安装脚本按版本写入 `%LOCALAPPDATA%\Programs\DeepSeekChan\app-0.22.0`；旧版本目录保留。请保留整个程序目录，不能只移动 exe，也不要在压缩包预览中运行。源码打包输出位于 `release/DeepSeek-chan-win32-x64`。
 
 源码启动需要已安装 Node.js/npm。项目当前依赖已准备好时运行：
 

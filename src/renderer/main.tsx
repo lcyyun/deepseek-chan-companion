@@ -18,6 +18,8 @@ import { planSpeechCombination } from '../shared/speech-combination.mjs';
 import { planGestureCues, canContinueGesture } from '../shared/gesture-cues.mjs';
 import { normalizeExpressionCues } from '../shared/expression-cues.mjs';
 import { createLive2D } from './live2d';
+import { resolveRenderQuality } from '../shared/render-quality.mjs';
+import { createMoveQueue, quantizeRegion } from '../shared/input-scheduling.mjs';
 import { BehaviorController } from './behavior';
 import type { Reply } from '../shared/contracts';
 import { DEFAULT_MODEL_TUNING, MODEL_TUNING_LIMITS, sanitizeModelTuning, type ModelTuning } from '../shared/model-tuning.mjs';
@@ -114,6 +116,10 @@ function Pet(){
   const petView=useRef({scale:1,offsetX:0,offsetY:0});
   const petPlacement=useRef<any>(null),captionRect=useRef({x:8,y:8,width:320,height:120});
   const dragEnabled=useRef(false);
+  const renderActive=useRef((credentials() as any).renderActive!==false);
+  const renderVisibilityRevision=useRef(0);
+  const dragMoves=useRef<ReturnType<typeof createMoveQueue>|null>(null);
+  if(!dragMoves.current)dragMoves.current=createMoveQueue(delta=>window.companion?.control('move-pet',delta));
   const [petting,setPetting]=useState(false),[headHover,setHeadHover]=useState(false),[guardRects,setGuardRects]=useState<any[]>([]);
   const [modelRegion,setModelRegion]=useState<any>(null);
   const [,refreshPlacement]=useState(0);
@@ -213,6 +219,7 @@ function Pet(){
     return nx*nx+ny*ny<=1;
   }
   function endPointer(immediate=false,completeTap=false){
+    if(immediate)dragMoves.current?.cancel();else dragMoves.current?.flush();
     const held=pointer.current;pointer.current=null;clearTimeout(patEnd.current);
     if(held)window.companion?.control('pet-pointer-lock',{locked:false,id:held.session}).catch(()=>{});
     // Chromium can already have removed the pointer while a native window is
@@ -248,7 +255,7 @@ function Pet(){
     if(e.buttons===0){endPointer();return;}
     const dx=e.screenX-held.x,dy=e.screenY-held.y,now=performance.now();
     held.travel=Math.max(held.travel,Math.hypot(e.clientX-held.startClientX,e.clientY-held.startClientY));
-    if(drag)window.companion?.control('move-pet',{dx,dy});
+    if(drag)dragMoves.current?.push(dx,dy);
     else if(held.pat&&hit)behavior.current?.setPetting(true,{x:hit.x,y:hit.y,speed:Math.min(1,Math.hypot(dx,dy)/Math.max(16,now-held.at)*1.5)});
     held.x=e.screenX;held.y=e.screenY;held.at=now;
   }
@@ -343,7 +350,9 @@ function Pet(){
     (async()=>{
       try{
         const manifest=await api('/api/model-manifest');
-        const handle=await createLive2D(canvas.current!,{manifest,modelBaseUrl:credentials().url+'/model/',fetcher:(url:string)=>fetch(url,{headers:{Authorization:`Bearer ${credentials().token}`}}),maxTextureSize:4096,onFrame:(dt:number,elapsed:number)=>{behavior.current?.setAudioLevel(speaker.current.level());behavior.current?.update(dt,elapsed);},onError:(e:any)=>setError(String(e?.message||e))} as any);
+        const quality=(credentials() as any).renderQuality||resolveRenderQuality();
+        const handle=await createLive2D(canvas.current!,{manifest,modelBaseUrl:credentials().url+'/model/',fetcher:(url:string)=>fetch(url,{headers:{Authorization:`Bearer ${credentials().token}`}}),...quality,onFrame:(dt:number,elapsed:number)=>{behavior.current?.setAudioLevel(speaker.current.level());behavior.current?.update(dt,elapsed);},onError:(e:any)=>setError(String(e?.message||e))} as any);
+        handle.setRenderActive(renderActive.current);
         if(disposed){handle.destroy();return;}runtime.current=handle;handle.setModelTuning(modelTuning.current,{replace:true});if(petPlacement.current)handle.setPlacement(petPlacement.current);else handle.setView(petView.current.scale,petView.current.offsetX,petView.current.offsetY);behavior.current=new BehaviorController(handle,{onEvent:(event:any)=>{if(event.type==='error')reportError('动作未能播放：'+(event.message||event.error||'未知原因'));}});behavior.current.setBasinEnabled(basinEnabled.current);behavior.current.setGlassesEnabled(glasses.current.enabled,glasses.current.style);behavior.current.setSmallFormEnabled(smallForm.current);behavior.current.setTuning(modelTuning.current,{replace:true});setReady(true);setState(activeState.current);if(pendingCommand.current){behavior.current.applyCommand(pendingCommand.current);pendingCommand.current=null;}if(pendingReply.current){const item=pendingReply.current;pendingReply.current=null;void presentReply(item);}
       }catch(e:any){setError(e.message||String(e));setStatus('模型加载失败');}
     })();
@@ -385,13 +394,15 @@ function Pet(){
       }
       if(e.type==='watch'&&!e.watch?.enabled){clearTimeout(autoWatch.current.timer);autoWatch.current.url='';autoWatch.current.lastAt=0;if(speakingPage.current)stop();}
     });
-    const offDesktop=window.companion?.onEvent(e=>{if(e.type==='pet-pointer-release')nativePointerRelease(e);if(e.type==='chest-preview')behavior.current?.previewChestReaction(e.stage);if(e.type==='model-tuning')applyModelTuning(e.tuning);if(e.type==='basin-enabled')applyBasin(e.enabled);if(e.type==='glasses')applyGlasses(e);if(e.type==='small-form')applySmallForm(e.enabled);if(e.type==='pet-scale')applyPetScale(e);if(e.type==='pointer-tracking')trackPointer(e);if(e.type==='mouse-input-unavailable')reportError('鼠标跟随暂不可用：'+e.message);if(e.type==='drag-mode'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);setDrag(e.enabled);}if(e.type==='input-mode'||e.type==='input-cancel'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}});
+    const offDesktop=window.companion?.onEvent(e=>{if(e.type==='render-active'){renderVisibilityRevision.current++;renderActive.current=e.active!==false;runtime.current?.setRenderActive(renderActive.current);}if(e.type==='pet-pointer-release')nativePointerRelease(e);if(e.type==='chest-preview')behavior.current?.previewChestReaction(e.stage);if(e.type==='model-tuning')applyModelTuning(e.tuning);if(e.type==='basin-enabled')applyBasin(e.enabled);if(e.type==='glasses')applyGlasses(e);if(e.type==='small-form')applySmallForm(e.enabled);if(e.type==='pet-scale')applyPetScale(e);if(e.type==='pointer-tracking')trackPointer(e);if(e.type==='mouse-input-unavailable')reportError('鼠标跟随暂不可用：'+e.message);if(e.type==='drag-mode'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);setDrag(e.enabled);}if(e.type==='input-mode'||e.type==='input-cancel'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}});
     applyPetScale((credentials() as any).petScale);applyBasin((credentials() as any).basinEnabled);applyGlasses({enabled:(credentials() as any).glassesEnabled,style:(credentials() as any).glassesStyle});applySmallForm((credentials() as any).smallFormEnabled);applyModelTuning((credentials() as any).modelTuning);
-    window.companion?.control('diagnostics').then((d:any)=>{setDrag(!!d?.dragMode);applyPetScale(d?.petScale);if(d?.modelTuning)applyModelTuning(d.modelTuning);if(typeof d?.basinEnabled==='boolean')applyBasin(d.basinEnabled);if(d?.glassesEnabled!==undefined)applyGlasses({enabled:d.glassesEnabled,style:d.glassesStyle});if(typeof d?.smallFormEnabled==='boolean')applySmallForm(d.smallFormEnabled);});
+    const visibilityRevision=renderVisibilityRevision.current;
+    window.companion?.control('diagnostics').then((d:any)=>{if(renderVisibilityRevision.current===visibilityRevision&&typeof d?.renderActive==='boolean'){renderActive.current=d.renderActive;runtime.current?.setRenderActive(d.renderActive);}setDrag(!!d?.dragMode);applyPetScale(d?.petScale);if(d?.modelTuning)applyModelTuning(d.modelTuning);if(typeof d?.basinEnabled==='boolean')applyBasin(d.basinEnabled);if(d?.glassesEnabled!==undefined)applyGlasses({enabled:d.glassesEnabled,style:d.glassesStyle});if(typeof d?.smallFormEnabled==='boolean')applySmallForm(d.smallFormEnabled);});
     // The main process owns hide/held-button suppression. A renderer-only latch
     // here can race the release event and swallow the first press after showing.
-    const cancel=()=>endPointer(true),visibility=()=>{if(document.hidden){cancel();clearGestureTimeline();behavior.current?.clearBodyAnimation();behavior.current?.clearExpressionPreview();behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}};window.addEventListener('blur',cancel);document.addEventListener('visibilitychange',visibility);
+    const cancel=()=>endPointer(true),visibility=()=>{if(!window.companion){renderActive.current=!document.hidden;runtime.current?.setRenderActive(renderActive.current);}if(document.hidden){cancel();clearGestureTimeline();behavior.current?.clearBodyAnimation();behavior.current?.clearExpressionPreview();behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}};window.addEventListener('blur',cancel);document.addEventListener('visibilitychange',visibility);
     let lastShape='';const regionsTimer=setInterval(()=>{
+      if(!renderActive.current)return;
       const r=runtime.current?.getInteractionRegions(),rect=canvas.current?.getBoundingClientRect();if(!rect)return;
       const body=r?{...r.body,x:r.body.x+rect.left,y:r.body.y+rect.top}:null;
       const fullBody=r?{...r.fullBody,x:r.fullBody.x+rect.left,y:r.fullBody.y+rect.top}:null;
@@ -405,10 +416,12 @@ function Pet(){
       if(loading)regions.push({x:loading.left,y:loading.top,width:loading.width,height:loading.height});
       if(!r&&!loading)return; // Wait for new-placement geometry before acknowledging its revision.
       const revision=r?.revision??petPlacement.current?.revision??0;
-      const key=JSON.stringify({revision,head,regions:regions.map(v=>({x:Math.round(v.x/4)*4,y:Math.round(v.y/4)*4,width:Math.ceil(v.width/4)*4,height:Math.ceil(v.height/4)*4}))});
-      if(key!==lastShape){lastShape=key;if(r)setModelRegion({body,head});setGuardRects(regions);window.companion?.control('pet-hit-regions',{regions,body,fullBody,revision}).catch(()=>{});}
+      const stableHead=quantizeRegion(head),stableBody=quantizeRegion(body),stableFullBody=quantizeRegion(fullBody);
+      const stableRegions=regions.map(v=>quantizeRegion(v)).filter(Boolean);
+      const key=JSON.stringify({revision,head:stableHead,body:stableBody,fullBody:stableFullBody,regions:stableRegions});
+      if(key!==lastShape){lastShape=key;if(r)setModelRegion({body:stableBody||body,head:stableHead||head});setGuardRects(stableRegions);window.companion?.control('pet-hit-regions',{regions:stableRegions,body:stableBody,fullBody:stableFullBody,revision}).catch(()=>{});}
     },100);
-    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
+    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);dragMoves.current?.dispose();dragMoves.current=null;clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
   },[]);
   dragEnabled.current=drag;
   const anchor=modelRegion?.head||{x:(petPlacement.current?.centerX??innerWidth/2)-80,y:(petPlacement.current?.centerY??innerHeight/2)-250,width:160,height:160};
@@ -485,7 +498,8 @@ function Chat(){
 
 function Settings({settings,connection,onSaved,onError}:{settings:any;connection:any;onSaved:()=>void;onError:(e:string)=>void}){
   const [form,setForm]=useState<any>({}),[saving,setSaving]=useState(false),[result,setResult]=useState(''),[diagnostics,setDiagnostics]=useState<any>(null);
-  useEffect(()=>{window.companion?.control('diagnostics').then(setDiagnostics);return window.companion?.onEvent(e=>{if(e.type==='pet-scale')setDiagnostics((d:any)=>({...d,petScale:e}));});},[]);
+  const [qualityChanging,setQualityChanging]=useState(false);
+  useEffect(()=>{window.companion?.control('diagnostics').then(setDiagnostics);return window.companion?.onEvent(e=>{if(e.type==='pet-scale')setDiagnostics((d:any)=>({...d,petScale:e}));if(e.type==='render-quality')setDiagnostics((d:any)=>({...d,renderQuality:e.profile}));});},[]);
   useEffect(()=>{if(settings)setForm({...settings,apiKey:'',ttsKey:'',ttsBaseUrl:settings.tts?.baseUrl||'',ttsModel:settings.tts?.model||'',ttsVoice:settings.tts?.voice||'alloy'});},[settings]);
   const set=(key:string,value:any)=>setForm((f:any)=>({...f,[key]:value}));
   const providerChoice=form.providerSource==='user'?(form.provider||'unconfigured'):'auto';
@@ -493,6 +507,7 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
   const ttsProvider=form.tts?.provider||(form.tts?.enabled?'api':form.tts?.systemVoice?'system':'edge');
   const setTtsProvider=(provider:string)=>setForm((f:any)=>({...f,tts:{...f.tts,provider,enabled:provider==='api'}}));
   async function save(){setSaving(true);setResult('');try{const payload={...form};if(!payload.apiKey)delete payload.apiKey;if(!payload.ttsKey)delete payload.ttsKey;await api('/api/settings',payload,'PUT');onSaved();setResult('已保存，下次对话生效。');}catch(e:any){onError(e.message);setResult(e.message);}finally{setSaving(false);}}
+  async function chooseQuality(mode:string){setQualityChanging(true);try{const profile=await window.companion?.control('render-quality',mode);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('画质设置已保存，模型正在重新加载。');}catch(e:any){onError(e.message);}finally{setQualityChanging(false);}}
   return <section className="panel-scroll settings-panel"><div className="section-intro"><h2>按你的节奏相处</h2><p>模型留在本机。随时选择你的智能体。</p></div>
     <SettingsSelect id="provider" label="对话来源" value={providerChoice} onChange={chooseProvider} options={[
       {value:'auto',label:'自动 · 优先 DeepSeek Harness',description:'聊天桥就绪后自动接入；未连接时保持等待'},
@@ -512,6 +527,15 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
       {value:'detailed',label:'详细解释 · 分段呈现'},
     ]}/>
     <label className="check-row"><input type="checkbox" checked={form.voiceEnabled!==false} onChange={e=>set('voiceEnabled',e.target.checked)}/>朗读简短回复</label>
+    <details className="settings-group"><summary>性能与画质</summary>
+      <SettingsSelect id="render-quality" label="渲染模式" value={diagnostics?.renderQuality?.mode||'auto'} onChange={chooseQuality} disabled={qualityChanging||!window.companion} options={[
+        {value:'auto',label:'自动（推荐）',description:'按本机内存选择均衡或高清'},
+        {value:'balanced',label:'均衡 · 流畅优先',description:'60 帧，适合 16GB 内存电脑'},
+        {value:'economy',label:'省资源',description:'30 帧，进一步降低画布与贴图占用'},
+        {value:'quality',label:'高清',description:'60 帧，更清晰的贴图与抗锯齿'},
+      ]}/>
+      <p className="hint">当前：{diagnostics?.renderQuality?.label||'均衡'}。隐藏桌宠时暂停渲染，显示后恢复。切换模式会重新加载模型并停止当前表演，选择后自动保存。</p>
+    </details>
     <details className="settings-group"><summary>声音与口型</summary>
       <p className="hint">选择大肥鱼说话的声音。口型和肢体节奏跟随实际播放的音频。</p>
       <fieldset className="voice-choices"><legend>朗读声音</legend>{[

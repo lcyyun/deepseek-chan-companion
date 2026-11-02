@@ -16,10 +16,11 @@ const runtimeStub = `
 export async function createLive2D(canvas,options){
  const q=window.__qa;let elapsed=0;
  const runtime={setParameters:p=>Object.assign(q.params,p),getParameters:()=>[],
- getInteractionRegions:()=>({body:{x:100,y:40,width:400,height:500},fullBody:{x:100,y:40,width:400,height:500},head:{x:200,y:70,width:200,height:140},chest:{x:220,y:260,width:160,height:100},basin:q.basin?{x:210,y:50,width:180,height:100}:undefined,revision:0}),
+ getInteractionRegions:()=>{q.regionReads++;return({body:{x:100,y:40,width:400,height:500},fullBody:{x:100,y:40,width:400,height:500},head:{x:200,y:70,width:200,height:140},chest:{x:220,y:260,width:160,height:100},basin:q.basin?{x:210,y:50,width:180,height:100}:undefined,revision:0})},
+ setRenderActive(active){q.renderActive=active;q.renderCalls.push(active)},
  setPlacement(){},setView(){},setModelTuning(){},setPoseOverlay(){},setPupilScale(){},setHandForeground(){},setCuddleHand(){},setImpactOverlay(){},setEarImpulse(){},setFaceOverlay(){},
  playMotion:async()=>{},stopMotion(){},setExpression:async()=>{},reset(){},destroy(){clearInterval(timer)}};
- const timer=setInterval(()=>{elapsed+=1/60;options.onFrame?.(1/60,elapsed)},1000/60);q.runtime=runtime;return runtime;
+ const timer=setInterval(()=>{if(!q.renderActive)return;q.frames++;elapsed+=1/60;options.onFrame?.(1/60,elapsed)},1000/60);q.runtime=runtime;return runtime;
 }`;
 const stubs = {
   './api': `export const credentials=()=>window.__qa.boot;export const initialize=async()=>credentials();export const api=async path=>path==='/api/model-manifest'?{}:{voiceEnabled:false};export const events=callback=>{window.__qa.service.add(callback);return()=>window.__qa.service.delete(callback);};`,
@@ -29,9 +30,12 @@ const stubs = {
   './behavior': `import {BehaviorController as Real,BEHAVIOR_PRESETS} from ${JSON.stringify(path.join(root, 'src/shared/behavior.mjs').replaceAll('\\','/'))};export {BEHAVIOR_PRESETS};export class BehaviorController extends Real{constructor(...args){super(...args);window.__qa.behavior=this;}setPetting(active,input){window.__qa.pets.push({active,input});super.setPetting(active,input);}tapChest(){const accepted=super.tapChest();window.__qa.taps.push(accepted);return accepted;}}`,
 };
 const setup = `
-window.__qa={controls:[],pets:[],taps:[],sounds:0,params:{},errors:[],desktop:new Set(),service:new Set(),failSet:0,failRelease:0,setFailures:0,releaseFailures:0,dropRelease:false,basin:false,boot:{url:'http://fixture.invalid',token:'fixture',role:'pet',basinEnabled:false}};
+window.__qa={controls:[],pets:[],taps:[],sounds:0,params:{},errors:[],desktop:new Set(),service:new Set(),failSet:0,failRelease:0,setFailures:0,releaseFailures:0,dropRelease:false,basin:false,renderActive:true,renderCalls:[],frames:0,regionReads:0,boot:{url:'http://fixture.invalid',token:'fixture',role:'pet',basinEnabled:false,renderActive:true}};
 const q=window.__qa;
-window.companion={bootstrap:async()=>q.boot,control:async(action,value)=>{q.controls.push({action,value});if(action==='diagnostics')return{dragMode:false,basinEnabled:q.basin};return true;},onEvent:callback=>{q.desktop.add(callback);return()=>q.desktop.delete(callback);}};
+const fixture=JSON.parse(new URLSearchParams(location.search).get('fixture')||'{}');
+q.boot.renderActive=fixture.bootActive!==false;
+q.diagnosticsActive=fixture.diagnosticsActive??q.boot.renderActive;
+window.companion={bootstrap:async()=>q.boot,control:async(action,value)=>{q.controls.push({action,value});if(action==='diagnostics'){const result={dragMode:false,basinEnabled:q.basin,renderActive:q.diagnosticsActive};if(fixture.deferDiagnostics)return new Promise(resolve=>{q.resolveDiagnostics=()=>resolve(result)});return result;}return true;},onEvent:callback=>{q.desktop.add(callback);return()=>q.desktop.delete(callback);}};
 q.emit=event=>{if(event.type==='basin-enabled')q.basin=event.enabled;for(const callback of q.desktop)callback(event);};
 window.addEventListener('error',event=>{q.errors.push(event.message);event.preventDefault();});
 const capture=Element.prototype.setPointerCapture,release=Element.prototype.releasePointerCapture,has=Element.prototype.hasPointerCapture;
@@ -52,12 +56,12 @@ function input(type, point = head) {
   win.webContents.sendInputEvent({ type, ...point, globalX: bounds.x + point.x, globalY: bounds.y + point.y, button: 'left', clickCount: 1 });
 }
 async function click(point = head) { input('mouseDown', point); await delay(25); input('mouseUp', point); await delay(40); }
-async function fresh() {
-  await win.loadFile(path.join(directory, 'index.html'));
+async function fresh(initial = {}) {
+  await win.loadFile(path.join(directory, 'index.html'), { query: { fixture: JSON.stringify(initial) } });
   await until('!!window.__qa.behavior && !document.querySelector(".model-status")');
 }
-async function check(name, task) {
-  await fresh();
+async function check(name, task, initial = {}) {
+  await fresh(initial);
   try { await task(); report.cases.push({ name, ok: true }); }
   catch (error) { report.cases.push({ name, ok: false, error: String(error.stack || error), browserErrors: await evaluate('__qa.errors') }); }
 }
@@ -84,6 +88,42 @@ async function releaseNative(id, point) {
   await app.whenReady();
   win = new BrowserWindow({ x: 0, y: 0, width: 800, height: 650, show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
   report.windowVisible = win.isVisible();
+  await check('initially hidden bootstrap is corrected by the actual visible diagnostics snapshot', async () => {
+    assert.equal(await evaluate('__qa.boot.renderActive'), false);
+    await until('__qa.renderActive && __qa.frames>0');
+    assert.equal(await evaluate('__qa.renderCalls.at(-1)'), true);
+    assert.deepEqual(await evaluate('__qa.errors'), []);
+  }, { bootActive: false, diagnosticsActive: true });
+  await check('native show wins over stale hidden diagnostics, and native hide pauses frames and geometry work', async () => {
+    await until('typeof __qa.resolveDiagnostics==="function"');
+    assert.equal(await evaluate('__qa.renderActive'), false);
+    assert.equal(await evaluate('__qa.frames'), 0);
+    await evaluate('__qa.emit({type:"render-active",active:true})');
+    await until('__qa.frames>0');
+    await evaluate('__qa.resolveDiagnostics()');await delay(120);
+    assert.equal(await evaluate('__qa.renderActive'), true, 'old hidden diagnostics cannot override a more recent show');
+    input('mouseDown', head);await until('__qa.behavior.isPetting');
+    await evaluate('__qa.emit({type:"input-cancel"});__qa.emit({type:"render-active",active:false})');
+    input('mouseUp',head);await delay(60);
+    const paused=await evaluate('({frames:__qa.frames,reads:__qa.regionReads})');
+    await delay(240);
+    assert.deepEqual(await evaluate('({frames:__qa.frames,reads:__qa.regionReads})'),paused);
+    assert.equal(await evaluate('__qa.behavior.isPetting'),false);
+    await evaluate('__qa.emit({type:"render-active",active:true})');
+    await until(`__qa.frames>${paused.frames}`);
+    input('mouseDown',head);await until('__qa.behavior.isPetting');input('mouseUp',head);
+    assert.deepEqual(await evaluate('__qa.errors'), []);
+  }, { bootActive: false, diagnosticsActive: false, deferDiagnostics: true });
+  await check('native hide wins over stale visible diagnostics and DOM visibility cannot resume a hidden desktop pet', async () => {
+    await until('__qa.frames>0 && typeof __qa.resolveDiagnostics==="function"');
+    await evaluate('__qa.emit({type:"render-active",active:false});__qa.resolveDiagnostics()');await delay(60);
+    assert.equal(await evaluate('__qa.renderActive'),false);
+    const calls=await evaluate('__qa.renderCalls.length'),frames=await evaluate('__qa.frames');
+    await evaluate('document.dispatchEvent(new Event("visibilitychange"))');await delay(100);
+    assert.equal(await evaluate('__qa.renderCalls.length'),calls);
+    assert.equal(await evaluate('__qa.frames'),frames);
+    await evaluate('__qa.emit({type:"render-active",active:true})');await until(`__qa.frames>${frames}`);
+  }, { bootActive: true, diagnosticsActive: true, deferDiagnostics: true });
   for (const kind of ['head', 'basin', 'chest']) await check(`setPointerCapture failure preserves ${kind} interaction and the next contact`, async () => {
     if (kind === 'basin') await evaluate('__qa.emit({type:"basin-enabled",enabled:true})');
     await evaluate('__qa.failSet=1');

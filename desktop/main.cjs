@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, Tray, Menu, nativeImage, safeStorage, dialog, shell, clipboard } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { totalmem } = require('node:os');
 const { pathToFileURL } = require('node:url');
 const zlib = require('node:zlib');
 const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, petTopmostForFocus, validRect } = require('./pet-input.cjs');
@@ -26,9 +27,21 @@ if (!app.isPackaged && path.resolve(app.getPath('userData')) === path.resolve(de
 }
 let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;
 let config = {}, dataDir, configFile, failures = [], lastSaved = 0, setupRequired = false;
-let sanitizeModelTuning;
+let sanitizeModelTuning, normalizeRenderMode, resolveRenderQuality;
 const roles = new Map();
-let inputRegions = [], pointerLocked = false, shapeKey = '';
+const windowBoundsState = new WeakMap();
+const sameBounds=(a,b)=>a&&b&&['x','y','width','height'].every(key=>a[key]===b[key]);
+function setWindowBoundsIfChanged(win, bounds) {
+  const actual=win.getBounds(),last=windowBoundsState.get(win);
+  // Native HiDPI rounding can differ by a DIP from the requested rectangle.
+  // Accept the same observed result until either the request or window moves.
+  if(sameBounds(actual,bounds)||last&&sameBounds(last.requested,bounds)&&sameBounds(last.actual,actual))return actual;
+  win.setBounds(bounds);
+  const placed=win.getBounds();windowBoundsState.set(win,{requested:{...bounds},actual:placed});
+  return placed;
+}
+let inputRegions = [], pointerLocked = false, shapeKey = '', ignoredMouseState;
+let petVisibleRequested = true;
 let resizingPet = false, scaleSaveTimer;
 let placingChat = false, autoChatBounds = null, chatSaveTimer;
 let toggleGesture=null,lastToggleDrag=null,toggleShapeTimer,toggleDragSequence=0;
@@ -85,7 +98,7 @@ function setPetTopmost(next) {
   if (petTopmost === value) return;
   petTopmost = value;
   pet.setAlwaysOnTop(value, 'screen-saver');
-  if (value) pet.moveTop();
+  if (value) { pet.moveTop(); raiseTools(); }
 }
 function syncPetTopmost() {
   if (!pet || pet.isDestroyed()) return;
@@ -107,11 +120,13 @@ function updateInputShape(options) {
   const rects=buildInputShape({regions,width,height,fullWindow:pointerLocked,exclusions,padding:18*Math.max(1,config.petScale||1),fallbackRegions:geometrySeen?[]:[referenceBody(petScaleState())]});
   // [] means "remove the native shape", not an empty hit area. If controls
   // cover the whole pet, ignore input instead of accidentally protecting them.
-  pet.setIgnoreMouseEvents(passthrough || rects.length===0, {forward:true});
+  const ignored = passthrough || rects.length===0;
+  const ignoreChanged = ignoredMouseState !== ignored;
+  if (ignoreChanged) { pet.setIgnoreMouseEvents(ignored, {forward:true}); ignoredMouseState=ignored; }
   const key=JSON.stringify(rects);
   const changed=key!==shapeKey;
   if (changed) { try { pet.setShape(rects); shapeKey=key; if(petTopmost) pet.setAlwaysOnTop(true,'screen-saver'); } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
-  if(!toggleGesture||changed)raiseTools();
+  if(changed||ignoreChanged||options?.forceTools)raiseTools();
 }
 
 function saveConfig() {
@@ -205,7 +220,7 @@ function commitPlacement(next) {
   config.petScale=next.scale;config.petPosition=next.position;config.petLayoutVersion=2;delete config.petView;
   placementRevision++;
   resizingPet=true;
-  try {if(JSON.stringify(pet.getBounds())!==JSON.stringify(next.bounds))pet.setBounds(next.bounds);}finally{resizingPet=false;}
+  try {setWindowBoundsIfChanged(pet,next.bounds);}finally{resizingPet=false;}
   const after=petScaleState();
   toolAnchor.predict(before,after);
   fullBodyRegion=transformRegion(oldBody,before,after);
@@ -222,7 +237,7 @@ function commitPlacement(next) {
 function placeChat(bounds) {
   placingChat=true;
   try {
-    if(JSON.stringify(chat.getBounds())!==JSON.stringify(bounds))chat.setBounds(bounds);
+    setWindowBoundsIfChanged(chat,bounds);
     // Read back native DIP rounding, so an asynchronous move notification from
     // this placement cannot be mistaken for a user dragging the window.
     autoChatBounds=chat.getBounds();
@@ -231,7 +246,7 @@ function placeChat(bounds) {
 function rememberChatPlacement() {
   if(placingChat||quitting||!chat||chat.isDestroyed())return;
   const bounds=chat.getBounds();
-  if(JSON.stringify(bounds)===JSON.stringify(autoChatBounds))return;
+  if(sameBounds(bounds,autoChatBounds))return;
   config.chatBounds=bounds;
   clearTimeout(chatSaveTimer);chatSaveTimer=setTimeout(saveConfig,200);chatSaveTimer.unref?.();
 }
@@ -245,7 +260,7 @@ function layoutTools({recoverChat=false}={}) {
     if(!toggleGesture){
       const bounds=validPoint(config.togglePosition)?constrainToolBounds({...tools.toggle,x:config.togglePosition.x,y:config.togglePosition.y},screen.getAllDisplays().map(display=>display.workArea)):tools.toggle;
       if(validPoint(config.togglePosition))config.togglePosition={x:bounds.x,y:bounds.y};
-      toggle.setBounds(bounds);
+      setWindowBoundsIfChanged(toggle,bounds);
     }
     if(validPoint(config.togglePosition)){
       const bounds=toggle.getBounds(),area=screen.getDisplayMatching(bounds).workArea;
@@ -273,16 +288,27 @@ function showPet() {
   // A hidden transparent window can retain an old native hit shape. Reassert it
   // after showing so the pet never leaves a full-window input blocker over DSH.
   pointerLocked = false;
+  petVisibleRequested = true;
   if (!pet.isVisible()) pet.showInactive();
-  shapeKey = '';
-  updateInputShape();
+  shapeKey = ''; ignoredMouseState=undefined;
+  updateInputShape({forceTools:true});
   syncPetTopmost();
 }
 function hidePet() {
   if (!pet || pet.isDestroyed()) return;
   pointerLocked = false;
+  petVisibleRequested = false;
   pet.hide();
-  shapeKey = '';
+  shapeKey = ''; ignoredMouseState=undefined;
+}
+function onPetHide() {
+  petVisibleRequested=false;ignoredMouseState=undefined;suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();
+  pet.webContents.send('desktop-event',{type:'input-cancel'});
+  pet.webContents.send('desktop-event',{type:'render-active',active:false});
+}
+function onPetShow() {
+  petVisibleRequested=true;syncPetTopmost();shapeKey='';ignoredMouseState=undefined;updateInputShape({forceTools:true});
+  pet.webContents.send('desktop-event',{type:'render-active',active:true});
 }
 function makeWindow(role, options) {
   const win = new BrowserWindow({show:false,frame:false,backgroundColor:'#00000000',hasShadow:false, ...options,
@@ -398,6 +424,7 @@ else {
     if(!hadConfig)config.firstRun=true;
     setupRequired=config.setupCompleted!==true&&(hadConfig===false||config.firstRun===true);
     ({sanitizeModelTuning}=await import(pathToFileURL(path.join(ROOT,'src/shared/model-tuning.mjs')).href));
+    ({normalizeRenderMode,resolveRenderQuality}=await import(pathToFileURL(path.join(ROOT,'src/shared/render-quality.mjs')).href));
     config.modelTuning=sanitizeModelTuning(config.modelTuning);
     petPinned=config.petPinned===true;
     const {createService}=await import(pathToFileURL(path.join(ROOT,'server/index.mjs')).href);
@@ -417,21 +444,19 @@ else {
     pet.webContents.on('did-start-loading',()=>{suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
     pet.webContents.on('render-process-gone',()=>{petPointer.clear();pointerLocked=false;updateInputShape();});
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
-    pet.on('hide',()=>{suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'input-cancel'});});
+    pet.on('hide',onPetHide);
     pet.once('ready-to-show',()=>{showPet();layoutTools();broadcastScale();});
-    pet.webContents.once('did-finish-load',()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())showPet();});
-    setTimeout(()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())showPet();},1200).unref?.();
+    pet.webContents.once('did-finish-load',()=>{if(petVisibleRequested&&pet&&!pet.isDestroyed()&&!pet.isVisible())showPet();});
+    setTimeout(()=>{if(petVisibleRequested&&pet&&!pet.isDestroyed()&&!pet.isVisible())showPet();},1200).unref?.();
     toggle.once('ready-to-show',()=>{layoutTools();toggle.showInactive();toggle.setAlwaysOnTop(true,'screen-saver');});
     toggle.webContents.on('did-start-loading',()=>{if(toggleGesture)finishToggleDrag('cancel');});
     toggle.webContents.on('render-process-gone',()=>{if(toggleGesture)finishToggleDrag('cancel');});
     toggle.on('hide',()=>{if(toggleGesture)finishToggleDrag('cancel');});
     for(const win of [toggle,chat]){
-      win.once('ready-to-show',()=>{win.setAlwaysOnTop(true,'screen-saver');updateInputShape();});
-      for(const name of ['show','hide','move','resize'])win.on(name,updateInputShape);
+      win.once('ready-to-show',()=>{win.setAlwaysOnTop(true,'screen-saver');updateInputShape({forceTools:true});});
+      for(const name of ['show','hide','move','resize'])win.on(name,()=>updateInputShape({forceTools:name==='show'||name==='hide'}));
     }
-    pet.on('show',()=>{
-      syncPetTopmost();shapeKey='';updateInputShape();
-    });
+    pet.on('show',onPetShow);
     for(const win of [pet,chat,toggle]){
       win.on('focus',syncPetTopmost);
       win.on('blur',syncPetTopmost);
@@ -454,7 +479,7 @@ else {
     if(process.env.COMPANION_SHOW_CHAT==='1'||setupRequired)chat.once('ready-to-show',()=>chat.show());
   }).catch(error=>{console.error(error);dialog.showErrorBox('大肥鱼启动失败',String(error.message||error));app.quit();});
 }
-ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,setupRequired,modelTuning:config.modelTuning};});
+ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,setupRequired,modelTuning:config.modelTuning,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:resolveRenderQuality(config.renderQuality,totalmem())};});
 ipcMain.handle('window-control',async(event,action,data)=>{
   if(!roles.has(event.sender.id))throw new Error('未知窗口');
   switch(action){
@@ -463,7 +488,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'toggle-drag':if(roles.get(event.sender.id)!=='toggle')throw new Error('仅悬浮球可以移动自身');return dragToggle(data);
     case 'toggle-follow':return followToggle();
     case 'hide-chat':case 'minimize':chat.hide();break;
-    case 'hide-pet':pet.hide();break;
+    case 'hide-pet':hidePet();break;
     case 'show-pet':showPet();break;
     case 'drag-mode':setDragMode(typeof data==='boolean'?data:!dragMode);return dragMode;
     case 'pet-hit-regions':{
@@ -493,6 +518,14 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'glasses-style':config.glassesStyle=data==='monocle'?'monocle':'black';saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'glasses',enabled:config.glassesEnabled===true,style:config.glassesStyle});return config.glassesStyle;
     case 'small-form-enabled':config.smallFormEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'small-form',enabled:config.smallFormEnabled});return config.smallFormEnabled;
     case 'model-tuning':config.modelTuning=sanitizeModelTuning(data,config.modelTuning);saveConfig();for(const win of [pet,chat,toggle])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'model-tuning',tuning:config.modelTuning});return config.modelTuning;
+    case 'render-quality':{
+      if(roles.get(event.sender.id)!=='chat')throw new Error('仅聊天设置可以调整渲染质量');
+      if(typeof data!=='string'||normalizeRenderMode(data)!==data)throw new Error('渲染质量选项无效');
+      const profile=resolveRenderQuality(data,totalmem());
+      if(config.renderQuality!==data){config.renderQuality=data;saveConfig();service.dispatch({type:'stop'});petPointer.clear();suppressTracking();if(pet&&!pet.isDestroyed())pet.webContents.reload();}
+      if(chat&&!chat.isDestroyed())chat.webContents.send('desktop-event',{type:'render-quality',profile});
+      return profile;
+    }
     case 'chest-reaction':if(![1,2,3,4].includes(data))throw new Error('点击反应不存在');if(pet&&!pet.isDestroyed())pet.webContents.send('desktop-event',{type:'chest-preview',stage:data});return true;
     case 'suspend-tracking':if(roles.get(event.sender.id)==='pet')suppressTracking();break;
     case 'move-pet':{if(data&&Number.isFinite(data.dx)&&Number.isFinite(data.dy)){const current=petScaleState();const footprint=fullBodyRegion?{...fullBodyRegion,x:fullBodyRegion.x+current.bounds.x-current.position.x,y:fullBodyRegion.y+current.bounds.y-current.position.y}:undefined;const position=constrainPosition({x:current.position.x+Math.max(-2000,Math.min(2000,data.dx)),y:current.position.y+Math.max(-2000,Math.min(2000,data.dy))},petWorkArea,current.scale,footprint);return commitPlacement(createPetPlacement({area:petWorkArea,scale:current.scale,position}));}break;}
@@ -510,7 +543,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'dsh-open':{const status=await connectionFlow().status();if(!status.canOpenDsh)throw new Error('尚未确认这个 DSH 实例的网页地址，请使用已打开的 DSH 窗口。');await shell.openExternal(`http://127.0.0.1:${status.openPort}/`);return true;}
     case 'dsh-open-launcher':{const installation=dshConnect.readInstallation({root:ROOT,dataDir,config,serviceUrl:service.url});if(!installation.valid)throw new Error(installation.message);shell.showItemInFolder(installation.descriptor.launcher);return installation.descriptor.launcher;}
     case 'reset-position':resetPosition();break;
-    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
+    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:resolveRenderQuality(config.renderQuality,totalmem())};
     case 'quit':app.quit();break;
     default:throw new Error('不支持的操作');
   }

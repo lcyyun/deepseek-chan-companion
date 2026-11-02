@@ -1,6 +1,7 @@
 import type { ExpressionId } from './expressions.mjs';
 import type { SpeechGestureId } from './gesture-cues.mjs';
 import type { CombinationId } from './speech-combination.mjs';
+import type { RenderQuality } from './render-quality.mjs';
 export type AvatarState = 'idle' | 'thinking' | 'listening' | 'speaking' | 'error';
 export type AvatarIntent = 'neutral' | 'greet' | 'agree' | 'disagree' | 'curious' | 'explain' | 'reassure' | 'shy' | 'playful' | 'surprised' | 'think' | 'cuddle' | 'idea';
 export type AvatarEmotion = ExpressionId;
@@ -17,7 +18,7 @@ export interface AvatarCommand {
 }
 export interface ReplySegment { id?: string; text: string; intent?: AvatarIntent; emotion?: AvatarEmotion; gesture?: string; bodyAnimation?: SpeechGestureId | 'auto' | 'none'; combination?: CombinationId | 'auto' | 'none'; expressionCues?: ExpressionCue[] }
 export interface Reply { id: string; requestId?: string; segments: ReplySegment[]; details?: string; sources?: {title?: string; url: string}[]; }
-export interface Bootstrap { url: string; token: string; role: 'pet'|'toggle'|'chat'; }
+export interface Bootstrap { url: string; token: string; role: 'pet'|'toggle'|'chat'; renderActive?: boolean; renderQuality?: RenderQuality; }
 declare global {
   interface Window {
     companion?: {

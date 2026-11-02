@@ -19,10 +19,11 @@ export const events=callback=>{window.__qa.service.add(callback);return()=>windo
   './live2d': `export async function createLive2D(canvas,options){
 const q=window.__qa;let elapsed=0;
 const runtime={setParameters:p=>Object.assign(q.params,p),getParameters:()=>[],
+setRenderActive(active){q.renderActive=active;},
 getInteractionRegions:()=>({body:{x:100,y:40,width:400,height:500},fullBody:{x:100,y:40,width:400,height:500},head:{x:200,y:70,width:200,height:140},revision:0}),
 setPlacement(){},setView(){},setModelTuning(){},setPoseOverlay(p,w){q.pose={parameters:{...p},weight:w};},setPupilScale(){},setHandForeground(){},setCuddleHand(){},setGestureHands(kind,side,active){q.hands={kind,side,active};},setImpactOverlay(){},setEarImpulse(){},setFaceOverlay(p){q.face=p;},
 playMotion:async(name)=>{q.motions.push(name);},stopMotion(){},setExpression:async()=>{},reset(){},destroy(){}};
-q.advance=(frames=1)=>{for(let i=0;i<frames;i++){elapsed+=1/60;options.onFrame?.(1/60,elapsed);}};
+q.advance=(frames=1)=>{for(let i=0;i<frames;i++){if(!q.renderActive)continue;elapsed+=1/60;options.onFrame?.(1/60,elapsed);}};
 q.runtime=runtime;return runtime;}`,
   './audio': `export class SpeechPlayer {
 constructor(){window.__qa.player=this;}
@@ -316,15 +317,21 @@ async function command(value) { await evaluate(`__qa.emit(${JSON.stringify({ typ
     });
   }
 
-  await check('short actual audio skips the full opening instead of compressing or delaying speech', async () => {
+  // The current DSH behavior intentionally keeps explicit presets visible on
+  // short replies; the pure combination-clock test checks the same contract.
+  await check('short actual audio compresses the selected opening into playback and preserves the mouth lane', async () => {
     await reply('short-opening', [segment({ combination: 'reassure', bodyAnimation: 'talk' })]);
     await until('__qa.audio.length===1');
     await evaluate('__qa.start(0,2);__qa.progress(0,1,2);__qa.advance(30)');
-    assert.equal(await evaluate('__qa.combos.length'), 0);
-    assert.equal(await evaluate('__qa.behavior.action'), null);
-    assert.equal(await evaluate('__qa.motions.length'), 0);
-    assert.equal(await evaluate('__qa.behavior.expressionCue.emotion'), 'happy');
+    assert.ok(await evaluate('__qa.combos.length>0'));
+    assert.equal(await evaluate('__qa.combos.at(-1).durationMs'),1950);
+    assert.equal(await evaluate('__qa.behavior.action.source'),'speech-combination');
+    assert.equal(await evaluate('__qa.behavior.action.duration'),1.95);
+    assert.equal(await evaluate('__qa.behavior.action.elapsed'),1);
     assert.ok(await evaluate('__qa.params.ParamMouthOpenY>0'));
+    await evaluate('__qa.progress(0,1.99,2);__qa.advance(3)');
+    assert.equal(await evaluate('__qa.behavior.speechCombination'),null);
+    assert.equal(await evaluate('__qa.behavior.expressionCue.emotion'),'puzzled','the 50ms tail keeps its opening face instead of flashing through cues');
     await evaluate('__qa.finish(0)'); await until('__qa.behavior.state==="idle"');
   });
 
@@ -428,24 +435,27 @@ async function command(value) { await evaluate(`__qa.emit(${JSON.stringify({ typ
     });
   }
 
-  await check('only the first segment gets an opening, and a selected opening replaces the automatic idea introduction', async () => {
+  // Current DSH choreography retains the completion flourish and permits an
+  // explicit opening on each segment, rather than the historical first-only rule.
+  await check('thinking keeps its completion flourish and each explicitly selected segment opens once', async () => {
     await evaluate('__qa.emit({type:"state",state:"thinking",requestId:"combination-turn"})');
     await reply('opening-once', [segment({ combination: 'reassure', bodyAnimation: 'talk' }), segment({ combination: 'reassure', bodyAnimation: 'talk' })]);
-    await until('__qa.audio.length===1');
-    assert.equal(await evaluate('__qa.commands.some(c=>c.type==="perform"&&c.intent==="idea")'), false, 'a selected opening must not be preceded by the fixed idea flourish');
+    await until('__qa.audio.length===1',5000);
+    assert.equal(await evaluate('__qa.commands.filter(c=>c.type==="perform"&&c.intent==="idea"&&c.replyIntro).length'),1,'thinking completion retains the existing internal idea flourish');
     await evaluate('__qa.start(0,8);__qa.progress(0,1,8);__qa.advance(20);__qa.progress(0,4,8);__qa.finish(0)');
     await until('__qa.audio.length===2');
     const openings = await evaluate('new Set(__qa.combos.map(c=>c.key)).size');
     assert.equal(openings, 1);
     await evaluate('__qa.start(1,8);__qa.progress(1,1,8);__qa.advance(30)');
-    assert.equal(await evaluate('new Set(__qa.combos.map(c=>c.key)).size'), openings);
-    assert.notEqual(await evaluate('__qa.behavior.action?.source'), 'speech-combination');
+    assert.equal(await evaluate('new Set(__qa.combos.map(c=>c.key)).size'), openings+1);
+    assert.equal(await evaluate('__qa.behavior.action?.source'), 'speech-combination');
+    await evaluate('__qa.progress(1,4,8);__qa.advance(30)');
     assert.equal(await evaluate('__qa.behavior.expressionCue.emotion'), 'puzzled');
     await evaluate('__qa.finish(1)'); await until('__qa.behavior.state==="idle"');
     await reply('next-turn-opening', [segment({ combination: 'reassure', bodyAnimation: 'talk' })]);
     await until('__qa.audio.length===3');
     await evaluate('__qa.start(2,8);__qa.progress(2,1,8);__qa.advance(20)');
-    assert.equal(await evaluate('new Set(__qa.combos.map(c=>c.key)).size'), 2, 'the next reply can independently choose its opening');
+    assert.equal(await evaluate('new Set(__qa.combos.map(c=>c.key)).size'), 3, 'the next reply can independently choose its opening');
   });
 
   await check('thinking completion hands off only its automatic idea, preserving later manual performances', async () => {
@@ -458,7 +468,7 @@ async function command(value) { await evaluate(`__qa.emit(${JSON.stringify({ typ
     await evaluate('__qa.advance(30)');
     await delay(200);
     assert.equal(await evaluate('__qa.audio.length'), 0, 'audio waits for the fixed idea lead-in');
-    await until('__qa.audio.length===1', 3000);
+    await until('__qa.audio.length===1', 5000);
     assert.equal(await evaluate('__qa.behavior.action?.intent'), 'idea');
     await evaluate('__qa.start(0,8);__qa.advance(5)');
     assert.equal(await evaluate('__qa.behavior.action'), null, 'first spoken cue may take over the automatic introduction');

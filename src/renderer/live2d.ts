@@ -1,12 +1,19 @@
 /** Official Cubism Web SDK adapter. All model assets remain on the local server. */
 import { buildAssetLookup, resolveAssetFile } from '../shared/model-assets.mjs';
 import { DEFAULT_MODEL_TUNING, sanitizeModelTuning, type ModelTuning } from '../shared/model-tuning.mjs';
+import { createRenderClock, pngDimensions, renderCanvasSize, textureDecodeSize } from '../shared/render-performance.mjs';
 export interface ParameterInfo { id: string; name: string; min: number; max: number; defaultValue: number; value: number }
 export interface InteractionRect { x: number; y: number; width: number; height: number }
 export interface ModelPlacement { scale: number; centerX: number; centerY: number; referenceWidth?: number; referenceHeight?: number; revision?: number }
 export interface ModelAsset { name: string; file: string }
 export interface Live2DManifest { modelUrl: string; expressions?: ModelAsset[]; motions?: ModelAsset[] }
 export interface MotionOptions { loop?: boolean; holdLastFrame?: boolean; fadeMs?: number; releaseMs?: number }
+export interface RenderPerformanceStats {
+  frames: number; skippedFrames: number; totalRenderMs: number; averageRenderMs: number; maxRenderMs: number;
+  canvasWidth: number; canvasHeight: number; canvasPixels: number;
+  textureBytes: number; textureCount: number; maxFps: number; renderActive: boolean;
+  contextAttributes: WebGLContextAttributes | null;
+}
 export interface Live2DHandle {
   setParameters(values: Record<string, number>): void;
   clearParameters(ids?: string[]): void;
@@ -36,12 +43,20 @@ export interface Live2DHandle {
   getInteractionRegions(): { body: InteractionRect; fullBody: InteractionRect; head: InteractionRect; chest?: InteractionRect; basin?: InteractionRect; revision?: number } | null;
   setView(scale: number, offsetX?: number, offsetY?: number): void;
   setPlacement(placement: ModelPlacement): void;
+  /** Native window visibility is authoritative; no physics work while hidden. */
+  setRenderActive(active: boolean): void;
+  /** Local counters only. Texture bytes estimate RGBA upload size, not process memory. */
+  getPerformanceStats(): RenderPerformanceStats;
 }
 export interface Live2DOptions {
   modelBaseUrl?: string;
   manifest?: Live2DManifest;
   manifestUrl?: string;
   maxTextureSize?: number;
+  maxFps?: number;
+  maxPixelRatio?: number;
+  maxCanvasPixels?: number;
+  antialias?: boolean;
   /** Mild local tuning of the two authored chest spring groups. */
   softenChestPhysics?: boolean;
   /** Author's effect loop runs beneath gestures; false disables it for calibration. */
@@ -97,6 +112,8 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
   const textures: WebGLTexture[] = [];
   let sdk: Runtime, moc: any, model: any, renderer: any, mirrorRenderer: any, physics: any, motionManager: any, idleMotionManager: any;
   let requestId = 0, destroyed = false, gl: WebGLRenderingContext | null = null;
+  let renderActive = true, textureBytes = 0, frames = 0, skippedFrames = 0, totalRenderMs = 0, maxRenderMs = 0;
+  const frameClock = createRenderClock(options.maxFps);
   let resizeObserver: ResizeObserver | undefined;
   let modelTuning = sanitizeModelTuning(DEFAULT_MODEL_TUNING);
   let chestSoftness = options.softenChestPhysics === false ? 1 : modelTuning.chestSoftness;
@@ -119,6 +136,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
   const dispose = () => {
     if (destroyed) return;
     destroyed = true;
+    renderActive = false;
     cancelAnimationFrame(requestId);
     resizeObserver?.disconnect();
     motionManager?.release();
@@ -176,7 +194,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       parameters.push({ id, name: displayNames[id] ?? id, min: model.getParameterMinimumValue(index), max: model.getParameterMaximumValue(index),
         defaultValue: model.getParameterDefaultValue(index), value: model.getParameterValueByIndex(index) });
     }
-    gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: true, preserveDrawingBuffer: false });
+    gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: options.antialias ?? false, depth: false, stencil: false, preserveDrawingBuffer: false });
     if (!gl) throw new Error('此设备未提供 WebGL，无法显示 Live2D 模型。');
     renderer = new sdk.CubismRenderer_WebGL();
     // One default mask atlas supports only 36 groups. This model exceeds that;
@@ -193,39 +211,38 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     // Sequential upload limits peak memory while decoding the model's 8192px atlases.
     for (let index = 0; index < references.Textures.length; index++) {
       const blob = await (await fetchAsset(modelAsset(references.Textures[index]))).blob();
-      const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-      let upload: ImageBitmap | HTMLCanvasElement = bitmap;
-      if (Math.max(bitmap.width, bitmap.height) > textureLimit) {
-        const ratio = textureLimit / Math.max(bitmap.width, bitmap.height);
-        const resized = document.createElement('canvas');
-        resized.width = Math.max(1, Math.round(bitmap.width * ratio));
-        resized.height = Math.max(1, Math.round(bitmap.height * ratio));
-        const context = resized.getContext('2d');
-        if (!context) { bitmap.close(); throw new Error('贴图缩放失败。'); }
-        context.drawImage(bitmap, 0, 0, resized.width, resized.height);
-        upload = resized;
+      let bitmap: ImageBitmap | undefined, upload: HTMLCanvasElement | undefined;
+      try {
+        const header = pngDimensions(await blob.slice(0, 24).arrayBuffer());
+        const decode = header ? textureDecodeSize(header.width, header.height, textureLimit) : null;
+        bitmap = await createImageBitmap(blob, {
+          premultiplyAlpha: 'none', colorSpaceConversion: 'none',
+          ...(decode ? { resizeWidth: decode.width, resizeHeight: decode.height, resizeQuality: 'high' as ResizeQuality } : {}),
+        });
+        if (destroyed) throw new Error('模型加载已取消。');
+        const size = textureDecodeSize(bitmap.width, bitmap.height, textureLimit);
+        upload = document.createElement('canvas'); upload.width = size.width; upload.height = size.height;
+        const context = upload.getContext('2d');
+        if (!context) throw new Error('无法解码模型贴图。');
+        context.drawImage(bitmap, 0, 0, size.width, size.height);
+        const texture = gl.createTexture();
+        if (!texture) throw new Error('无法分配模型贴图。');
+        textures.push(texture);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+        // Keep canvas upload: ImageBitmap ignores WebGL's premultiply unpack flag.
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, upload);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        renderer.bindTexture(index, texture);
+        textureBytes += size.width * size.height * 4;
+      } finally {
+        bitmap?.close();
+        if (upload) { upload.width = 1; upload.height = 1; }
       }
-      const texture = gl.createTexture();
-      if (!texture) { bitmap.close(); throw new Error('无法分配模型贴图。'); }
-      textures.push(texture);
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
-      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
-      // ImageBitmap ignores WebGL's premultiply unpack flag; use a canvas consistently.
-      if (upload === bitmap) {
-        const copy = document.createElement('canvas'); copy.width = bitmap.width; copy.height = bitmap.height;
-        const context = copy.getContext('2d');
-        if (!context) { bitmap.close(); throw new Error('无法解码模型贴图。'); }
-        context.drawImage(bitmap, 0, 0); upload = copy;
-      }
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, upload);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      renderer.bindTexture(index, texture);
-      bitmap.close();
-      (upload as HTMLCanvasElement).width = 1; (upload as HTMLCanvasElement).height = 1;
     }
     model.update();
     const bounds = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
@@ -284,7 +301,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     // Capture before controller/expression/physics so transition poses never feed
     // simulated output back into the next frame's simulation inputs.
     const upstreamValues = new Float32Array(parameters.map(p => p.defaultValue));
-    let motionVersion = 0, expressionVersion = 0, elapsed = 0, lastTime = 0;
+    let motionVersion = 0, expressionVersion = 0, elapsed = 0;
     let viewScale = 1, viewX = 0, viewY = 0;
     let placement: ModelPlacement | null = null;
     const matrix = new sdk.CubismMatrix44();
@@ -649,21 +666,35 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           referenceWidth: Math.max(1, value.referenceWidth ?? 370), referenceHeight: Math.max(1, value.referenceHeight ?? 575), revision: value.revision ?? 0 };
         interactionRegions = null; regionUpdatedAt = -Infinity;
       },
+      setRenderActive(active) {
+        const next = active !== false;
+        if (destroyed || next === renderActive) return;
+        renderActive = next; cancelAnimationFrame(requestId); requestId = 0; frameClock.reset();
+        if (next) requestId = requestAnimationFrame(frame);
+      },
+      getPerformanceStats() {
+        return { frames, skippedFrames, totalRenderMs, averageRenderMs: frames ? totalRenderMs / frames : 0, maxRenderMs,
+          canvasWidth: canvas.width, canvasHeight: canvas.height, canvasPixels: canvas.width * canvas.height,
+          textureBytes, textureCount: textures.length, maxFps: frameClock.maxFps, renderActive: renderActive && !destroyed,
+          contextAttributes: gl?.getContextAttributes() ?? null };
+      },
     };
     const resize = () => {
-      const ratio = Math.min(2, window.devicePixelRatio || 1);
-      const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
-      const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
+      const { width, height } = renderCanvasSize(canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1, options);
       if (canvas.width !== width) canvas.width = width;
       if (canvas.height !== height) canvas.height = height;
     };
     resizeObserver = new ResizeObserver(resize); resizeObserver.observe(canvas); resize();
     physics?.stabilization(model);
     const frame = (time: number) => {
-      if (destroyed || !gl) return;
+      requestId = 0;
+      if (destroyed || !renderActive || !gl) return;
+      const step = frameClock.advance(time);
+      if (step === null) { skippedFrames++; requestId = requestAnimationFrame(frame); return; }
+      const renderStarted = performance.now();
       try {
-        const dt = lastTime ? Math.min(0.05, (time - lastTime) / 1000) : 1 / 60;
-        lastTime = time; elapsed += dt;
+        const dt = Math.min(0.05, step);
+        elapsed += dt;
         // Each frame starts at authored defaults; transient expression/physics values never accumulate.
         for (let i = 0; i < parameters.length; i++) model.setParameterValueByIndex(i, parameters[i].defaultValue);
         idleMotionManager.updateMotion(model, dt);
@@ -779,6 +810,11 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           regionUpdatedAt = elapsed;
         }
         gl.viewport(0, 0, canvas.width, canvas.height);
+        // The SDK owns mask FBO/state changes. Clear the entire transparent
+        // default target explicitly, even if its previous saved state differed.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.disable(gl.SCISSOR_TEST);
+        gl.colorMask(true, true, true, true);
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
         renderer.setMvpMatrix(matrix);
         renderer.setRenderState(null, [0, 0, canvas.width, canvas.height]);
@@ -786,11 +822,13 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         const restoreHandOrder = raiseThinkingHand();
         try { mirroredArm.drawModel(); } finally { restoreHandOrder(); restorePupils(); }
         } finally { mirroredArm.restore(); restoreBasinShadow(); }
-        requestId = requestAnimationFrame(frame);
+        const renderMs = performance.now() - renderStarted;
+        frames++; totalRenderMs += renderMs; maxRenderMs = Math.max(maxRenderMs, renderMs);
+        if (renderActive) requestId = requestAnimationFrame(frame);
       } catch (error) { cancelAnimationFrame(requestId); options.onError?.(error instanceof Error ? error : new Error(String(error))); }
     };
     options.onReady?.(handle);
-    requestId = requestAnimationFrame(frame);
+    if (renderActive) requestId = requestAnimationFrame(frame);
     return handle;
   } catch (error) {
     dispose();
