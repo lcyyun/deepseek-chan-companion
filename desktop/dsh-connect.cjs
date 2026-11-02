@@ -157,18 +157,6 @@ function waitForPort(port, timeout = 30000) {
   });
 }
 
-function waitForPortClosed(port, timeout = 20000) {
-  const started = Date.now();
-  return new Promise((resolve, reject) => {
-    const tick = async () => {
-      if (!(await portOpen(port))) return resolve(true);
-      if (Date.now() - started >= timeout) return reject(new Error('DSH 的端口仍在监听。请手动退出 DSH 后再连接。'));
-      setTimeout(tick, 250);
-    };
-    tick();
-  });
-}
-
 async function waitForBridge(service, timeout = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -179,26 +167,4 @@ async function waitForBridge(service, timeout = 30000) {
   throw new Error('DSH 已启动，但皮套聊天桥没有就绪。请检查 DSH 的模型配置和插件日志。');
 }
 
-function stopDsh({ port, managedPid }) {
-  let pid = Number(managedPid) || 0;
-  if (!pid && port) {
-    try {
-      const text = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        `(Get-NetTCPConnection -LocalPort ${Number(port)} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess)`],
-      { encoding: 'utf8', windowsHide: true }).trim();
-      pid = Number(text) || 0;
-    } catch {}
-  }
-  if (!pid || pid === process.pid) return false;
-  // The user has already confirmed the restart after the countdown. Force the
-  // DSH process tree so Electron's tray/window loop cannot leave the port held.
-  try { execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); } catch {}
-  const started = Date.now();
-  while (Date.now() - started < 5000) {
-    try { process.kill(pid, 0); } catch { return true; }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
-  return false;
-}
-
-module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, listSessions, startDsh, waitForPort, waitForPortClosed, waitForBridge, stopDsh };
+module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, listSessions, startDsh, waitForPort, waitForBridge };

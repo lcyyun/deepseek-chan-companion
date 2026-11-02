@@ -144,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
 4. 选择“新建独立桌宠会话”或“接到已有会话”
 5. 做 MCP 与聊天桥健康检查
 
-不会创建独立的 DSH 实例，也不会默认使用另一个 home/profile。连接正在运行的 DSH 前会显示 3 秒倒计时警示：“请先完成任务并保存”，只有点“我已知晓并确定”才会重启；点“取消”不会动 DSH。B 模式会把新建会话 ID 写入本地 session 文件，重启后复用；A 模式会列出最近的会话供选择。
+不会创建独立的 DSH 实例，也不会默认使用另一个 home/profile。连接正在运行的 DSH 前会显示 3 秒倒计时警示：“请先完成任务并保存”。大肥鱼**不会关闭或结束 DSH**；需要用户手动退出 DSH，再点一次“连接 DSH”。点“取消”不会动 DSH。B 模式会把新建会话 ID 写入本地 session 文件，重启后复用；A 模式会列出最近的会话供选择。
 
 旧的长提示词 JSON 桥仍保留在高级兼容模式中，作为旧 DSH/外部客户端的回退和效果对照；正常 DSH 连接使用 `avatar_reply` 原生工具。
 

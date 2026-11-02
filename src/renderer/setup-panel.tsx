@@ -58,13 +58,13 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
     return () => clearInterval(timer);
   }, [warning]);
 
-  async function connect(restart = false) {
+  async function connect() {
     setBusy(true); setError(''); setResult('');
     try {
-      const value = await control('dsh-connect', { mode, sessionId: sessionId.trim(), restart }) as any;
-      if (value?.requiresRestart) {
+      const value = await control('dsh-connect', { mode, sessionId: sessionId.trim() }) as any;
+      if (value?.requiresManualStop || value?.requiresRestart) {
         setWarning(true);
-        setResult('DSH 正在运行，需要重启才能加载皮套插件。');
+        setResult('DSH 正在运行，需要你手动退出后才能连接。');
       } else if (value?.connected) {
         setWarning(false);
         setResult(value.alreadyConnected ? 'DSH 已经连接。' : `已连接 DSH${value.port ? ` · 端口 ${value.port}` : ''}。`);
@@ -112,7 +112,7 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
       {!status?.sessions?.length && <p className="hint">没有读到会话列表，可以直接粘贴会话 ID。</p>}
     </div>}
     <div className="button-row">
-      {!connected && <button className="primary" disabled={busy || !canConnect || !mode || (mode === 'existing' && !sessionId.trim())} onClick={() => connect(false)}>{busy ? '连接中…' : mode ? '连接 DSH' : '先选择会话模式'}</button>}
+      {!connected && <button className="primary" disabled={busy || !canConnect || !mode || (mode === 'existing' && !sessionId.trim())} onClick={() => connect()}>{busy ? '连接中…' : mode ? '连接 DSH' : '先选择会话模式'}</button>}
       {connected && <button className="primary" onClick={() => control('dsh-open').catch((e: any) => setError(e?.message || String(e)))}>打开 DSH</button>}
     </div>
     {result && <p className={'dsh-result ' + (connected ? 'ok' : '')}>{result}</p>}
@@ -121,11 +121,11 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
     {warning && <div className="dsh-warning" role="dialog" aria-modal="true" aria-labelledby="dsh-warning-title">
       <div className="dsh-warning-card">
         <h3 id="dsh-warning-title">DSH 正在运行</h3>
-        <p>重启会中断当前任务。请先在 DSH 中完成任务并保存，再选择重启。</p>
+        <p>大肥鱼不会关闭 DSH。请先在 DSH 中完成任务并保存，然后手动退出 DSH；退出后再点“连接 DSH”即可自动连接。</p>
         <p className="dsh-countdown">倒计时：{countdown} 秒</p>
         <div className="button-row">
-          <button className="danger" disabled={busy || countdown > 0} onClick={() => connect(true)}>{busy ? '重启中…' : countdown > 0 ? `我已知晓并确定（${countdown}）` : '我已知晓并确定'}</button>
-          <button disabled={busy} onClick={() => { setWarning(false); setResult('已取消重启。'); }}>取消</button>
+          <button className="danger" disabled={countdown > 0} onClick={() => { setWarning(false); setResult('请手动退出 DSH，然后点“连接 DSH”重试。'); }}>{countdown > 0 ? `请先完成任务（${countdown}）` : '我已知晓，去手动停止'}</button>
+          <button onClick={() => { setWarning(false); setResult('已取消。'); }}>取消</button>
         </div>
       </div>
     </div>}

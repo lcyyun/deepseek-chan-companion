@@ -25,7 +25,7 @@ if (!app.isPackaged && path.resolve(app.getPath('userData')) === path.resolve(de
   require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
 }
 let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;
-let config = {}, dataDir, configFile, failures = [], lastSaved = 0, dshManagedPid = 0, setupRequired = false;
+let config = {}, dataDir, configFile, failures = [], lastSaved = 0, setupRequired = false;
 let sanitizeModelTuning;
 const roles = new Map();
 let inputRegions = [], pointerLocked = false, shapeKey = '';
@@ -314,20 +314,16 @@ async function connectDsh(payload = {}) {
   if (!info.cli) throw new Error('没有找到 DSH。请先安装 DeepSeek Harness，或在设置中填写 DSH CLI 路径。');
   if (!info.homeExists) throw new Error(`没有找到 DSH_HOME：${info.home}。请先运行一次 DSH，或填写正确的 DSH_HOME。`);
   const bridgeConnected = service.getState().dsh?.connected === true;
-  if (bridgeConnected && payload.restart !== true) return { ok: true, connected: true, alreadyConnected: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT };
-  if (info.running && payload.restart !== true) return { ok: false, requiresRestart: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT, openPorts: info.open };
-  let port = info.open[0] || Number(config.dshPort) || dshConnect.DEFAULT_PORT;
-  if (info.running && info.open.includes(port)) {
-    const stopped = dshConnect.stopDsh({ port, managedPid: dshManagedPid });
-    if (!stopped) throw new Error(`无法关闭占用端口 ${port} 的 DSH。请手动退出 DSH 后再连接。`);
-    await dshConnect.waitForPortClosed(port, 20000);
-  }
+  if (bridgeConnected) return { ok: true, connected: true, alreadyConnected: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT };
+  // Never terminate DSH from the companion. It may be in the middle of a task;
+  // the user must stop it manually before a patched instance can be started.
+  if (info.running) return { ok: false, requiresManualStop: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT, openPorts: info.open };
+  const port = Number(config.dshPort) || dshConnect.DEFAULT_PORT;
   const patch = dshConnect.writePatch({
     root: ROOT, dataDir, serviceUrl: service.url, token: service.token,
     mode, sessionId: payload.sessionId, sessionFile: dshConnect.sessionFile(dataDir), port,
   });
-  const child = dshConnect.startDsh({ cli: info.cli, home: info.home, patch, port, logFile: path.join(dataDir, 'logs', 'dsh.log') });
-  dshManagedPid = Number(child.pid) || 0;
+  dshConnect.startDsh({ cli: info.cli, home: info.home, patch, port, logFile: path.join(dataDir, 'logs', 'dsh.log') });
   config.dshPort = port;
   config.dshMode = mode;
   if (mode === 'existing') config.dshSessionId = String(payload.sessionId || '');
