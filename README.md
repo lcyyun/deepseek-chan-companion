@@ -4,6 +4,8 @@
 
 **当前版本：0.21.1。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
 
+**纯净电脑安装验收：** 仓库已公开，可直接克隆，无需 GitHub 登录。目前尚未发布 GitHub Release 安装包，请先按下方[从源码开始](#从源码开始)准备环境、构建和启动；也可以把仓库地址交给自己的智能体，按 README 完成安装。Live2D 模型与 DSH 模型配置由使用者自行提供。
+
 第一次使用发行版，请先看[发行版快速开始](docs/release-quickstart.md)：解压完整程序、选择自己的模型，再完成一次 DSH 会话接入。发行包不包含个人模型、会话、配对码或登录凭据。普通使用不需要安装 Node.js，也不需要管理员权限。
 
 0.21.0 将日常连接改为固定流程：首次配置一次，之后直接“连接／重新连接”。桌宠重启时桥自动认证、重新发现 MCP 工具，并单独确认 DSH 工具注册；保留 A/B 会话，不调用模型来安排重连。只有明确点击“启动已配置的 DSH”才尝试启动已登记实例，遇到现有未知进程或占用端口不会强行启动，更不会结束 DSH。旧桥仍可聊天，首次升级需要重新加载一次；详见[连接与自动恢复](docs/dsh-reconnect.md)。
@@ -76,7 +78,7 @@
 
 ## 从源码开始
 
-准备 Windows 10/11 x64、Node.js 22.12 或更新版本、npm、Git，以及完整的 Live2D 模型目录。模型渲染需要可用的 WebGL。首次准备 SDK 和依赖需要联网；私有仓库需要对应的 GitHub 访问权限。
+准备 Windows 10/11 x64、Node.js 22.12 或更新版本、npm、Git，以及完整的 Live2D 模型目录。模型渲染需要可用的 WebGL。首次准备 SDK 和依赖需要联网；公开源码可直接下载或克隆。
 
 ```powershell
 git clone https://github.com/lcyyun/deepseek-chan-companion.git
@@ -99,7 +101,7 @@ npm test
 
 首次启动会先显示向导：选择包含 `.model3.json` 的模型文件夹，再连接 DSH 或稍后在设置里选择 API/Codex。之后双击“大肥鱼”即可启动，不需要智能体帮你启动。默认使用“自动 · 优先 DeepSeek Harness”：检测到可用聊天桥后显示 DSH，未接入时显示“未连接”。也可以按[接入指南](docs/agent-integration.md)手工配置，或手动选择 API、DSH、Codex。仅看桌宠、预览表情、摸头、敲盆，以及由外部智能体通过 MCP 操控角色，都不要求聊天桥可用。表演与对话连接分别显示，完整双向聊天与搜索取决于所选提供方。
 
-仓库不含 `node_modules`、Cubism SDK 下载缓存、生成的渲染库、便携发行包、模型原件、用户配置或登录凭据。安装依赖和运行 `setup:live2d` 会重建必要运行库；便携包使用后文命令生成。模型授权和第三方许可证不会因为仓库私有而改变。
+仓库不含 `node_modules`、Cubism SDK 下载缓存、生成的渲染库、便携发行包、模型原件、用户配置或登录凭据。安装依赖和运行 `setup:live2d` 会重建必要运行库；便携包使用后文命令生成。公开源码不改变模型与第三方素材各自的许可条件。
 
 ```mermaid
 flowchart LR
