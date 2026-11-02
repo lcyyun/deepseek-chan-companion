@@ -142,7 +142,8 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 - `bodyAnimation`：`auto/none` 加 12 个动画 ID（`explain/think/reassure/happy/shy/chest-left/chest-right/chest-both/pointer-left/pointer-right/talk/listen` 等，以运行时能力为准）。
 - 优先级：显式 `bodyAnimation` 覆盖 `gesture`；`bodyAnimation:none` 关闭该段肢体；`combination` 是该段开场，`expressionCues` 独立控制脸；段级 `intensity` 会被忽略，强度写在 `expressionCues[].intensity`。
 - 已知问题：`pointer-left` 和 `pointer-right` 当前都表现为右手并带狗尾草道具，不能用来做可靠左右指向；没有独立点头动画，连续点头用连续段的 `combination:agree`。
-- 爱心眼 `love` 是表白级，只在用户明确表达爱意、亲昵告白或主动要求时使用；每轮最多一次。普通感谢、夸奖、好消息、工作讨论和悲伤场景改用 `happy/joyful/gentle/playful`。
+- 爱心眼 `love` 是表白级，只在用户明确表达爱意、亲昵告白或主动要求时使用；每轮最多一次。普通感谢、夸奖、好消息、工作讨论和悲伤场景改用 `happy/joyful/gentle`。
+- `playful` 带兔子板牙，夸张且容易显呆；只在双方都在的轻松玩笑里偶尔用，每轮最多一次，不要连续轮次。
 - `avatar_reply` 返回 `warnings` 时会说明被忽略的字段；下一次调用应据此调整，不要继续猜。
 
 MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
