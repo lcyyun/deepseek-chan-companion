@@ -65,7 +65,7 @@ export const COMBINATION_GUIDE = Object.freeze({
   idea: named('想到了', ['insight', 'solution'], '找到办法、得出新的点子', '没有新结论却每轮都庆祝', ['explain', 'talk'], ['happy', 'proud']),
 });
 
-export const PERFORMANCE_GUIDE_BRIEF = '按自己的意图语气选动作，不因引用里的情绪词换脸。优先熟悉组合：agree赞同、explain讲解、shy害羞、think思索、idea点子、cuddle撒娇；须语境吻合，think只显式选。face只改脸，body只改肢体；组合每轮仅首段一次，短语音可能跳过，之后独立脸与body承接余段，推荐搭配也用于承接。语音拥有口型，勿逐帧控制或为动画凑字数。后续段combination填none；安静口播用emotion:neutral、bodyAnimation:none、combination:none，思考完成提示仍保留。左右指画面左右。';
+export const PERFORMANCE_GUIDE_BRIEF = '按自己的意图语气选动作，不因引用里的情绪词换脸。优先熟悉组合：agree赞同、explain讲解、shy害羞、think思索、idea点子、cuddle撒娇；须语境吻合，think只显式选。face只改脸，body只改肢体；组合每段一次，连续动作在连续段重复同一组合，短语音会压缩播放。之后独立脸与body承接余段。语音拥有口型，勿逐帧控制或为动画凑字数。不需要动作的段填combination:none；安静口播用emotion:neutral、bodyAnimation:none、combination:none，思考完成提示仍保留。左右指画面左右。';
 
 export const PERFORMANCE_GUIDE = Object.freeze({
   modes: Object.freeze({

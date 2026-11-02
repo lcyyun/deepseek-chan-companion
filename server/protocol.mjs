@@ -15,7 +15,7 @@ export const CAPABILITIES = {
   bodyPreview: { command: 'body', faceOnly: false, preservesExpression: true, stop: { type: 'body', active: false } },
   combinations: COMBINATION_PRESETS.map(preset => ({ ...preset, ...COMBINATION_GUIDE[preset.id] })),
   performanceGuide: { modes: PERFORMANCE_GUIDE.modes, preferredCombinations: PERFORMANCE_GUIDE.preferredCombinations, quickStart: PERFORMANCE_GUIDE_BRIEF },
-  speechCombinations: { selection: ['auto', 'none', ...COMBINATION_IDS], maxPerReply: 1, timing: 'complete opening preset followed by independent face/body cues if speech continues' },
+  speechCombinations: { selection: ['auto', 'none', ...COMBINATION_IDS], maxPerReply: 3, timing: 'one opening preset per segment; repeat the same preset on consecutive segments for repeated actions, then independent face/body cues' },
   speechGestures: { timing: 'actual audio progress or silent reading progress', frequency: 'local user setting', shortReplies: 'zero or one emphasis', bodyAnimation: ['auto', 'none', ...BODY_ANIMATION_PRESETS.map(item => item.id)] },
   gestures: ['none', 'pointer', 'chest', 'foxtail'],
   gaze: ['camera', 'left', 'right', 'up', 'down'],
@@ -64,7 +64,7 @@ export function makeMessages({ text, mode = 'chat', verbosity, context, history 
     `意图可选${CAPABILITIES.intents.join(',')}；情绪可选${CAPABILITIES.emotions.join(',')}；手势可选${CAPABILITIES.gestures.join(',')}。手势少而有意义，避免每句重复。不要虚构模型能自由行走或跳舞。\n` +
     `cuddle表示亲昵或撒娇，idea表示想到办法或恍然大悟，puzzled表示困惑。cuddle由角色行为层协调手臂，不需要创造同名手势；没有明确手势时填none。\n` +
     `bodyAnimation选择适合这段口播的肢体：通常填auto由本地安排，安静回应填none；较长讲解或比较可用talk，安慰可用chest-both，害羞用shy，认真倾听用listen。可选${CAPABILITIES.speechGestures.bodyAnimation.join(',')}。左右指画面左右。明确选择动画会替代旧gesture提示的手臂安排，但不改变emotion或expressionCues。连续动画随实际音频推进，你不用输出逐帧指令；不要为了动画拉长文字。\n` +
-    `combination是开场的完整预设组合，通常auto按你的intent和emotion挑选，none不使用组合；有最佳搭配可显式选${COMBINATION_IDS.join(',')}。每轮仅首段可播一次，过短语音跳过；组合完整播放后如果还在说话，再用bodyAnimation与expressionCues搭配；此时expressionCues的at以组合结束后剩余语音的进度为准。后续段填none，不重复开场。自动组合不覆盖明确指定的bodyAnimation；要组合开场再接指定肢体时同时明确填写两者。不要为展示动作延长回答。\n` +
+    `combination是每段的完整预设组合，通常auto按你的intent和emotion挑选，none不使用组合；有最佳搭配可显式选${COMBINATION_IDS.join(',')}。每段最多播放一次组合；连续动作（例如连续三次点头）在连续段重复同一个组合agree，短语音会把组合压缩进实际语音而不是丢弃。组合结束后如果还在说话，再用bodyAnimation与expressionCues搭配；此时expressionCues的at以组合结束后剩余语音的进度为准。自动组合不覆盖明确指定的bodyAnimation；要组合开场再接指定肢体时同时明确填写两者。不要为展示动作延长回答。\n` +
     `表情对照：${EXPRESSION_PRESETS.map(p => `${p.id}=${p.title}`).join('；')}。依据你正在说的话的语气编排，不照搬用户文字里的情绪词。安慰负面经历优先gentle/worried，解决后relieved；不要在严肃或悲伤话题随意得意、大笑、心动。panic/angry/cold是有意表达时才使用，普通报错或不确定用puzzled/determined。\n` +
     `expressionCues是该段的脸部节奏，最多4项，每项{at,emotion,intensity}。at是实际朗读进度0到0.9（不是秒）；有开场组合时，以组合结束后的剩余语音进度为准，否则以整段为准。按顺序、间隔至少0.18；首项at=0。通常一段1至2个表情，短句只用1个，有语意转折才变化；intensity一般0.5到0.85。可留空沿用段落emotion。例如“咦，原来是这样！”可先puzzled后relieved；“等等，我想到了！”可先curious后happy。不得为了展示表情而拉长回复或添写舞台说明。><眼用squeezed、爱心眼love、圈圈眼dizzy、屑眼smug、兔牙playful、眼泪teary、冷汗embarrassed/panic。\n` +
     `角色选择指南（标签和场景用于选择已有ID，不是新命令）：\n${formatPerformanceGuide({ includeCatalog: true })}\n` +

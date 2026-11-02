@@ -148,7 +148,8 @@ test('real MCP client can handshake, discover and dispatch to the shared service
   assert.ok(capabilities.bodyAnimations.find(item => item.id === 'talk').tags.includes('continuous'));
   assert.equal(capabilities.combinations.find(item => item.id === 'agree').displayName, '开心点头');
   assert.ok(capabilities.expressionPresets.every(item => item.tags.length && item.useWhen && item.avoidWhen));
-  assert.ok(capabilities.performanceGuide.quickStart.includes('首段'));
+  assert.ok(capabilities.performanceGuide.quickStart.includes('每段'));
+  assert.equal(capabilities.speechCombinations.maxPerReply, 3);
   for (const intent of ['cuddle', 'idea']) {
     assert.ok(capabilities.intents.includes(intent));
     const response = await client.callTool({ name: 'avatar_perform', arguments: { intent, emotion: 'puzzled' } });

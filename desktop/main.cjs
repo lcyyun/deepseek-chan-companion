@@ -160,7 +160,7 @@ function showToggleMenu() {
   const visible = pet && !pet.isDestroyed() && pet.isVisible();
   Menu.buildFromTemplate([
     { label: '打开聊天', click: () => { if(!chat || chat.isDestroyed())return; if(!chat.isVisible())showChat(); else {raiseTools();chat.focus();} } },
-    { label: visible ? '暂时隐藏桌宠' : '显示桌宠', click: () => { if (pet && !pet.isDestroyed()) { if (visible) pet.hide(); else pet.showInactive(); } } },
+    { label: visible ? '暂时隐藏桌宠' : '显示桌宠', click: () => { if (visible) hidePet(); else showPet(); } },
     { type: 'separator' },
     { label: '退出大肥鱼', click: () => app.quit() },
   ]).popup({ window: toggle });
@@ -268,6 +268,22 @@ function layoutTools({recoverChat=false}={}) {
   updateInputShape();
 }
 function showChat() { if(chat.isVisible()){chat.hide();return;} layoutTools();chat.show();raiseTools();chat.focus();chat.webContents.send('desktop-event',{type:'focus-input'}); }
+function showPet() {
+  if (!pet || pet.isDestroyed()) return;
+  // A hidden transparent window can retain an old native hit shape. Reassert it
+  // after showing so the pet never leaves a full-window input blocker over DSH.
+  pointerLocked = false;
+  if (!pet.isVisible()) pet.showInactive();
+  shapeKey = '';
+  updateInputShape();
+  syncPetTopmost();
+}
+function hidePet() {
+  if (!pet || pet.isDestroyed()) return;
+  pointerLocked = false;
+  pet.hide();
+  shapeKey = '';
+}
 function makeWindow(role, options) {
   const win = new BrowserWindow({show:false,frame:false,backgroundColor:'#00000000',hasShadow:false, ...options,
     icon:path.join(ROOT,'dist','icons','app.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,autoplayPolicy:'no-user-gesture-required',backgroundThrottling:role!=='pet'}});
@@ -425,9 +441,9 @@ else {
     pet.webContents.on('render-process-gone',()=>{petPointer.clear();pointerLocked=false;updateInputShape();});
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
     pet.on('hide',()=>{suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();pet.webContents.send('desktop-event',{type:'input-cancel'});});
-    pet.once('ready-to-show',()=>{pet.showInactive();syncPetTopmost();layoutTools();broadcastScale();});
-    pet.webContents.once('did-finish-load',()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())pet.showInactive();});
-    setTimeout(()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())pet.showInactive();},1200).unref?.();
+    pet.once('ready-to-show',()=>{showPet();layoutTools();broadcastScale();});
+    pet.webContents.once('did-finish-load',()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())showPet();});
+    setTimeout(()=>{if(pet&&!pet.isDestroyed()&&!pet.isVisible())showPet();},1200).unref?.();
     toggle.once('ready-to-show',()=>{layoutTools();toggle.showInactive();toggle.setAlwaysOnTop(true,'screen-saver');});
     toggle.webContents.on('did-start-loading',()=>{if(toggleGesture)finishToggleDrag('cancel');});
     toggle.webContents.on('render-process-gone',()=>{if(toggleGesture)finishToggleDrag('cancel');});
@@ -455,7 +471,7 @@ else {
     const refreshDisplay=()=>{const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement(config,petWorkArea));layoutTools({recoverChat:true});saveConfig();};
     screen.on('display-metrics-changed',refreshDisplay);screen.on('display-removed',refreshDisplay);
     tray=new Tray(icon());tray.setToolTip('大肥鱼 · DeepSeek-chan');
-    tray.setContextMenu(Menu.buildFromTemplate([{label:'打开聊天   Ctrl+Alt+Space',click:showChat},{label:'显示桌宠',click:()=>pet.showInactive()},{label:'移动桌宠',click:()=>setDragMode(!dragMode)},{label:'恢复位置',click:resetPosition},{label:'悬浮球跟随桌宠',click:followToggle},{label:'停止说话和动作',click:()=>service.dispatch({type:'stop'})},{type:'separator'},{label:'退出大肥鱼',click:()=>app.quit()}]));
+    tray.setContextMenu(Menu.buildFromTemplate([{label:'打开聊天   Ctrl+Alt+Space',click:showChat},{label:'显示桌宠',click:showPet},{label:'移动桌宠',click:()=>setDragMode(!dragMode)},{label:'恢复位置',click:resetPosition},{label:'悬浮球跟随桌宠',click:followToggle},{label:'停止说话和动作',click:()=>service.dispatch({type:'stop'})},{type:'separator'},{label:'退出大肥鱼',click:()=>app.quit()}]));
     tray.on('double-click',showChat);registerKeys();
     initializeMouseTracking();
     if(process.env.COMPANION_SHOW_CHAT==='1'||setupRequired)chat.once('ready-to-show',()=>chat.show());
@@ -471,7 +487,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'toggle-follow':return followToggle();
     case 'hide-chat':case 'minimize':chat.hide();break;
     case 'hide-pet':pet.hide();break;
-    case 'show-pet':pet.showInactive();break;
+    case 'show-pet':showPet();break;
     case 'drag-mode':setDragMode(typeof data==='boolean'?data:!dragMode);return dragMode;
     case 'pet-hit-regions':{
       if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以更新命中区域');
@@ -491,7 +507,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-pin':{
       const next = data === true;
       // Show once when pinning turns on; a later manual hide must stay hidden.
-      if (next && !petPinned && pet && !pet.isDestroyed() && !pet.isVisible()) pet.showInactive();
+      if (next && !petPinned) showPet();
       petPinned = next;config.petPinned = next;saveConfig();syncPetTopmost();
       for (const win of [pet, chat]) if (win && !win.isDestroyed()) win.webContents.send('desktop-event', { type: 'pet-pin', enabled: petPinned });
       return petPinned;

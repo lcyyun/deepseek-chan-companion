@@ -269,7 +269,7 @@ function Pet(){
   async function presentReply({reply,turn,reveal,requestId}:Presentation){
     if(turn!==sequence.current)return;
     const settingsPromise=api('/api/settings').catch(()=>null);
-    const opening=planSpeechCombination(reply.segments[0],{frequency:modelTuning.current.gestureFrequency});
+    const openings=reply.segments.map(segment=>planSpeechCombination(segment,{frequency:modelTuning.current.gestureFrequency}));
     if(reveal){
       // Leave a small choreography overlap so the first spoken gesture can take
       // over before an animation-frame completion callback closes the same hand.
@@ -293,10 +293,10 @@ function Pet(){
       },()=>{if(turn===sequence.current&&gestureTimeline.current===bodyTimeline)behavior.current?.clearSpeechGesture();},{
         key:`${turn}:${index}`,holdLast:canContinueGesture(scores[index].at(-1),scores[index+1]?.[0]),
         continueFirst:canContinueGesture(scores[index-1]?.at(-1),scores[index][0]),
-        fillLast:index===0&&Boolean(opening),
+        fillLast:index===0&&Boolean(openings[0]),
       });
       gestureTimeline.current=bodyTimeline;
-      const comboTimeline=createCombinationTimeline(index===0?opening:null,
+      const comboTimeline=createCombinationTimeline(openings[index]||null,
         sample=>{if(turn===sequence.current)behavior.current?.setSpeechCombination(sample);},
         keepHands=>{if(turn===sequence.current)behavior.current?.clearSpeechCombination(keepHands);},`${turn}:${index}:combo`);
       combinationTimeline.current=comboTimeline;
