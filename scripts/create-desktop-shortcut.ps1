@@ -13,6 +13,7 @@ New-Item -ItemType Directory -Path $startMenu -Force | Out-Null
 foreach ($target in @((Join-Path $desktop '大肥鱼.lnk'), (Join-Path $startMenu '大肥鱼.lnk'))) {
   $shortcut = $shell.CreateShortcut($target)
   $shortcut.TargetPath = $exe
+  $shortcut.Arguments = '--no-sandbox'
   $shortcut.WorkingDirectory = Split-Path -Parent $exe
   $shortcut.IconLocation = "$exe,0"
   $shortcut.Description = '大肥鱼 · DeepSeek-chan 桌面伙伴'

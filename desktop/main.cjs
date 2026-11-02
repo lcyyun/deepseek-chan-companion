@@ -11,9 +11,17 @@ const dshConnect = require('./dsh-connect.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
 app.setName('大肥鱼 · DeepSeek-chan');
+// Portable builds use an ASCII LocalAppData profile. Electron's process
+// singleton lock can fail with access-denied in the older non-ASCII Roaming path.
+const legacyProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-chan');
+const packagedProfile = path.join(path.dirname(process.execPath), 'DeepSeek-chan-data');
+if (app.isPackaged) {
+  app.setPath('userData', packagedProfile);
+  require('./profile-migration.cjs').migrateProfile(legacyProfile, packagedProfile);
+}
 // A custom userData path (tests/portable hosts) must never read the real profile.
-const defaultProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-chan');
-if (path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
+const defaultProfile = app.isPackaged ? packagedProfile : legacyProfile;
+if (!app.isPackaged && path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
   require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
 }
 let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;

@@ -132,7 +132,7 @@ npm run package
 powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
 ```
 
-之后直接双击“大肥鱼”即可启动，不需要每次让智能体启动。第一次启动会显示设置向导，选择模型和对话来源；模型只需要选一次。
+之后直接双击“大肥鱼”即可启动，不需要每次让智能体启动。快捷方式带 `--no-sandbox` 参数；便携版数据保存在 `release/DeepSeek-chan-win32-x64/DeepSeek-chan-data`，移动整个目录时会一起带走。第一次启动会显示设置向导，选择模型和对话来源；模型只需要选一次。
 
 ## 连接 DSH
 
