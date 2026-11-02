@@ -146,6 +146,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
 
 不会创建独立的 DSH 实例，也不会默认使用另一个 home/profile。连接正在运行的 DSH 前会显示 3 秒倒计时警示：“请先完成任务并保存”。大肥鱼**不会关闭或结束 DSH**；需要用户手动退出 DSH，再点一次“连接 DSH”。点“取消”不会动 DSH。B 模式会把新建会话 ID 写入本地 session 文件，重启后复用；A 模式会列出最近的会话供选择。
 
+如果自动启动仍然失败，设置面板会提供“打开手动启动脚本位置”。双击 `start-dsh.cmd`，等 DSH 启动后回到大肥鱼点“连接 DSH”或刷新状态即可；脚本使用同一份 patch 和 token。
+
 旧的长提示词 JSON 桥仍保留在高级兼容模式中，作为旧 DSH/外部客户端的回退和效果对照；正常 DSH 连接使用 `avatar_reply` 原生工具。
 
 ## 加载本地模型

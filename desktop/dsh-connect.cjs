@@ -105,6 +105,27 @@ function sessionFile(dataDir) {
   return path.join(dataDir, 'dsh', 'chat-session.txt');
 }
 
+function writeLauncher({ dataDir, cli, home, patch, port }) {
+  const file = path.join(dataDir, 'dsh', 'start-dsh.cmd');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const lines = [
+    '@echo off',
+    'setlocal',
+    'set "ELECTRON_RUN_AS_NODE="',
+    'set "DSH_PROFILE="',
+    'set "DSH_PROFILE_DIR="',
+    'set "DSH_SHELL="',
+    'set "DSH_SESSION_ID="',
+    'set "DSH_WEB_URL="',
+    `set "DSH_HOME=${String(home).replace(/"/g, '""')}"`,
+    `"${cli}" web --patch "${patch}" --port ${Number(port)} --no-open`,
+    'if errorlevel 1 pause',
+    '',
+  ];
+  fs.writeFileSync(file, lines.join('\r\n'), { encoding: 'utf8', mode: 0o600 });
+  return file;
+}
+
 function listSessions(home, limit = 20) {
   const root = path.join(home, 'sessions');
   const found = [];
@@ -174,4 +195,4 @@ async function waitForBridge(service, timeout = 30000) {
   throw new Error('DSH 已启动，但皮套聊天桥没有就绪。请检查 DSH 的模型配置和插件日志。');
 }
 
-module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, listSessions, startDsh, waitForPort, waitForBridge };
+module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, writeLauncher, listSessions, startDsh, waitForPort, waitForBridge };

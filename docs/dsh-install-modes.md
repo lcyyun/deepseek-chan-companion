@@ -11,6 +11,7 @@
 3. 用同一个 DSH home/profile 启动或复用 DSH，**不新建独立实例**
 4. 健康检查 MCP 和聊天桥
 5. 如果 DSH 正在运行，先显示 3 秒倒计时警示；程序**不会关闭 DSH**，用户需完成任务、手动退出 DSH，再点“连接 DSH”重试；点“取消”不会动 DSH
+6. 如果自动启动失败，面板提供“打开手动启动脚本位置”；双击 `start-dsh.cmd`，等 DSH 启动后回来刷新或点连接
 
 应用生成的 patch 使用 `tokenFile`，不需要 `L2D_BRIDGE_TOKEN`。B 模式会在 `dsh/chat-session.txt` 保存会话 ID，重启后复用；A 模式在界面里列出最近会话并写入 `chatSessionId`。
 

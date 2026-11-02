@@ -35,6 +35,8 @@
 .dsh-result.ok,.hint.ok{color:#2d7f5b}
 .hint.warn,.dsh-error{color:#a95338}
 .dsh-error{margin:7px 0 0;font-size:11px;white-space:pre-wrap}
+.dsh-manual{margin-top:8px;padding:8px;border:1px dashed #d5e3f2;border-radius:9px;background:#fbfdff}
+.dsh-manual button{margin-top:4px;border:1px solid #cfe0f2;border-radius:8px;background:#fff;color:#3f6f9f;padding:5px 9px;font-size:10px;cursor:pointer}
 .dsh-countdown{font-weight:700;color:#a35a20}
 .dsh-warning{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;padding:18px;background:rgba(40,24,12,.4)}
 .dsh-warning-card{width:min(100%,360px);border-radius:16px;background:#fff;padding:18px;border:1px solid #f0d8ba;box-shadow:0 20px 60px rgba(60,35,10,.3)}

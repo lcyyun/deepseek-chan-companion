@@ -328,6 +328,7 @@ async function connectDsh(payload = {}) {
     root: ROOT, dataDir, serviceUrl: service.url, token: service.token,
     mode, sessionId: payload.sessionId, sessionFile: dshConnect.sessionFile(dataDir), port,
   });
+  dshConnect.writeLauncher({ dataDir, cli: info.cli, home: info.home, patch, port });
   dshConnect.startDsh({ cli: info.cli, home: info.home, patch, port, logFile: path.join(dataDir, 'logs', 'dsh.log') });
   config.dshPort = port;
   config.dshMode = mode;
@@ -457,10 +458,11 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'open-url':openSafe(data);break;
     case 'copy-pairing':clipboard.writeText(service.token);return true;
     case 'setup-complete':config.setupCompleted=true;config.firstRun=false;setupRequired=false;saveConfig();return true;
-    case 'dsh-status':{const info=await dshConnect.detectDsh(config);return{...info,bridgeConnected:service.getState().dsh?.connected===true,chatAvailable:service.getState().dsh?.chatAvailable===true,sessions:dshConnect.listSessions(info.home),patchPath:path.join(dataDir,'dsh','live2d.patch.yml'),logPath:path.join(dataDir,'logs','dsh.log'),mode:config.dshMode||'',savedSessionId:config.dshSessionId||''};}
+    case 'dsh-status':{const info=await dshConnect.detectDsh(config);const launcher=path.join(dataDir,'dsh','start-dsh.cmd');return{...info,bridgeConnected:service.getState().dsh?.connected===true,chatAvailable:service.getState().dsh?.chatAvailable===true,sessions:dshConnect.listSessions(info.home),patchPath:path.join(dataDir,'dsh','live2d.patch.yml'),launcherPath:fs.existsSync(launcher)?launcher:'',logPath:path.join(dataDir,'logs','dsh.log'),mode:config.dshMode||'',savedSessionId:config.dshSessionId||''};}
     case 'dsh-sessions':{const info=await dshConnect.detectDsh(config);return dshConnect.listSessions(info.home);}
     case 'dsh-connect':return await connectDsh(data||{});
     case 'dsh-open':{const port=Number(config.dshPort)||dshConnect.DEFAULT_PORT;await shell.openExternal(`http://127.0.0.1:${port}/`);return true;}
+    case 'dsh-open-launcher':{const launcher=path.join(dataDir,'dsh','start-dsh.cmd');if(!fs.existsSync(launcher))throw new Error('还没有生成手动启动脚本，请先点一次“连接 DSH”。');shell.showItemInFolder(launcher);return launcher;}
     case 'reset-position':resetPosition();break;
     case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
     case 'quit':app.quit();break;

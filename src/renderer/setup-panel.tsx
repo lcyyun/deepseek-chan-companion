@@ -15,6 +15,7 @@ type DshStatus = {
   savedSessionId?: string;
   logPath?: string;
   patchPath?: string;
+  launcherPath?: string;
 };
 
 const control = (action: string, data?: any) => window.companion?.control(action, data);
@@ -75,6 +76,7 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
       }
     } catch (e: any) {
       setError(e?.message || String(e));
+      await refresh();
     } finally {
       setBusy(false);
     }
@@ -117,6 +119,10 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
     </div>
     {result && <p className={'dsh-result ' + (connected ? 'ok' : '')}>{result}</p>}
     {error && <p className="dsh-error">{error}</p>}
+    {!!status?.launcherPath && <div className="dsh-manual">
+      <p className="hint">如果自动启动失败：打开脚本所在文件夹，双击 <b>start-dsh.cmd</b>，等 DSH 启动后回到这里点“连接 DSH”。</p>
+      <button onClick={() => control('dsh-open-launcher').catch((e: any) => setError(e?.message || String(e)))}>打开手动启动脚本位置</button>
+    </div>}
     {!!status?.logPath && <p className="hint">日志：{status.logPath}</p>}
     {warning && <div className="dsh-warning" role="dialog" aria-modal="true" aria-labelledby="dsh-warning-title">
       <div className="dsh-warning-card">
