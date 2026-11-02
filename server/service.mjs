@@ -5,7 +5,7 @@ import { readFile, writeFile, mkdir, readdir, realpath, stat } from 'node:fs/pro
 import { resolve, relative, join, extname, sep } from 'node:path';
 import { createReadStream } from 'node:fs';
 import { WebSocketServer, WebSocket } from 'ws';
-import { CAPABILITIES, normalizeCommand, normalizeReply, responseBudget, needsSpeechRepair } from './protocol.mjs';
+import { CAPABILITIES, nativePlanWarnings, normalizeCommand, normalizeReply, responseBudget, needsSpeechRepair } from './protocol.mjs';
 import { createSettingsStore } from './settings.mjs';
 import { apiChat, codexChat, generateSpeech, listSystemVoices } from './adapters.mjs';
 import { handleMcp } from './mcp.mjs';
@@ -363,6 +363,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     } catch (err) {
       if (res.headersSent) return res.destroy();
       const status = err.status || (err.code === 'ENOENT' ? 404 : 500);
+      if (process.env.L2D_DEBUG) console.error(err);
       // Do not leak paths, command output, provider response bodies, or credentials.
       const message = err.status || ['INVALID_MODEL_OUTPUT', 'EMPTY_MODEL_OUTPUT', 'CODEX_EXEC_FAILED', 'PROVIDER_HTTP_ERROR'].includes(err.code) ? err.message : status === 404 ? '文件不存在。' : '请求失败，请检查设置后重试。';
       const details = ['api', 'codex', 'dsh'].includes(err.provider) ? { provider: err.provider } : {};
@@ -406,6 +407,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   connectionSignature = JSON.stringify({ ...connectionState(), performance: { ...performanceState(), lastSeen: null } });
   const connectionTimer = setInterval(publishConnections, Math.min(1000, Math.max(25, leaseMs / 2))); connectionTimer.unref?.();
   function presentNativeReply(plan = {}) {
+    const warnings = nativePlanWarnings(plan);
     // Native models often say "chest" as a gesture while choosing the face-only
     // shy combination. The authored chest opening is "reassure"; use it so an
     // explicit hand request cannot silently degrade to a face-only performance.
@@ -421,7 +423,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     reply.nativeTool = true;
     latestReply = reply;
     emit('chat', { reply, nativeTool: true });
-    return { accepted: true, id: reply.id, state: getState().state };
+    return { accepted: true, id: reply.id, state: getState().state, ...(warnings.length ? { warnings } : {}) };
   }
   return {
     url, token, events, dispatch, getState, setModelRoot, presentNativeReply, requestDshRecovery: options => dsh.requestRecovery(options), get settings() { return store.get(); },

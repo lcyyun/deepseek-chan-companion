@@ -135,6 +135,15 @@ Invoke-RestMethod "$bridgeBase/api/state" -Headers $bridgeHeaders |
 
 `avatar_capabilities.bodyAnimations` 返回第 4.4 节的 12 个动画 ID，`speechGestures.bodyAnimation` 另外包含 `auto/none`。仅想切换脸时优先 `avatar_expression`；要展示肢体时用 `avatar_body`；有意组合脸和肢体时仍可用原 `avatar_perform`，或在朗读中指定第 4.5 节的 `combination`。不要把手势字段放入独立表情命令。`avatar_speak` 自带编排，通常无需再额外调用 body 或 perform，以免覆盖自动节奏。
 
+### 原生 `avatar_reply` 的完整字段边界
+
+- `intent`：`neutral/greet/agree/disagree/curious/explain/reassure/shy/playful/surprised/think/cuddle/idea`；**没有 happy**。
+- `gesture`：`none/pointer/chest/foxtail`；**没有 pointer-left/pointer-right**，左右是 `bodyAnimation` 的 ID。
+- `bodyAnimation`：`auto/none` 加 12 个动画 ID（`explain/think/reassure/happy/shy/chest-left/chest-right/chest-both/pointer-left/pointer-right/talk/listen` 等，以运行时能力为准）。
+- 优先级：显式 `bodyAnimation` 覆盖 `gesture`；`bodyAnimation:none` 关闭该段肢体；`combination` 是该段开场，`expressionCues` 独立控制脸；段级 `intensity` 会被忽略，强度写在 `expressionCues[].intensity`。
+- 已知问题：`pointer-left` 和 `pointer-right` 当前都表现为右手并带狗尾草道具，不能用来做可靠左右指向；没有独立点头动画，连续点头用连续段的 `combination:agree`。
+- `avatar_reply` 返回 `warnings` 时会说明被忽略的字段；下一次调用应据此调整，不要继续猜。
+
 MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 
 ```json

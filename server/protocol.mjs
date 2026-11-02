@@ -21,6 +21,12 @@ export const CAPABILITIES = {
   gestures: ['none', 'pointer', 'chest', 'foxtail'],
   gaze: ['camera', 'left', 'right', 'up', 'down'],
   states: ['idle', 'thinking', 'listening', 'speaking', 'error'],
+  knownIssues: [
+    'pointer-left and pointer-right currently share the right-hand visual and include the dog-tail prop; do not rely on them for side-specific pointing.',
+    'An explicit bodyAnimation wins over gesture; bodyAnimation none disables gesture for that segment.',
+    'A segment-level intensity field is ignored; use expressionCues[].intensity.',
+    'There is no standalone nod animation; use combination agree.',
+  ],
 };
 
 export const RESPONSE_SCHEMA = {
@@ -97,6 +103,31 @@ export function normalizeReply(value) {
   return { id: randomUUID(), segments, details, sources,
     ...(value.nativePerformed === true ? { nativePerformed: true } : {}),
     ...(value.nativeTool === true ? { nativeTool: true } : {}) };
+}
+
+export function nativePlanWarnings(plan = {}) {
+  const warnings = [];
+  const known = new Set(['text', 'intent', 'emotion', 'gesture', 'bodyAnimation', 'combination', 'expressionCues']);
+  for (const [index, segment] of (Array.isArray(plan.segments) ? plan.segments : []).entries()) {
+    if (!segment || typeof segment !== 'object') continue;
+    const prefix = `segments[${index}]`;
+    for (const key of Object.keys(segment)) {
+      if (!known.has(key)) warnings.push(`${prefix}.${key} 被忽略；未知字段不会生效。`);
+    }
+    if (segment.intensity !== undefined) warnings.push(`${prefix}.intensity 被忽略；请使用 expressionCues[].intensity。`);
+    const body = segment.bodyAnimation;
+    const gesture = segment.gesture;
+    if (body === 'pointer-left' || body === 'pointer-right') {
+      warnings.push(`${prefix}.bodyAnimation=${body} 有已知问题：左右两侧当前都表现为右手，并带狗尾巴草道具；不要依赖它做左右指向。`);
+    }
+    if (body === 'none' && gesture && gesture !== 'none') {
+      warnings.push(`${prefix}.bodyAnimation=none 会关闭该段肢体，gesture=${gesture} 被忽略。`);
+    } else if (body && !['auto', 'none'].includes(body) && gesture && gesture !== 'none') {
+      const preset = BODY_ANIMATION_PRESETS.find(item => item.id === body);
+      if (preset && preset.gesture !== gesture) warnings.push(`${prefix}.bodyAnimation=${body} 优先于 gesture=${gesture}，后者被忽略。`);
+    }
+  }
+  return warnings;
 }
 
 export function normalizeCommand(input) {

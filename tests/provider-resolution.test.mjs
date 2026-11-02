@@ -140,6 +140,13 @@ test('native avatar_reply emits one atomic performance plan', async t => {
     { text: '先害羞地抚胸。', emotion: 'shy', gesture: 'chest', combination: 'shy', expressionCues: [{ at: 0, emotion: 'shy', intensity: 0.8 }] },
   ] } });
   assert.equal(event.reply.segments[0].combination, 'reassure', 'An explicit chest gesture must not become a face-only shy opening');
+  const warned = JSON.parse((await client.callTool({ name: 'avatar_reply', arguments: { segments: [
+    { text: '左手举指。', emotion: 'neutral', gesture: 'chest', bodyAnimation: 'pointer-left', intensity: 0.7 },
+  ] } })).content[0].text);
+  assert.equal(warned.accepted, true);
+  assert.ok(warned.warnings.some(warning => /pointer-left/.test(warning)));
+  assert.ok(warned.warnings.some(warning => /intensity/.test(warning)));
+  assert.ok(warned.warnings.some(warning => /gesture/.test(warning)));
 });
 
 test('DSH bridge thinking updates status without inventing a chat command or request id', async t => {
