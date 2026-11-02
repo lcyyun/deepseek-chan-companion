@@ -67,6 +67,8 @@ export const COMBINATION_GUIDE = Object.freeze({
 
 export const PERFORMANCE_GUIDE_BRIEF = '按自己的意图语气选动作，不因引用里的情绪词换脸。优先熟悉组合：agree赞同、explain讲解、shy害羞、think思索、idea点子、cuddle撒娇；须语境吻合，think只显式选。face只改脸，body只改肢体；组合每段一次，连续动作在连续段重复同一组合，短语音会压缩播放。之后独立脸与body承接余段。语音拥有口型，勿逐帧控制或为动画凑字数。不需要动作的段填combination:none；安静口播用emotion:neutral、bodyAnimation:none、combination:none，思考完成提示仍保留。左右指画面左右。';
 
+export const EXPRESSION_HOLD_GUIDE = '表情停留：expressionCues.at 是段内语音进度(0–0.9)，实际持续≈比例×该段语音时长。需要停留的脸红/害羞/窘迫/惊讶：台词尽量写到约30字以上；在0、约0.45、约0.85锚定同一或相近情绪；强度约0.8–0.85→0.65–0.75→0.55–0.6；单段最多4个cue，不再叠加。跨段延续优先“长台词+多锚点”，不要靠增加段数，避免动作重入和口型重置。';
+
 export const PERFORMANCE_GUIDE = Object.freeze({
   modes: Object.freeze({
     face: Object.freeze({ fields: 'emotion / expressionCues', description: '只控制面部；小表情预览不带肢体，语音保持口型优先。' }),
