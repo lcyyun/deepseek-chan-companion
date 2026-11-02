@@ -61,7 +61,12 @@ function Confirm-PackageDirectory([string]$Directory, $ManifestData) {
   }
 }
 function Write-Shortcut([string]$ShortcutPath, [string]$Executable, [string]$WorkingDirectory) {
-  Assert-NoReparseAncestor $ShortcutPath
+  # Windows Known Folders can be redirected through OneDrive/cloud reparse points.
+  # Trust that system-selected parent location, but never follow a shortcut leaf link.
+  $shortcutItem = $null
+  try { $shortcutItem = Get-Item -LiteralPath $ShortcutPath -Force }
+  catch [System.Management.Automation.ItemNotFoundException] { }
+  if ($shortcutItem -and ($shortcutItem.PSIsContainer -or $shortcutItem.LinkType -in @('SymbolicLink', 'Junction'))) { throw "Refusing a symbolic link or junction at the shortcut file: $ShortcutPath" }
   $shell = New-Object -ComObject WScript.Shell
   if (Test-Path -LiteralPath $ShortcutPath) {
     $existing = $shell.CreateShortcut($ShortcutPath)

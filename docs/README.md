@@ -9,6 +9,7 @@
 | 你要做什么 | 阅读文档 |
 |---|---|
 | 首次使用下载的发行包、接入 DSH、检查是否安装成功 | [发行版快速开始](release-quickstart.md) |
+| 核对 0.21.1 实机冷启动、重连和发行包校验 | [发行候选验收](release-validation-0.21.1.md) |
 | 安装、启动、摆放、摸头、敲盆、退出程序 | [项目 README](../README.md) |
 | 把控制方法直接交给智能体 | [模型控制快速指南](model-control-quickstart.md) |
 | 让 DSH 接入，了解全部工具和错误 | [DSH 智能体操作手册](dsh-agent-guide.md) |
