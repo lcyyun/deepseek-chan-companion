@@ -132,6 +132,13 @@ function startDsh({ cli, home, patch, port, logFile }) {
   const log = fs.openSync(logFile, 'a');
   const args = ['web', '--patch', patch, '--port', String(port), '--no-open'];
   const env = { ...process.env, DSH_HOME: home };
+  // If the companion was started from a DSH shell, do not leak that session's
+  // profile/sandbox markers into the new DSH process. It must boot the normal
+  // web profile with the same home, not inherit the caller's shell confinement.
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('DSH_') && key !== 'DSH_HOME') delete env[key];
+  }
+  delete env.ELECTRON_RUN_AS_NODE;
   const command = `"${cli}" web --patch "${patch}" --port ${Number(port)} --no-open`;
   const child = /\.(?:cmd|bat)$/i.test(cli)
     ? spawn(command, {
