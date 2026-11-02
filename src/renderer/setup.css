@@ -35,6 +35,8 @@
 .dsh-result.ok,.hint.ok{color:#2d7f5b}
 .hint.warn,.dsh-error{color:#a95338}
 .dsh-error{margin:7px 0 0;font-size:11px;white-space:pre-wrap}
+.dsh-prompt{margin-top:9px}
+.dsh-prompt textarea{width:100%;box-sizing:border-box;margin-top:4px;padding:8px;border:1px solid #d8e5f3;border-radius:9px;background:#fbfdff;color:#385573;font:11px/1.55 ui-monospace,Consolas,monospace;resize:vertical}
 .dsh-manual{margin-top:8px;padding:8px;border:1px dashed #d5e3f2;border-radius:9px;background:#fbfdff}
 .dsh-manual button{margin-top:4px;border:1px solid #cfe0f2;border-radius:8px;background:#fff;color:#3f6f9f;padding:5px 9px;font-size:10px;cursor:pointer}
 .dsh-countdown{font-weight:700;color:#a35a20}

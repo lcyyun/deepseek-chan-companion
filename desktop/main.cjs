@@ -344,6 +344,57 @@ async function connectDsh(payload = {}) {
   return { ok: true, connected: true, mode, port, patch, log: path.join(dataDir, 'logs', 'dsh.log') };
 }
 
+function bridgePrompt(payload = {}) {
+  const mode = payload.mode === 'existing' ? 'existing' : 'new';
+  const sessionId = String(payload.sessionId || '').trim();
+  const home = dshConnect.resolveHome(config);
+  const cli = dshConnect.resolveCli(config);
+  const port = Number(config.dshPort) || dshConnect.DEFAULT_PORT;
+  if (!cli) throw new Error('没有找到 DSH CLI，无法生成接入提示词。请先安装 DeepSeek Harness。');
+  if (!fs.existsSync(home)) throw new Error(`没有找到 DSH_HOME：${home}`);
+  const patch = dshConnect.writePatch({
+    root: ROOT, dataDir, serviceUrl: service.url, token: service.token,
+    mode, sessionId, sessionFile: dshConnect.sessionFile(dataDir), port,
+  });
+  config.dshMode = mode;
+  if (mode === 'existing') config.dshSessionId = sessionId;
+  else delete config.dshSessionId;
+  config.dshPort = port;
+  saveConfig();
+  const bridge = path.join(ROOT, 'integrations', 'dsh', 'live2d-bridge.mjs');
+  const tokenFile = path.join(dataDir, 'bridge-token');
+  const sessionFile = dshConnect.sessionFile(dataDir);
+  const modeText = mode === 'existing'
+    ? `A · 接到已有会话\n目标会话 ID：${sessionId}\n不要新建独立会话，不要写 sessionFile。`
+    : `B · 新建独立桌宠会话\n使用 sessionFile：${sessionFile}\n不要设置 chatSessionId，首次会创建新会话并保存，后续复用。`;
+  const prompt = [
+    '请在这台 Windows 电脑上，把大肥鱼（DeepSeek-chan）接入当前 DeepSeek Harness。',
+    '这是一次本地桥接配置，不要新建独立 DSH 实例，不要删除用户数据。',
+    '',
+    `接入模式：${modeText}`,
+    '',
+    '已有本地信息：',
+    `- 大肥鱼服务：${service.url}`,
+    `- MCP 地址：${service.url.replace(/\/$/, '')}/mcp`,
+    `- 桥插件：${bridge}`,
+    `- 已生成的 patch：${patch}`,
+    `- token 文件：${tokenFile}（不要读取后发到聊天里）`,
+    `- DSH_HOME：${home}`,
+    `- 端口：${port}`,
+    '',
+    '请执行：',
+    '1. 先备份 DSH profile，不要删除用户原有会话。',
+    '2. 检查 patch 中的 MCP 客户端、桥插件路径、tokenFile 和当前 A/B 模式是否正确。',
+    `3. 使用现有 web profile 启动 DSH，并加上：--patch "${patch}" --port ${port} --no-open`,
+    '4. 如果 DSH 正在运行：不要杀进程；先让用户完成任务并手动退出，再用上述参数启动。',
+    '5. 启动后验证 MCP 和大肥鱼聊天桥；不要改用户的其他 DSH 配置。',
+    '',
+    '如果你不能执行终端命令，请把 patch 路径和启动命令原样交给用户手动执行。',
+    '完成后告诉用户：回到大肥鱼点“刷新状态”，不需要再点自动连接。',
+  ].join('\n');
+  return { mode, prompt, patch, tokenFile, sessionFile, home, cli, port };
+}
+
 if(!app.requestSingleInstanceLock())app.quit();
 else {
   app.on('second-instance',()=>{if(chat){layoutTools();chat.show();chat.focus();}});
@@ -457,9 +508,11 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'open-extension':await shell.openPath(path.join(ROOT,'extension'));break;
     case 'open-url':openSafe(data);break;
     case 'copy-pairing':clipboard.writeText(service.token);return true;
+    case 'copy-text':clipboard.writeText(String(data||''));return true;
     case 'setup-complete':config.setupCompleted=true;config.firstRun=false;setupRequired=false;saveConfig();return true;
-    case 'dsh-status':{const info=await dshConnect.detectDsh(config);const launcher=path.join(dataDir,'dsh','start-dsh.cmd');return{...info,bridgeConnected:service.getState().dsh?.connected===true,chatAvailable:service.getState().dsh?.chatAvailable===true,sessions:dshConnect.listSessions(info.home),patchPath:path.join(dataDir,'dsh','live2d.patch.yml'),launcherPath:fs.existsSync(launcher)?launcher:'',logPath:path.join(dataDir,'logs','dsh.log'),mode:config.dshMode||'',savedSessionId:config.dshSessionId||''};}
+    case 'dsh-status':{const info=await dshConnect.detectDsh(config);const launcher=path.join(dataDir,'dsh','start-dsh.cmd');return{...info,bridgeConnected:info.running&&service.getState().dsh?.connected===true,chatAvailable:info.running&&service.getState().dsh?.chatAvailable===true,sessions:dshConnect.listSessions(info.home),patchPath:path.join(dataDir,'dsh','live2d.patch.yml'),launcherPath:fs.existsSync(launcher)?launcher:'',logPath:path.join(dataDir,'logs','dsh.log'),mode:config.dshMode||'',savedSessionId:config.dshSessionId||''};}
     case 'dsh-sessions':{const info=await dshConnect.detectDsh(config);return dshConnect.listSessions(info.home);}
+    case 'dsh-prompt':return bridgePrompt(data||{});
     case 'dsh-connect':return await connectDsh(data||{});
     case 'dsh-open':{const port=Number(config.dshPort)||dshConnect.DEFAULT_PORT;await shell.openExternal(`http://127.0.0.1:${port}/`);return true;}
     case 'dsh-open-launcher':{const launcher=path.join(dataDir,'dsh','start-dsh.cmd');if(!fs.existsSync(launcher))throw new Error('还没有生成手动启动脚本，请先点一次“连接 DSH”。');shell.showItemInFolder(launcher);return launcher;}

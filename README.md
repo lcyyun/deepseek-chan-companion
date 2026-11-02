@@ -4,7 +4,7 @@
 
 **当前版本：0.20.0。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
 
-0.20.0 增加用户级启动与连接：便携版和桌面快捷方式、首次启动向导、应用内 DSH 一键连接、B 会话持久化、A 会话列表，以及不依赖环境变量的 token 文件；连接正在运行的 DSH 前会显示 3 秒倒计时警示。
+0.20.0 增加用户级启动与连接：便携版和桌面快捷方式、首次启动向导、DSH 接入提示词、B 会话持久化、A 会话列表，以及不依赖环境变量的 token 文件；DSH 由用户自己的智能体接入，大肥鱼不再自动启动或结束 DSH。
 
 0.19.2 收紧 DSH 原生 `avatar_reply` 的工具字段：意图、表情、手势、组合、肢体必须使用真实 ID，不再接受 `hand_on_chest` 这类自造名字；并修正“害羞抚胸”被当成仅表情的问题——`gesture: chest` 会自动落到 `reassure` 抚胸组合，后续 `bodyAnimation: talk` 接娓娓道来。
 
@@ -136,17 +136,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
 
 ## 连接 DSH
 
-在“设置 → 连接 DeepSeek Harness”里点“连接 DSH”。应用会：
+在“设置 → 连接 DeepSeek Harness”里选择 A/B，然后生成接入提示词，把整段提示词复制给你的 DSH 智能体。提示词会带上本机路径、MCP 地址、patch、token 文件和正确的启动命令；智能体完成配置并重启 DSH 后，回到大肥鱼点“刷新状态”。
 
-1. 检测本机 DSH CLI 和 `DSH_HOME`
-2. 生成自己的 patch 和本地 token 文件
-3. 用同一个 DSH profile 启动或复用 DSH
-4. 选择“新建独立桌宠会话”或“接到已有会话”
-5. 做 MCP 与聊天桥健康检查
+大肥鱼不会自动启动、关闭或结束 DSH，也不会在后台改用户的其他 DSH 配置。
 
-不会创建独立的 DSH 实例，也不会默认使用另一个 home/profile。连接正在运行的 DSH 前会显示 3 秒倒计时警示：“请先完成任务并保存”。大肥鱼**不会关闭或结束 DSH**；需要用户手动退出 DSH，再点一次“连接 DSH”。点“取消”不会动 DSH。B 模式会把新建会话 ID 写入本地 session 文件，重启后复用；A 模式会列出最近的会话供选择。
+- **A · 接到已有会话**：继承该会话的人格和上下文；需要选择具体会话。
+- **B · 新建独立桌宠会话**：不继承当前上下文，会话 ID 写入本地 session 文件，重启后复用。
 
-如果自动启动仍然失败，设置面板会提供“打开手动启动脚本位置”。双击 `start-dsh.cmd`，等 DSH 启动后回到大肥鱼点“连接 DSH”或刷新状态即可；脚本使用同一份 patch 和 token。
+不会创建独立的 DSH 实例，也不会默认使用另一个 home/profile。
 
 旧的长提示词 JSON 桥仍保留在高级兼容模式中，作为旧 DSH/外部客户端的回退和效果对照；正常 DSH 连接使用 `avatar_reply` 原生工具。
 

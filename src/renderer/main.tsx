@@ -502,7 +502,7 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
       {value:'unconfigured',label:'暂不启用桌宠对话',description:'保留本地互动和外部 MCP 表演'},
     ]}/>
     <div className="info-box provider-setup" data-provider-summary>{connectionMessage(connection)}</div>
-    <DshConnectPanel onConnected={onSaved}/>
+    <DshConnectPanel/>
     {form.provider==='api'&&<><label>API 地址<input placeholder="https://api.deepseek.com" value={form.baseUrl||''} onChange={e=>set('baseUrl',e.target.value)}/></label><label>模型名称<input placeholder="填写服务提供的模型 ID" value={form.model||''} onChange={e=>set('model',e.target.value)}/></label><label>API Key<input type="password" autoComplete="off" placeholder={settings?.hasApiKey?'已保存，留空保持':'只保存在本机加密存储'} value={form.apiKey||''} onChange={e=>set('apiKey',e.target.value)}/></label></>}
     {providerChoice==='codex'&&<div className="info-box">已手动选择 Codex，保存后使用本机 CLI 与登录配置。启动失败会提示权限、初始化或认证原因。</div>}
     {providerChoice==='dsh'&&<div className="info-box">使用已连接的 DSH 聊天桥。断线后保持 DSH，等待重连；MCP 表演与聊天可用状态分别显示。</div>}

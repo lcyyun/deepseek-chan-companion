@@ -76,7 +76,7 @@ DSH接入依据官方 [MCP客户端](https://github.com/deepseek-ai/deepseek-har
 
 安装前先按[DSH 安装模式](dsh-install-modes.md)询问用户选 A“接到已有会话”还是 B“新建独立桌宠会话”；不要默认。A 还要让用户选择具体会话。两种模式都推荐 `native: true`，由智能体在正常聊天中按需调用一次 `avatar_reply`，不再把长 JSON 表演规范作为每轮用户消息注入会话。
 
-应用内「连接 DeepSeek Harness」会检测 CLI/`DSH_HOME`、生成 patch 并使用同一个 profile 启动或复用 DSH，不新建独立实例；连接正在运行的 DSH 前会显示 3 秒警示并要求用户确认；程序不会关闭 DSH，用户需手动退出 DSH 后重试。手工配置时可用 `tokenFile` 代替环境变量；B 模式可用 `sessionFile` 保存新建的会话 ID，A 模式使用 `chatSessionId`。
+应用内「连接 DeepSeek Harness」会检测 CLI/`DSH_HOME`、生成 patch 和 A/B 两套接入提示词；用户把提示词交给 DSH 智能体完成桥接，应用不自动启动或结束 DSH。手工配置时可用 `tokenFile` 代替环境变量；B 模式可用 `sessionFile` 保存新建的会话 ID，A 模式使用 `chatSessionId`。
 
 插件支持 `tokenFile`（本地 token 文件）作为 `L2D_BRIDGE_TOKEN` 的替代；B 模式支持 `sessionFile`，首次创建后写入会话 ID，重启复用。应用内连接默认使用这两项。
 

@@ -13,9 +13,6 @@ type DshStatus = {
   sessions?: DshSession[];
   mode?: 'new' | 'existing' | '';
   savedSessionId?: string;
-  logPath?: string;
-  patchPath?: string;
-  launcherPath?: string;
 };
 
 const control = (action: string, data?: any) => window.companion?.control(action, data);
@@ -25,22 +22,20 @@ function dateLabel(value?: number) {
   try { return new Date(value).toLocaleString(); } catch { return ''; }
 }
 
-export function DshConnectPanel({ onConnected, compact = false }: { onConnected?: () => void; compact?: boolean }) {
+export function DshConnectPanel({ compact = false }: { compact?: boolean }) {
   const [status, setStatus] = useState<DshStatus | null>(null);
   const [mode, setMode] = useState<'new' | 'existing' | ''>('');
   const [sessionId, setSessionId] = useState('');
+  const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState('');
-  const [warning, setWarning] = useState(false);
-  const [countdown, setCountdown] = useState(3);
+  const [copied, setCopied] = useState(false);
 
   async function refresh() {
     try {
       const value = await control('dsh-status') as DshStatus;
       setStatus(value);
       if (value.mode === 'existing' || value.mode === 'new') setMode(value.mode);
-      else if (!value.savedSessionId) setMode('');
       if (value.savedSessionId) setSessionId(value.savedSessionId);
       setError('');
     } catch (e: any) {
@@ -48,52 +43,48 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
     }
   }
 
-  useEffect(() => { void refresh(); }, []);
   useEffect(() => {
-    if (!warning) return;
-    setCountdown(3);
-    const timer = setInterval(() => setCountdown(value => {
-      if (value <= 1) { clearInterval(timer); return 0; }
-      return value - 1;
-    }), 1000);
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, 5000);
     return () => clearInterval(timer);
-  }, [warning]);
+  }, []);
 
-  async function connect() {
-    setBusy(true); setError(''); setResult('');
+  async function generatePrompt() {
+    setBusy(true); setError(''); setCopied(false);
     try {
-      const value = await control('dsh-connect', { mode, sessionId: sessionId.trim() }) as any;
-      if (value?.requiresManualStop || value?.requiresRestart) {
-        setWarning(true);
-        setResult('DSH 正在运行，需要你手动退出后才能连接。');
-      } else if (value?.connected) {
-        setWarning(false);
-        setResult(value.alreadyConnected ? 'DSH 已经连接。' : `已连接 DSH${value.port ? ` · 端口 ${value.port}` : ''}。`);
-        await refresh();
-        onConnected?.();
-      } else {
-        setResult('DSH 连接没有返回结果。');
-      }
+      const value = await control('dsh-prompt', { mode, sessionId: sessionId.trim() }) as any;
+      setPrompt(String(value?.prompt || ''));
+      if (!value?.prompt) setError('没有生成接入提示词。');
     } catch (e: any) {
       setError(e?.message || String(e));
-      await refresh();
     } finally {
       setBusy(false);
     }
   }
 
+  async function copyPrompt() {
+    try {
+      await control('copy-text', prompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      try { await navigator.clipboard.writeText(prompt); setCopied(true); setTimeout(() => setCopied(false), 1800); }
+      catch { setError('复制失败，请手动选择文本框内容。'); }
+    }
+  }
+
   const connected = status?.bridgeConnected === true;
-  const canConnect = !!status?.cli && !!status?.homeExists && !connected;
+  const canGenerate = !!status?.cli && !!status?.homeExists && !!mode && (mode !== 'existing' || !!sessionId.trim());
 
   return <div className={'dsh-panel' + (compact ? ' compact' : '')}>
     <div className="dsh-heading"><strong>连接 DeepSeek Harness</strong><button className="text-button" disabled={busy} onClick={refresh}>刷新状态</button></div>
-    <p className="hint">使用同一个 DSH_HOME 和现有 profile，不新建独立实例。连接前会先检查当前 DSH 是否正在运行。</p>
+    <p className="hint">不自动启动 DSH。把生成的一段提示词交给你的 DSH 智能体，让它完成桥接。</p>
     <div className="dsh-status-grid">
       <span>DSH</span><b>{status?.running ? '正在运行' : status?.cli ? '未运行' : '未找到'}</b>
-      <span>聊天桥</span><b>{connected ? '已连接' : status?.chatAvailable ? '已就绪' : '未连接'}</b>
+      <span>聊天桥</span><b>{connected ? '已连接' : '未连接'}</b>
       <span>DSH_HOME</span><b title={status?.home}>{status?.home || '未检测到'}</b>
     </div>
-    {!status?.cli && <p className="hint warn">没有找到 DSH CLI。请先安装 DeepSeek Harness，或在高级设置中填写 DSH 路径。</p>}
+    {!status?.cli && <p className="hint warn">没有找到 DSH CLI。请先安装 DeepSeek Harness。</p>}
     {status?.cli && !status.homeExists && <p className="hint warn">没有找到 DSH_HOME：{status.home}</p>}
     {connected && <p className="hint ok">皮套已经接到当前 DSH。可以直接聊天，或点“打开 DSH”查看会话。</p>}
     {!connected && <div className="dsh-mode" role="radiogroup" aria-label="选择会话模式">
@@ -113,28 +104,16 @@ export function DshConnectPanel({ onConnected, compact = false }: { onConnected?
       {!!status?.sessions?.length && <div className="dsh-session-list">{status.sessions.map(session => <button key={session.id} className={sessionId === session.id ? 'selected' : ''} onClick={() => setSessionId(session.id)}><span>{session.id}</span><small>{dateLabel(session.updatedAt)}</small></button>)}</div>}
       {!status?.sessions?.length && <p className="hint">没有读到会话列表，可以直接粘贴会话 ID。</p>}
     </div>}
-    <div className="button-row">
-      {!connected && <button className="primary" disabled={busy || !canConnect || !mode || (mode === 'existing' && !sessionId.trim())} onClick={() => connect()}>{busy ? '连接中…' : mode ? '连接 DSH' : '先选择会话模式'}</button>}
-      {connected && <button className="primary" onClick={() => control('dsh-open').catch((e: any) => setError(e?.message || String(e)))}>打开 DSH</button>}
-    </div>
-    {result && <p className={'dsh-result ' + (connected ? 'ok' : '')}>{result}</p>}
+    {!connected && <div className="button-row">
+      <button className="primary" disabled={busy || !canGenerate} onClick={generatePrompt}>{busy ? '生成中…' : prompt ? '重新生成提示词' : '生成接入提示词'}</button>
+    </div>}
+    {connected && <div className="button-row"><button onClick={() => control('dsh-open').catch((e: any) => setError(e?.message || String(e)))}>打开 DSH</button></div>}
+    {prompt && <div className="dsh-prompt">
+      <p className="hint">把下面这段完整复制给你的 DSH 智能体。它完成后会提示你重启 DSH。</p>
+      <textarea readOnly value={prompt} rows={9} onFocus={e => e.currentTarget.select()} />
+      <div className="button-row"><button className="primary" onClick={copyPrompt}>{copied ? '已复制' : '复制提示词'}</button></div>
+    </div>}
     {error && <p className="dsh-error">{error}</p>}
-    {!!status?.launcherPath && <div className="dsh-manual">
-      <p className="hint">如果自动启动失败：打开脚本所在文件夹，双击 <b>start-dsh.cmd</b>，等 DSH 启动后回到这里点“连接 DSH”。</p>
-      <button onClick={() => control('dsh-open-launcher').catch((e: any) => setError(e?.message || String(e)))}>打开手动启动脚本位置</button>
-    </div>}
-    {!!status?.logPath && <p className="hint">日志：{status.logPath}</p>}
-    {warning && <div className="dsh-warning" role="dialog" aria-modal="true" aria-labelledby="dsh-warning-title">
-      <div className="dsh-warning-card">
-        <h3 id="dsh-warning-title">DSH 正在运行</h3>
-        <p>大肥鱼不会关闭 DSH。请先在 DSH 中完成任务并保存，然后手动退出 DSH；退出后再点“连接 DSH”即可自动连接。</p>
-        <p className="dsh-countdown">倒计时：{countdown} 秒</p>
-        <div className="button-row">
-          <button className="danger" disabled={countdown > 0} onClick={() => { setWarning(false); setResult('请手动退出 DSH，然后点“连接 DSH”重试。'); }}>{countdown > 0 ? `请先完成任务（${countdown}）` : '我已知晓，去手动停止'}</button>
-          <button onClick={() => { setWarning(false); setResult('已取消。'); }}>取消</button>
-        </div>
-      </div>
-    </div>}
   </div>;
 }
 
@@ -143,7 +122,6 @@ export function SetupWizard({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     control('diagnostics').then((value: any) => setModelRoot(value?.modelRoot || '')).catch(() => {});
@@ -177,9 +155,8 @@ export function SetupWizard({ onDone }: { onDone: () => void }) {
       </div>
       <div className="setup-step">
         <div className="setup-step-head"><span className={step >= 2 ? 'active' : ''}>2</span><strong>连接对话</strong></div>
-        <p className="hint">连接本机 DSH，或者稍后在设置里选择 API / Codex。连接 DSH 不会新建独立实例。</p>
-        <DshConnectPanel compact onConnected={() => setConnected(true)} />
-        {connected && <p className="hint ok">DSH 已连接。点“完成”开始使用。</p>}
+        <p className="hint">可以现在生成 DSH 接入提示词，也可以稍后在设置里选择 API / Codex。</p>
+        <DshConnectPanel compact />
       </div>
       {error && <p className="dsh-error">{error}</p>}
       <div className="setup-actions"><button disabled={busy} onClick={finish}>稍后设置</button><button className="primary" disabled={busy || !modelRoot} onClick={finish}>{busy ? '保存中…' : '完成'}</button></div>
