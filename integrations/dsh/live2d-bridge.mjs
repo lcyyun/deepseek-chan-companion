@@ -132,7 +132,7 @@ export function attachChatBridge(ctx, config) {
       const native = config.native === true;
       const transcript = message.messages.filter(m => !native || m.role !== 'system').map(m => `${String(m.role).toUpperCase()}:\n${m.content}`).join('\n\n');
       const prompt = native
-        ? `NATIVE PET MODE: reply normally. When you want the character to speak or perform, call avatar_reply once with the complete segments plan; do not repeat that performance in your text. Do not run code or access files.\n\n${transcript}`
+        ? `NATIVE PET MODE: reply normally. When you want the character to speak or perform, call avatar_reply once with the complete segments plan; do not repeat that performance in your text. Each segment may carry one combination preset; for repeated actions repeat the same preset on consecutive segments (three nods = three segments with combination:"agree"). Do not run code or access files.\n\n${transcript}`
         : transcript;
       // Register pending state before prompt: events can arrive before its acknowledgement.
       await ctx.sessionController.prompt({ requestId: operation.requestId, sessionId: operation.sessionId, mode: 'queue', content: [{ type: 'text', text: prompt }], clientTimeZone: config.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone }, operation.controller.signal);
