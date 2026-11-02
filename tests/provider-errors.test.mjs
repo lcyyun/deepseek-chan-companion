@@ -59,7 +59,10 @@ const chatArgs = () => ({ settings: { webSearch: false, verbosity: 'brief' }, re
 
 test('DSH availability requires a capable chat bridge and retains disconnect/reconnect identity', async () => {
   const manager = createDshManager();
-  assert.deepEqual(manager.state(), { connected: false, chatAvailable: false, everConnected: false, reconnecting: false, sessionId: '', searchAvailable: false });
+  assert.equal(manager.state().connected, false); assert.equal(manager.state().chatAvailable, false);
+  assert.equal(manager.state().everConnected, false); assert.equal(manager.state().reconnecting, false);
+  assert.equal(manager.state().sessionId, ''); assert.equal(manager.state().searchAvailable, false);
+  assert.equal(manager.state().recoveryStatus, 'disconnected'); assert.equal(manager.state().toolsReady, false);
   const unsupported = bridgeSocket(); manager.register(unsupported, { chat: true, sessionControllerAvailable: false });
   assert.equal(manager.state().connected, true); assert.equal(manager.state().chatAvailable, false);
   assert.throws(() => manager.chat(chatArgs()), { code: 'DSH_CHAT_NOT_CONNECTED' });

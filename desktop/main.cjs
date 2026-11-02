@@ -329,54 +329,26 @@ function registerKeys(){
   for(const [key,fn] of bindings)if(!globalShortcut.register(key,fn))failures.push(key);
 }
 
-async function connectDsh(payload = {}) {
-  const mode = payload.mode === 'existing' ? 'existing' : 'new';
-  const info = await dshConnect.detectDsh(config);
-  if (!info.cli) throw new Error('没有找到 DSH。请先安装 DeepSeek Harness，或在设置中填写 DSH CLI 路径。');
-  if (!info.homeExists) throw new Error(`没有找到 DSH_HOME：${info.home}。请先运行一次 DSH，或填写正确的 DSH_HOME。`);
-  const bridgeConnected = service.getState().dsh?.connected === true;
-  if (bridgeConnected) return { ok: true, connected: true, alreadyConnected: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT };
-  // Never terminate DSH from the companion. It may be in the middle of a task;
-  // the user must stop it manually before a patched instance can be started.
-  if (info.running) return { ok: false, requiresManualStop: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT, openPorts: info.open };
-  const port = Number(config.dshPort) || dshConnect.DEFAULT_PORT;
-  // DSH's first boot needs profiles/web. Create it from the app process before
-  // spawning so a transient child-process permission failure cannot hide the
-  // real setup problem behind a 30-second startup timeout.
-  try { fs.mkdirSync(path.join(info.home, 'profiles', 'web'), { recursive: true }); }
-  catch (error) { throw new Error(`无法创建 DSH profile 目录：${error.message}\n请先手动启动一次 DSH，确认它能在 ${info.home} 正常初始化。`); }
-  const patch = dshConnect.writePatch({
-    root: ROOT, dataDir, serviceUrl: service.url, token: service.token,
-    mode, sessionId: payload.sessionId, sessionFile: dshConnect.sessionFile(dataDir), port,
+let dshConnectionFlow;
+function connectionFlow() {
+  return dshConnectionFlow ||= dshConnect.createConnectionController({
+    root: ROOT, getDataDir: () => dataDir, getConfig: () => config, getService: () => service,
   });
-  dshConnect.writeLauncher({ dataDir, cli: info.cli, home: info.home, patch, port });
-  dshConnect.startDsh({ cli: info.cli, home: info.home, patch, port, logFile: path.join(dataDir, 'logs', 'dsh.log') });
-  config.dshPort = port;
-  config.dshMode = mode;
-  if (mode === 'existing') config.dshSessionId = String(payload.sessionId || '');
-  else delete config.dshSessionId;
-  saveConfig();
-  try {
-    await dshConnect.waitForPort(port, 30000);
-    await dshConnect.waitForBridge(service, 45000);
-  } catch (error) {
-    throw new Error(`${error.message}\n日志：${path.join(dataDir, 'logs', 'dsh.log')}`);
-  }
-  return { ok: true, connected: true, mode, port, patch, log: path.join(dataDir, 'logs', 'dsh.log') };
+}
+async function connectDsh(payload = {}) {
+  return connectionFlow().connect(payload);
 }
 
 function bridgePrompt(payload = {}) {
-  const mode = payload.mode === 'existing' ? 'existing' : 'new';
+  const mode = payload.mode;
   const sessionId = String(payload.sessionId || '').trim();
   const home = dshConnect.resolveHome(config);
   const cli = dshConnect.resolveCli(config);
   const port = Number(config.dshPort) || dshConnect.DEFAULT_PORT;
-  if (!cli) throw new Error('没有找到 DSH CLI，无法生成接入提示词。请先安装 DeepSeek Harness。');
-  if (!fs.existsSync(home)) throw new Error(`没有找到 DSH_HOME：${home}`);
-  const patch = dshConnect.writePatch({
-    root: ROOT, dataDir, serviceUrl: service.url, token: service.token,
-    mode, sessionId, sessionFile: dshConnect.sessionFile(dataDir), port,
+  const installation = dshConnect.prepareInstallation({
+    root: ROOT, dataDir, config, serviceUrl: service.url, mode, sessionId,
   });
+  const patch = installation.patch;
   config.dshMode = mode;
   if (mode === 'existing') config.dshSessionId = sessionId;
   else delete config.dshSessionId;
@@ -390,7 +362,7 @@ function bridgePrompt(payload = {}) {
     : `B · 新建独立桌宠会话\n使用 sessionFile：${sessionFile}\n不要设置 chatSessionId，首次会创建新会话并保存，后续复用。`;
   const prompt = [
     '请在这台 Windows 电脑上，把大肥鱼（DeepSeek-chan）接入当前 DeepSeek Harness。',
-    '这是一次本地桥接配置，不要新建独立 DSH 实例，不要删除用户数据。',
+    '这是首次接入或插件升级。请复用当前 DSH 的 home/profile，不删除用户数据或结束正在工作的 DSH。',
     '',
     `接入模式：${modeText}`,
     '',
@@ -404,16 +376,16 @@ function bridgePrompt(payload = {}) {
     `- 端口：${port}`,
     '',
     '请执行：',
-    '1. 先备份 DSH profile，不要删除用户原有会话。',
-    '2. 检查 patch 中的 MCP 客户端、桥插件路径、tokenFile 和当前 A/B 模式是否正确。',
-    `3. 使用现有 web profile 启动 DSH，并加上：--patch "${patch}" --port ${port} --no-open`,
-    '4. 如果 DSH 正在运行：不要杀进程；先让用户完成任务并手动退出，再用上述参数启动。',
+    '1. 先检查是否已连接：若聊天桥和角色工具均已就绪，直接复用，不重新安装或重启。',
+    '2. 需要首次接入或升级时才备份 profile，检查 patch、tokenFile、installationId 和 A/B 模式。',
+    `3. 优先在当前 DSH 配置中加载此 patch。只有它尚未运行时才使用现有 web profile 启动：--patch "${patch}" --port ${port} --no-open`,
+    '4. 如果当前版本不能重新加载插件，请明确说明需要用户何时重启一次；不要因为桌宠重启或状态灯未登记就重启 DSH。',
     '5. 启动后验证 MCP 和大肥鱼聊天桥；不要改用户的其他 DSH 配置。',
     '',
     '如果你不能执行终端命令，请把 patch 路径和启动命令原样交给用户手动执行。',
-    '完成后告诉用户：回到大肥鱼点“刷新状态”，不需要再点自动连接。',
+    '完成后告诉用户：日常点“连接／重新连接”只做身份与工具校验；大肥鱼重启后桥会自动恢复。',
   ].join('\n');
-  return { mode, prompt, patch, tokenFile, sessionFile, home, cli, port };
+  return { mode, prompt, patch, tokenFile, sessionFile, home, cli, port, installationId: installation.installationId, reused: installation.reused === true };
 }
 
 if(!app.requestSingleInstanceLock())app.quit();
@@ -531,12 +503,12 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'copy-pairing':clipboard.writeText(service.token);return true;
     case 'copy-text':clipboard.writeText(String(data||''));return true;
     case 'setup-complete':config.setupCompleted=true;config.firstRun=false;setupRequired=false;saveConfig();return true;
-    case 'dsh-status':{const info=await dshConnect.detectDsh(config);const launcher=path.join(dataDir,'dsh','start-dsh.cmd');return{...info,bridgeConnected:info.running&&service.getState().dsh?.connected===true,chatAvailable:info.running&&service.getState().dsh?.chatAvailable===true,sessions:dshConnect.listSessions(info.home),patchPath:path.join(dataDir,'dsh','live2d.patch.yml'),launcherPath:fs.existsSync(launcher)?launcher:'',logPath:path.join(dataDir,'logs','dsh.log'),mode:config.dshMode||'',savedSessionId:config.dshSessionId||''};}
+    case 'dsh-status':{const status=await connectionFlow().status();return{...status,sessions:dshConnect.listSessions(status.home)};}
     case 'dsh-sessions':{const info=await dshConnect.detectDsh(config);return dshConnect.listSessions(info.home);}
     case 'dsh-prompt':return bridgePrompt(data||{});
     case 'dsh-connect':return await connectDsh(data||{});
-    case 'dsh-open':{const port=Number(config.dshPort)||dshConnect.DEFAULT_PORT;await shell.openExternal(`http://127.0.0.1:${port}/`);return true;}
-    case 'dsh-open-launcher':{const launcher=path.join(dataDir,'dsh','start-dsh.cmd');if(!fs.existsSync(launcher))throw new Error('还没有生成手动启动脚本，请先点一次“连接 DSH”。');shell.showItemInFolder(launcher);return launcher;}
+    case 'dsh-open':{const status=await connectionFlow().status();if(!status.canOpenDsh)throw new Error('尚未确认这个 DSH 实例的网页地址，请使用已打开的 DSH 窗口。');await shell.openExternal(`http://127.0.0.1:${status.openPort}/`);return true;}
+    case 'dsh-open-launcher':{const installation=dshConnect.readInstallation({root:ROOT,dataDir,config,serviceUrl:service.url});if(!installation.valid)throw new Error(installation.message);shell.showItemInFolder(installation.descriptor.launcher);return installation.descriptor.launcher;}
     case 'reset-position':resetPosition();break;
     case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError};
     case 'quit':app.quit();break;

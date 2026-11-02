@@ -68,6 +68,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   try { token = (await readFile(tokenFile, 'utf8')).trim(); } catch (err) { if (err.code !== 'ENOENT') throw err; }
   if (!/^[a-f0-9]{64}$/.test(token || '')) { token = randomBytes(32).toString('hex'); await writeFile(tokenFile, token, { mode: 0o600 }); }
   const store = await createSettingsStore({ dataDir, encrypt, decrypt });
+  const instanceId = randomUUID();
   const events = new EventEmitter();
   let url, activeRoot = modelRoot, manifest, modelError = null, stopped = false;
   let currentState = 'idle', lastCommand = null, latestReply = null, watchContext = null, activeRequest = null;
@@ -87,7 +88,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
       void store.rememberAutoProvider('dsh').catch(() => {}).finally(() => { rememberPending = false; if (!stopped) publishConnections(); });
     }
     publishConnections();
-  });
+  }, { instanceId });
   function emit(type, data = {}) {
     const event = { type, at: Date.now(), ...data };
     events.emit('event', event);
@@ -107,19 +108,20 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   }
   function performanceState(dshState = dsh.state()) {
     const now = Date.now(), known = [...mcpClients.entries()];
-    const live = known.filter(([, info]) => now - info.lastSeen < leaseMs);
+    const available = known.filter(([name]) => !(/dsh|deepseek[\s_-]*harness/i.test(name) && dshState.everConnected && !dshState.connected));
+    const live = available.filter(([, info]) => now - info.lastSeen < leaseMs);
     // MCP HTTP has no disconnect event. Keep "registered" separate from
     // "active" so an idle DSH MCP client is not reported as disconnected.
     return {
-      connected: live.length > 0,
+      connected: available.length > 0,
       active: live.length > 0,
       registered: known.length > 0,
-      dshConnected: live.some(([name]) => /dsh|deepseek[\s_-]*harness/i.test(name))
-        || (dshState.connected === true && known.length > 0),
-      clients: live.map(([name]) => name),
+      status: !known.length ? 'unregistered' : !available.length ? 'disconnected' : live.length ? 'active' : 'idle',
+      dshConnected: available.some(([name]) => /dsh|deepseek[\s_-]*harness/i.test(name)),
+      clients: available.map(([name]) => name),
       registeredClients: known.map(([name]) => name),
-      lastSeen: live.length ? Math.max(...live.map(([, info]) => info.lastSeen)) : null,
-      leaseMs,
+      lastSeen: known.length ? Math.max(...known.map(([, info]) => info.lastSeen)) : null,
+      activityWindowMs: leaseMs, leaseMs,
     };
   }
   function connectionState() {
@@ -138,6 +140,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     emit('state', { state: getState() });
   }
   function noteMcpActivity(name, req) {
+    if (req.headers['x-l2d-client-id'] === 'dsh-live2d') name = 'DeepSeek Harness';
     const scope = `${req.socket.remoteAddress || ''}|${String(req.headers['user-agent'] || '').slice(0, 160)}`;
     if (name) {
       name = name.replace(/[\u0000-\u001f]/g, '').slice(0, 80);
@@ -155,7 +158,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     publishConnections();
   }
   function getState() {
-    return { state: currentState, status: currentState, busy: Boolean(activeRequest), requestId: activeRequest?.id ?? null, lastCommand, latestReply,
+    return { instanceId, bridgeProtocolVersion: 1, state: currentState, status: currentState, busy: Boolean(activeRequest), requestId: activeRequest?.id ?? null, lastCommand, latestReply,
       model: { ready: Boolean(manifest), error: modelError, modelUrl: manifest?.modelUrl || null },
       watch: { ...store.get().watch, sessionId: watchSessionId, hasContext: Boolean(freshContext()) },
       ...connectionState(),
@@ -386,12 +389,12 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
         if (!ws.authenticated) {
           if (message.type !== 'auth' || !validToken(message.token)) return ws.close(1008, 'Invalid authentication');
           ws.authenticated = true; clearTimeout(timer);
-          ws.send(JSON.stringify({ type: 'auth', ok: true }));
+          ws.send(JSON.stringify({ type: 'auth', ok: true, instanceId, recoveryProtocol: 1 }));
           ws.send(JSON.stringify({ type: 'state', state: getState(), at: Date.now() })); return;
         }
         if (message.type === 'ping') ws.send(JSON.stringify({ type: 'pong', at: Date.now() }));
         else if (message.type === 'bridge-register' && message.name === 'dsh' && message.chat === true) dsh.register(ws, message);
-        else if (message.type === 'chat-result' || message.type === 'chat-progress') dsh.result(ws, message);
+        else if (['chat-result', 'chat-progress', 'bridge-recovery', 'bridge-health'].includes(message.type)) dsh.result(ws, message);
         else if (message.type === 'command') dispatch(message.command);
       } catch { ws.send(JSON.stringify({ type: 'error', error: 'Invalid message' })); }
     });
@@ -421,7 +424,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     return { accepted: true, id: reply.id, state: getState().state };
   }
   return {
-    url, token, events, dispatch, getState, setModelRoot, presentNativeReply, get settings() { return store.get(); },
+    url, token, events, dispatch, getState, setModelRoot, presentNativeReply, requestDshRecovery: options => dsh.requestRecovery(options), get settings() { return store.get(); },
     async close() {
       if (stopped) return; stopped = true; clearInterval(connectionTimer);
       activeRequest?.abort(); for (const controller of ttsControllers) controller.abort();

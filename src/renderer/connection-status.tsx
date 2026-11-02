@@ -5,7 +5,8 @@ export function chatProviderLabel(provider?: string) {
 }
 
 export function performanceLabel(performance?: any) {
-  if (performance?.connected) return 'MCP 已连接';
+  if (performance?.status === 'disconnected') return 'MCP 已断开';
+  if (performance?.active) return 'MCP 已接入 · 活跃';
   if (performance?.registered || performance?.dshConnected) return 'MCP 已接入 · 空闲';
   return 'MCP 未连接';
 }
@@ -20,7 +21,7 @@ export function ConnectionStatus({connection}:{connection:any}) {
   const performanceClass=performance?.connected?'channel connected':(performance?.registered||performance?.dshConnected)?'channel idle':'channel';
   return <div className="channel-status" aria-label="表演与对话连接状态">
     <span data-channel="performance" className={performanceClass}
-      title={`空闲表示 MCP 客户端已注册但最近没有工具调用，不等于断开。按最近 ${Math.round((performance?.leaseMs||65000)/1000)} 秒的活动判断；表演连接不等于聊天可用。`}>
+      title={`注册与最近活动分开记录。${Math.round((performance?.activityWindowMs||performance?.leaseMs||65000)/1000)} 秒无调用只表示空闲；连接面板会另行确认 DSH 是否已加载角色工具。`}>
       <i/><span>表演：{performanceState}</span>
     </span>
     <span data-channel="chat" className={`channel connection${connection?.chatAvailable?' connected':''}`} title={connection?.chatMessage||'等待连接信息'}>

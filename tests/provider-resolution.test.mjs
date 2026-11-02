@@ -108,9 +108,10 @@ test('real MCP activity and state heartbeat are separate; DSH MCP alone cannot s
   const visible = await settings();
   assert.equal(visible.performance.connected, true);
   let expired = false;
-  service.events.on('state', event => { if (!event.state.performance.connected) expired = true; });
+  service.events.on('state', event => { if (!event.state.performance.active) expired = true; });
   await waitFor(() => expired);
-  assert.equal(service.getState().performance.connected, false);
+  assert.equal(service.getState().performance.connected, true, 'Idle registration is not a disconnected MCP transport');
+  assert.equal(service.getState().performance.status, 'idle');
   assert.equal(service.getState().performance.registered, true, 'A known MCP client stays registered while idle');
   assert.equal(service.getState().performance.active, false);
   await client.callTool({ name: 'avatar_state', arguments: {} });

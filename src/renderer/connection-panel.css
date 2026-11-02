@@ -1,0 +1,12 @@
+.dsh-connection-status{grid-template-columns:72px minmax(0,1fr)}
+.dsh-connection-status b{white-space:normal;overflow-wrap:anywhere;line-height:1.6}
+.dsh-connection-message{margin:8px 0!important}
+.dsh-main-actions{margin-top:9px}
+.dsh-main-actions .primary{background:#4c89df;color:#fff;border-color:#4c89df}
+.dsh-main-actions .primary:hover{background:#3979d3}
+.dsh-diagnostics,.dsh-initial-setup{margin-top:12px;padding-top:10px;border-top:1px solid #dce7f3}
+.dsh-diagnostics .dsh-status-grid b{white-space:normal;overflow-wrap:anywhere;font-weight:500}
+.dsh-diagnostics .text-button{font-size:10px}
+.dsh-panel [data-dsh-action]:disabled{cursor:default}
+.dsh-initial-setup .dsh-mode label:has(input:disabled){cursor:default;opacity:.65}
+.dsh-panel .dsh-error{overflow-wrap:anywhere}

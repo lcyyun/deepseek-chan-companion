@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
+const { createHash, randomUUID } = require('node:crypto');
 
 const DEFAULT_PORT = 63616;
 
@@ -26,10 +27,12 @@ function resolveCli(config = {}) {
   for (const candidate of candidates) {
     try { if (candidate && fs.statSync(candidate).isFile()) return candidate; } catch {}
   }
-  try {
-    const found = execFileSync('where.exe', ['dsh'], { encoding: 'utf8', windowsHide: true }).split(/\r?\n/).map(s => s.trim()).find(Boolean);
-    if (found) return found;
-  } catch {}
+  for (const directory of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    for (const name of process.platform === 'win32' ? ['dsh.cmd', 'dsh.exe', 'dsh.bat'] : ['dsh']) {
+      const candidate = path.join(directory, name);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch {}
+    }
+  }
   return '';
 }
 
@@ -43,23 +46,43 @@ function portOpen(port, timeout = 450) {
   });
 }
 
-async function detectDsh(config = {}) {
+let processProbeCache;
+function inspectDshProcesses({ fresh = false } = {}) {
+  if (!fresh && processProbeCache && Date.now() - processProbeCache.at < 15000) return processProbeCache.promise;
+  const promise = new Promise(resolve => {
+    if (process.platform !== 'win32') return resolve({ processCheckKnown: false, hasDshProcess: false });
+    // Only names and a boolean cross this boundary. Never enumerate command
+    // lines, credentials or other applications' session content.
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "$p=@(Get-Process -Name 'DeepSeek Harness','dsh' -ErrorAction SilentlyContinue); if($p.Count -gt 0){'running'}elseif(@(Get-Process -Name 'node' -ErrorAction SilentlyContinue).Count -gt 0){'unknown'}else{'absent'}"],
+    { windowsHide: true, timeout: 2500, maxBuffer: 1024 }, (error, stdout) => {
+      const answer = String(stdout || '').trim();
+      resolve({ processCheckKnown: !error && ['running','absent'].includes(answer), hasDshProcess: answer === 'running' });
+    });
+  });
+  processProbeCache = { at: Date.now(), promise };
+  return promise;
+}
+
+async function detectDsh(config = {}, { checkProcesses = false, fresh = false } = {}) {
   const cli = resolveCli(config);
   const home = resolveHome(config);
   const configuredPort = Number(config.dshPort) || DEFAULT_PORT;
   // A custom DSH_HOME is an explicit test/advanced instance. Probe its own port
   // first and do not mistake the user's default DSH on 53180 for it.
   const ports = [...new Set(config.dshHome ? [configuredPort] : [53180, configuredPort, 63616])];
-  const open = [];
-  for (const port of ports) if (await portOpen(port)) open.push(port);
-  return { cli, home, port: configuredPort, open, running: open.length > 0, homeExists: fs.existsSync(home) };
+  const results = await Promise.all(ports.map(port => portOpen(port)));
+  const open = ports.filter((_, index) => results[index]);
+  const processes = checkProcesses ? await inspectDshProcesses({ fresh }) : {};
+  return { cli, home, port: configuredPort, open, occupiedPorts: open, running: false,
+    homeExists: fs.existsSync(home), ...processes };
 }
 
 function quote(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function patchText({ root, dataDir, serviceUrl, token, mode, sessionId, sessionFile, port }) {
+function patchText({ root, dataDir, serviceUrl, token, mode, sessionId, sessionFile, port, installationId, home }) {
   const bridge = path.join(root, 'integrations', 'dsh', 'live2d-bridge.mjs');
   const tokenFile = path.join(dataDir, 'bridge-token');
   const tokenPath = tokenFile.replace(/\\/g, '/');
@@ -75,6 +98,7 @@ function patchText({ root, dataDir, serviceUrl, token, mode, sessionId, sessionF
     `        url: ${quote(String(serviceUrl).replace(/\/$/, '') + '/mcp')}`,
     '        headers:',
     `          Authorization: ${authorization}`,
+    "          X-L2D-Client-Id: dsh-live2d",
     '    - id: live2d-state-bridge',
     `      name: ${quote(bridge)}`,
     '      config:',
@@ -84,6 +108,10 @@ function patchText({ root, dataDir, serviceUrl, token, mode, sessionId, sessionF
     `        tokenFile: ${quote(tokenFile)}`,
     '        searchTools: []',
   ];
+  if (installationId) {
+    lines.push(`        installationId: ${quote(installationId)}`, `        hostPort: ${Number(port)}`);
+    if (home) lines.push(`        dshHome: ${quote(home)}`);
+  }
   if (mode === 'existing') {
     if (!/^session-[A-Za-z0-9-]+$/.test(String(sessionId || ''))) throw new Error('会话 ID 格式不正确。');
     lines.push(`        chatSessionId: ${quote(sessionId)}`);
@@ -106,11 +134,12 @@ function sessionFile(dataDir) {
 }
 
 function writeLauncher({ dataDir, cli, home, patch, port }) {
+  for (const value of [cli, home, patch]) if (/["%\r\n]/.test(value)) throw new Error('启动路径含有不支持的引号、百分号或换行，请重新选择路径。');
   const file = path.join(dataDir, 'dsh', 'start-dsh.cmd');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const lines = [
     '@echo off',
-    'setlocal',
+    'setlocal DisableDelayedExpansion',
     'set "ELECTRON_RUN_AS_NODE="',
     'set "DSH_PROFILE="',
     'set "DSH_PROFILE_DIR="',
@@ -149,6 +178,7 @@ function listSessions(home, limit = 20) {
 function startDsh({ cli, home, patch, port, logFile }) {
   if (!cli || !fs.existsSync(cli)) throw new Error('没有找到 DSH CLI。');
   if (!fs.existsSync(home)) throw new Error(`DSH_HOME 不存在：${home}`);
+  for (const value of [cli, home, patch]) if (/["%\r\n]/.test(value)) throw new Error('启动路径含有不支持的引号、百分号或换行，请重新选择路径。');
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
   const log = fs.openSync(logFile, 'a');
   const args = ['web', '--patch', patch, '--port', String(port), '--no-open'];
@@ -173,6 +203,174 @@ function startDsh({ cli, home, patch, port, logFile }) {
   return child;
 }
 
+function homeFingerprint(home) {
+  let value = path.resolve(home).replace(/\\/g, '/');
+  if (process.platform === 'win32') value = value.toLowerCase();
+  return createHash('sha256').update(value).digest('hex');
+}
+const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+function integrationDigest(root) {
+  const folder = path.join(root, 'integrations', 'dsh');
+  const hash = createHash('sha256');
+  for (const file of fs.readdirSync(folder).filter(name => name.endsWith('.mjs')).sort()) hash.update(file).update(fs.readFileSync(path.join(folder, file)));
+  return hash.digest('hex');
+}
+const descriptorPath = dataDir => path.join(dataDir, 'dsh', 'installation.json');
+function readInstallation({ root, dataDir, config = {}, serviceUrl }) {
+  let descriptor;
+  try {
+    const file = descriptorPath(dataDir);
+    if (fs.statSync(file).size > 65536) throw Error('oversized');
+    descriptor = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch { return { valid: false, reason: 'missing', message: '尚未登记连接，请先完成一次接入配置。' }; }
+  try {
+    const expected = {
+      home: resolveHome(config), port: Number(config.dshPort) || DEFAULT_PORT,
+      patch: path.join(dataDir, 'dsh', 'live2d.patch.yml'),
+      launcher: path.join(dataDir, 'dsh', 'start-dsh.cmd'),
+      sessionFile: sessionFile(dataDir), tokenFile: path.join(dataDir, 'bridge-token'),
+    };
+    if (descriptor.version !== 1 || !/^[a-f0-9-]{36}$/.test(descriptor.installationId || '') || !['new','existing'].includes(descriptor.mode)
+      || descriptor.profile !== 'web' || descriptor.root !== path.resolve(root)
+      || descriptor.serviceUrl !== String(serviceUrl).replace(/\/$/, '')
+      || descriptor.homeFingerprint !== homeFingerprint(expected.home)) throw Error('configuration');
+    for (const key of ['home','port','patch','launcher','sessionFile','tokenFile']) if (descriptor[key] !== expected[key]) throw Error('configuration');
+    if (config.dshCli && path.resolve(expandHome(config.dshCli)) !== descriptor.cli) throw Error('configuration');
+    if (config.dshMode && config.dshMode !== descriptor.mode || descriptor.mode === 'existing' && config.dshSessionId !== descriptor.sessionId) throw Error('configuration');
+    if (!fs.statSync(descriptor.cli).isFile() || !fs.statSync(descriptor.home).isDirectory() || !fs.statSync(descriptor.tokenFile).isFile()) throw Error('missing-file');
+    if (digest(descriptor.patch) !== descriptor.patchHash || digest(descriptor.launcher) !== descriptor.launcherHash) throw Error('changed-file');
+    if (integrationDigest(root) !== descriptor.integrationHash) return { valid: false, descriptor, reason: 'upgrade', message: '桥插件已更新。请更新一次接入配置并在 DSH 中重新加载插件；日常重连无需重启。' };
+    return { valid: true, descriptor };
+  } catch {
+    return { valid: false, descriptor, reason: 'changed', message: '已登记的路径、会话模式或配置文件发生变化，请重新确认首次配置。' };
+  }
+}
+
+/** Explicit initial configuration only. Polling and reconnection never rewrite it. */
+function prepareInstallation({ root, dataDir, config = {}, serviceUrl, mode, sessionId = '' }) {
+  if (!['new','existing'].includes(mode)) throw Error('请选择 A 或 B 会话模式。');
+  if (mode === 'existing' && !/^session-[A-Za-z0-9-]+$/.test(sessionId)) throw Error('会话 ID 格式不正确。');
+  const home = resolveHome(config), cliCandidate = resolveCli(config), port = Number(config.dshPort) || DEFAULT_PORT;
+  if (!cliCandidate) throw Error('未找到 DSH CLI，请先安装或指定正确路径。');
+  const cli = path.resolve(cliCandidate);
+  if (!fs.existsSync(home)) throw Error('DSH_HOME 不存在，请先完成 DSH 自身的初始化。');
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error('DSH 端口无效。');
+  const address = new URL(serviceUrl);
+  if (address.protocol !== 'http:' || !['127.0.0.1','localhost'].includes(address.hostname) || address.username || address.password) throw Error('桌宠服务必须是本机回环 HTTP 地址。');
+  const chosenConfig = { ...config, dshMode: mode, ...(mode === 'existing' ? { dshSessionId: sessionId } : { dshSessionId: '' }) };
+  const existing = readInstallation({ root, dataDir, config: chosenConfig, serviceUrl });
+  if (existing.valid && existing.descriptor.cli === path.resolve(cli)) return { ...existing.descriptor, reused: true };
+  const installationId = randomUUID();
+  const patch = writePatch({ root, dataDir, serviceUrl, mode, sessionId, sessionFile: sessionFile(dataDir), port, installationId, home });
+  const launcher = writeLauncher({ dataDir, cli, home, patch, port });
+  const descriptor = { version: 1, installationId, profile: 'web', root: path.resolve(root),
+    home, homeFingerprint: homeFingerprint(home), cli: path.resolve(cli), port,
+    serviceUrl: String(serviceUrl).replace(/\/$/, ''), mode, sessionId: mode === 'existing' ? sessionId : '',
+    sessionFile: sessionFile(dataDir), tokenFile: path.join(dataDir, 'bridge-token'), patch, launcher,
+    patchHash: digest(patch), launcherHash: digest(launcher), integrationHash: integrationDigest(root), createdAt: new Date().toISOString() };
+  fs.writeFileSync(descriptorPath(dataDir), JSON.stringify(descriptor, null, 2), { mode: 0o600 });
+  return descriptor;
+}
+
+/** Fixed lifecycle for a user-registered backend; no model or shell planning. */
+function createConnectionController({ root, getDataDir, getConfig, getService,
+  detect = detectDsh, start = startDsh, now = Date.now, delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  startupTimeoutMs = 45000 } = {}) {
+  let operation, launching = false, lastFailure = '';
+  const context = () => ({ root, dataDir: getDataDir(), config: getConfig(), serviceUrl: getService().url });
+  function describe(info, installation, dsh) {
+    const descriptor = installation.descriptor;
+    const bridgeConnected = dsh.connected === true;
+    const host = dsh.host || {};
+    const recoverySupported = dsh.recoverySupported === true || dsh.recoveryProtocol === 1;
+    const homeMatches = host.homeFingerprint === homeFingerprint(info.home);
+    const actualHostPort = Number(host.port);
+    const portValid = Number.isInteger(actualHostPort) && actualHostPort > 0 && actualHostPort <= 65535;
+    const portMatches = portValid && actualHostPort === info.port;
+    const idMatches = !descriptor || (dsh.installationId || host.installationId) === descriptor.installationId;
+    // A paired installation may be loaded by the native desktop host on a
+    // dynamic port. Its authenticated identity is distinct from the dedicated
+    // web launcher registration, which remains unchanged.
+    const hostVerified = bridgeConnected && recoverySupported && homeMatches && idMatches && (descriptor || portMatches);
+    const openPort = hostVerified && portValid && (host.portSource === 'command-line' || host.profile === 'web' && portMatches) ? actualHostPort : null;
+    const base = { ...info, running: bridgeConnected || launching, bridgeConnected,
+      chatAvailable: dsh.chatAvailable === true, toolsReady: dsh.toolsReady === true,
+      nativeToolsReady: dsh.nativeToolsReady ?? null, mcpReachable: dsh.mcpReachable === true,
+      recoverySupported, recoveryStatus: dsh.recoveryStatus || '', hostVerified: Boolean(hostVerified),
+      actualHostPort: portValid ? actualHostPort : null, actualHostProfile: String(host.profile || ''),
+      openPort, canOpenDsh: openPort !== null,
+      installationValid: installation.valid, installationId: descriptor?.installationId || '',
+      mode: getConfig().dshMode || descriptor?.mode || '', savedSessionId: getConfig().dshSessionId || '',
+      patchPath: descriptor?.patch || path.join(getDataDir(), 'dsh', 'live2d.patch.yml'),
+      launcherPath: descriptor?.launcher || '', logPath: path.join(getDataDir(), 'logs', 'dsh.log'),
+      canReconnect: false, canStartConfigured: false, requiresSetup: false };
+    const result = (connectionState, message, extra = {}) => ({ ...base, connectionState, message, ...extra });
+    if (launching) return result('reconnecting', '正在启动已登记的 DSH，等待其完成初始化与身份握手。');
+    if (bridgeConnected) {
+      if (!recoverySupported) return result('upgrade_required', '聊天桥已连接，仍可聊天。请首次配置升级恢复协议并在 DSH 中重载一次桥插件。', { requiresSetup: true });
+      if (!hostVerified) return result('occupied', '已连接的 DSH 与当前登记的实例身份不一致，请核对 DSH_HOME、端口和接入配置。', { requiresSetup: true });
+      if (!installation.valid && installation.reason === 'upgrade') return result('upgrade_required', installation.message, { requiresSetup: true });
+      if (!installation.valid && installation.reason !== 'missing') return result('configure_needed', installation.message, { requiresSetup: true });
+      if (dsh.toolsReady && dsh.chatAvailable) return result('ready', '聊天桥与角色工具已就绪；大肥鱼重启后会自动恢复。', { canReconnect: true });
+      return result('reconnecting', dsh.recoveryError || '聊天桥已连接，正在确认角色工具；可点重新连接重试。', { canReconnect: true });
+    }
+    if (info.open?.length || info.hasDshProcess) return result(lastFailure ? 'start_failed' : 'occupied', lastFailure || '检测到现有进程或占用端口，但未完成对应桥握手。请完成首次接入或由 DSH 重新加载已配置插件；不会结束现有进程。', { requiresSetup: !installation.valid });
+    if (!installation.valid) return result(installation.reason === 'upgrade' ? 'upgrade_required' : 'configure_needed', installation.message, { requiresSetup: true });
+    if (!info.processCheckKnown) return result('occupied', '无法确认是否已有 DSH 正在运行。请手动启动已登记入口，或稍后重新检查。');
+    return result(lastFailure ? 'start_failed' : 'start_available', lastFailure || '已登记的 DSH 尚未运行。可手动点击启动，复用原 profile 与会话。', { canStartConfigured: true });
+  }
+  async function status({ fresh = false } = {}) {
+    const current = context(), dsh = getService().getState().dsh || {};
+    // A connected authenticated bridge is the authority. Avoid process scans
+    // and PATH lookups in the normal five-second status path.
+    const info = dsh.connected ? { home: resolveHome(current.config), port: Number(current.config.dshPort) || DEFAULT_PORT,
+      cli: resolveCli(current.config), homeExists: fs.existsSync(resolveHome(current.config)), open: [], occupiedPorts: [] }
+      : await detect(current.config, { checkProcesses: true, fresh });
+    return describe(info, readInstallation(current), getService().getState().dsh || {});
+  }
+  async function perform(payload) {
+    let current = await status({ fresh: payload.start === true });
+    if (current.bridgeConnected) {
+      if (!current.canReconnect) return { ...current, ok: current.connectionState === 'ready' };
+      await getService().requestDshRecovery({ timeoutMs: 10000 });
+      current = await status(); return { ...current, ok: current.connectionState === 'ready' };
+    }
+    if (payload.start !== true || !current.canStartConfigured) return { ...current, ok: false };
+    // Freshly read files and probe again after async status work, before launch.
+    const installation = readInstallation(context());
+    if (!installation.valid) return { ...await status(), ok: false };
+    launching = true; lastFailure = '';
+    try {
+      const child = start({ ...installation.descriptor, logFile: current.logPath });
+      let processError;
+      child.once?.('error', () => { processError = Error('无法启动已登记的 DSH，请检查运行环境或使用手动启动入口。'); });
+      child.once?.('exit', code => { if (code && !getService().getState().dsh?.connected) processError = Error(`DSH 启动后退出（${code}），请检查本机日志。`); });
+      const deadline = now() + startupTimeoutMs;
+      while (now() < deadline) {
+        if (processError) throw processError;
+        if (getService().getState().dsh?.connected) {
+          launching = false;
+          current = await status();
+          if (!current.hostVerified) return { ...current, ok: false };
+          if (current.canReconnect) await getService().requestDshRecovery({ timeoutMs: 10000 });
+          current = await status(); return { ...current, ok: current.connectionState === 'ready' };
+        }
+        await delay(250);
+      }
+      throw Error('DSH 尚未完成连接。进程可能仍在初始化，请刷新状态；不会重复启动或结束它。');
+    } catch (error) { lastFailure = error.message; }
+    finally { launching = false; }
+    current = await status();
+    return { ...current, ok: false, connectionState: 'start_failed', message: lastFailure, canStartConfigured: current.canStartConfigured };
+  }
+  function connect(payload = {}) {
+    if (operation) return operation;
+    operation = perform(payload).finally(() => { operation = null; });
+    return operation;
+  }
+  return { status, connect };
+}
+
 function waitForPort(port, timeout = 30000) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
@@ -195,4 +393,4 @@ async function waitForBridge(service, timeout = 30000) {
   throw new Error('DSH 已启动，但皮套聊天桥没有就绪。请检查 DSH 的模型配置和插件日志。');
 }
 
-module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, writeLauncher, listSessions, startDsh, waitForPort, waitForBridge };
+module.exports = { DEFAULT_PORT, resolveHome, resolveCli, detectDsh, patchText, writePatch, sessionFile, writeLauncher, listSessions, startDsh, waitForPort, waitForBridge, homeFingerprint, prepareInstallation, readInstallation, createConnectionController };

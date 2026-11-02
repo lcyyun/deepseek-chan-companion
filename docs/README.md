@@ -1,6 +1,6 @@
 # 文档导航
 
-当前适用版本：**0.20.0**。最近核对：**2026-11-02**。
+当前适用版本：**0.21.0**。最近核对：**2026-11-02**。
 
 这里按用途整理使用、接入和维护说明。日常操作以当前版说明为准；旧版本的设计过程放在[版本变化](changelog.md)和模型分析的历史段落中。
 
@@ -13,7 +13,7 @@
 | 让 DSH 接入，了解全部工具和错误 | [DSH 智能体操作手册](dsh-agent-guide.md) |
 | 在新的 DSH profile、作业环境或 CI 中安装验证 | [DSH 环境准备与验收](dsh-clean-profile.md) |
 | 安装前选择继承已有会话或新建独立桌宠会话 | [DSH 安装模式](dsh-install-modes.md) |
-| 生成 A/B 接入提示词交给 DSH 智能体、首次启动和快捷方式 | [DSH 安装模式](dsh-install-modes.md) · [项目 README](../README.md) |
+| 首次配置、快速重连、已登记实例启动与旧桥升级 | [连接与自动恢复](dsh-reconnect.md) · [DSH 安装模式](dsh-install-modes.md) |
 | 配置 API、MCP、DSH 聊天桥和声音 | [智能体与语音接入](agent-integration.md) |
 | 综合测试表情、肢体协调、口型与停止 | [模型控制测试集](model-control-evaluation.md) |
 | 接手代码、排错、扩展功能、构建发行包 | [维护与代码导读](maintenance-guide.md) |

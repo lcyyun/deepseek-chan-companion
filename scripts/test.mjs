@@ -16,6 +16,7 @@ const desktop = new Set([
   'desktop-chat-placement.test.mjs', 'desktop-pointer.test.mjs',
   'desktop-provider.test.mjs',
   'desktop-settings-select.test.mjs',
+  'desktop-dsh-connection.test.mjs',
   'desktop-toggle.test.mjs', 'desktop-tuning.test.mjs',
   'expression-menu.test.mjs', 'pet-pointer.test.mjs',
   'speech-body.test.mjs', 'mouse-input-native.test.mjs',

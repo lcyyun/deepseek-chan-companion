@@ -1,9 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { makeMessages, normalizeReply } from './protocol.mjs';
 
-export function createDshManager(onChange = () => {}) {
+export function createDshManager(onChange = () => {}, { instanceId = randomUUID() } = {}) {
   let connection = null, info = null, everConnected = false;
   const pending = new Map();
+  const recoveries = new Map();
+  const cleanHost = host => ({ bridgeId: String(host?.bridgeId || '').slice(0, 100),
+    pid: Number.isInteger(host?.pid) && host.pid > 0 ? host.pid : null,
+    homeFingerprint: /^[a-f0-9]{64}$/.test(host?.homeFingerprint || '') ? host.homeFingerprint : '',
+    profile: String(host?.profile || '').slice(0, 80),
+    port: Number.isInteger(host?.port) && host.port > 0 && host.port <= 65535 ? host.port : null,
+    portSource: ['command-line', 'configuration'].includes(host?.portSource) ? host.portSource : 'unknown',
+    installationId: String(host?.installationId || '').slice(0, 100) });
   const fail = (message, code = 'DSH_CHAT_NOT_CONNECTED', status = 409) => Object.assign(new Error(message), { code, status, provider: 'dsh' });
   const errors = {
     DSH_MODEL_NOT_CONFIGURED: ['DSH模型或凭据未配置。请在DeepSeek Harness中选择模型并配置其凭据。', 409],
@@ -24,8 +32,16 @@ export function createDshManager(onChange = () => {}) {
   }
   function state() {
     const connected = Boolean(connection && connection.readyState === 1);
+    const supported = info?.recoveryProtocol === 1;
     return { connected, chatAvailable: connected && info?.chatAvailable === true,
       everConnected, reconnecting: everConnected && !connected,
+      recoveryProtocol: supported ? 1 : 0, recoverySupported: supported,
+      recoveryStatus: !connected ? 'disconnected' : !supported ? 'upgrade-required' : info.recoveryStatus,
+      mcpReachable: connected && info?.mcpReachable === true,
+      nativeToolsReady: connected ? info?.nativeToolsReady ?? null : null,
+      toolsReady: connected && info?.mcpReachable === true && info?.nativeToolsReady === true,
+      toolsCheckedAt: info?.toolsCheckedAt || null, recoveryError: info?.recoveryError || null,
+      instanceId, host: info?.host || null, installationId: info?.host?.installationId || '',
       sessionId: info?.sessionId || '', searchAvailable: connected && info?.chatAvailable === true && info?.searchAvailable === true };
   }
   function register(ws, metadata) {
@@ -35,19 +51,47 @@ export function createDshManager(onChange = () => {}) {
     // registering chat:true, so omission remains compatible. Explicit false
     // never advertises chat availability.
     info = { chatAvailable: metadata.chat === true && metadata.sessionControllerAvailable !== false,
+      recoveryProtocol: metadata.recoveryProtocol === 1 ? 1 : 0, recoveryStatus: 'checking',
+      mcpReachable: false, nativeToolsReady: null, host: cleanHost(metadata.host),
       sessionId: String(metadata.sessionId || ''), searchAvailable: metadata.searchAvailable === true };
     if (info.chatAvailable) everConnected = true;
-    ws.send(JSON.stringify({ type: 'bridge-ready', name: 'dsh' }));
+    ws.send(JSON.stringify({ type: 'bridge-ready', name: 'dsh', instanceId, recoveryProtocol: 1 }));
     onChange();
   }
   function disconnected(ws) {
     if (connection !== ws) return;
     connection = null;
+    for (const entry of recoveries.values()) { clearTimeout(entry.timer); entry.resolve({ ...state(), ok: false, message: 'DSH 聊天桥已断开，等待重连。' }); }
+    recoveries.clear();
     for (const entry of [...pending.values()]) entry.finish(fail('DSH已断线，正在等待聊天桥重连。', 'DSH_BRIDGE_DISCONNECTED', 502));
     onChange();
   }
   function result(ws, message) {
     if (ws !== connection) return;
+    if (message.type === 'bridge-health') {
+      if (info && info.recoveryProtocol === 1 && message.instanceId === instanceId) {
+        if (typeof message.nativeToolsReady === 'boolean' || message.nativeToolsReady === null) info.nativeToolsReady = message.nativeToolsReady;
+        if (typeof message.sessionId === 'string' && message.sessionId) info.sessionId = message.sessionId.slice(0, 200);
+        if (info.recoveryStatus !== 'checking') info.recoveryStatus = info.mcpReachable && info.nativeToolsReady === true ? 'ready' : 'partial';
+        onChange();
+      }
+      return;
+    }
+    if (message.type === 'bridge-recovery') {
+      if (!info || info.recoveryProtocol !== 1 || message.instanceId !== instanceId) return;
+      // Discard results from a timed-out explicit request; unsolicited startup
+      // recovery has no request ID and belongs to this authenticated socket.
+      if (message.requestId && !recoveries.has(message.requestId)) return;
+      info.mcpReachable = message.mcpReachable === true;
+      info.nativeToolsReady = typeof message.nativeToolsReady === 'boolean' ? message.nativeToolsReady : null;
+      info.toolsCheckedAt = Date.now();
+      info.recoveryError = ['MCP_TOOLS_MISSING','MCP_DISCOVERY_TIMEOUT','MCP_DISCOVERY_FAILED','RECOVERY_CANCELLED'].includes(message.recoveryError) ? message.recoveryError : null;
+      info.recoveryStatus = info.mcpReachable && info.nativeToolsReady === true ? 'ready' : 'partial';
+      onChange();
+      const entry = recoveries.get(message.requestId);
+      if (entry) { recoveries.delete(message.requestId); clearTimeout(entry.timer); entry.resolve(recoveryResult()); }
+      return;
+    }
     const entry = pending.get(message.requestId);
     if (!entry) return;
     if (message.type === 'chat-progress') { entry.onProgress?.({ stage: message.stage || 'thinking' }); return; }
@@ -60,6 +104,31 @@ export function createDshManager(onChange = () => {}) {
       const searchUsed = message.searchUsed === true;
       entry.finish(null, { ...reply, sources: searchUsed ? reply.sources : [], provider: 'dsh', searchAvailable: info?.searchAvailable === true, searchAttempted: message.searchAttempted === true, searchUsed });
     } catch { entry.finish(remoteFailure({ code: 'DSH_INVALID_REPLY' })); }
+  }
+  function recoveryResult() {
+    const value = state();
+    return { ...value, ok: value.toolsReady, requiresUpgrade: value.connected && !value.recoverySupported,
+      message: !value.connected ? 'DSH 聊天桥尚未连接，正在等待自动恢复。'
+        : !value.recoverySupported ? '当前桥可聊天，但不支持快速恢复；首次更新桥插件后重新加载一次即可。'
+        : value.toolsReady ? '聊天桥和角色工具已恢复，可直接使用。'
+        : value.mcpReachable ? '桌宠 MCP 通道已确认，DSH 角色工具仍待确认；无需重启桌宠。'
+        : '聊天桥已连接，正在确认桌宠 MCP 通道。' };
+  }
+  function requestRecovery({ timeoutMs = 8000 } = {}) {
+    if (!state().connected || !state().recoverySupported) return Promise.resolve(recoveryResult());
+    if (recoveries.size) return recoveries.values().next().value.promise;
+    const requestId = randomUUID();
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    const timer = setTimeout(() => {
+      recoveries.delete(requestId);
+      if (info) info.recoveryStatus = 'partial';
+      onChange(); resolve({ ...recoveryResult(), ok: false, timedOut: true, message: '连接恢复检查超时；不会启动模型或重启 DSH。' });
+    }, Math.max(100, Math.min(15000, Number(timeoutMs) || 8000)));
+    timer.unref?.(); recoveries.set(requestId, { promise, resolve, timer });
+    info.recoveryStatus = 'checking'; onChange();
+    connection.send(JSON.stringify({ type: 'bridge-recovery-request', requestId, instanceId, recoveryProtocol: 1 }));
+    return promise;
   }
   function chat({ settings, request, history, signal, onProgress }) {
     if (!state().chatAvailable) throw fail(everConnected ? 'DSH已断线，正在等待聊天桥重连。' : 'DSH聊天桥未启用。请在DeepSeek Harness插件中启用chat: true并确认Session Controller可用。', everConnected ? 'DSH_BRIDGE_DISCONNECTED' : 'DSH_CHAT_NOT_CONNECTED');
@@ -77,5 +146,5 @@ export function createDshManager(onChange = () => {}) {
       socket.send(JSON.stringify({ type: 'chat-request', requestId, messages, searchAllowed }));
     });
   }
-  return { register, disconnected, result, chat, state };
+  return { register, disconnected, result, chat, state, requestRecovery };
 }

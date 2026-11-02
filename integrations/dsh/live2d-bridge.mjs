@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import { WebSocket } from 'ws';
 import { resolveCompanionChatCwd } from './home-paths.mjs';
 import { dshWireFailure } from './chat-errors.mjs';
+import { bridgeHost, probeCompanionMcp, registeredAvatarTools, RECOVERY_PROTOCOL } from './recovery-tools.mjs';
 
 export const name = 'deepseek-chan-bridge';
 export const inject = ['sessionController', 'tools'];
@@ -29,7 +30,7 @@ export function apply(ctx, config = {}) {
     const timer = setTimeout(() => controller.abort(), 2500);
     try {
       await fetch(`${baseUrl}/api/bridge/event`, { method: 'POST', signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.tokenFile ? readFileSync(String(config.tokenFile), 'utf8').trim() : token}` },
         body: JSON.stringify({ source: 'dsh', sessionId, ...(state ? { state } : {}) }),
       });
     } catch { /* A closed companion must never break the agent's work. */ }
@@ -75,7 +76,11 @@ export function attachChatBridge(ctx, config) {
   let ws, reconnect, disposed = false, sessionPromise;
   const availableTools = new Set((ctx.tools.definitions?.() || []).map(t => t.name || t.schema?.name).filter(Boolean));
   const searchNames = new Set((config.searchTools || []).filter(name => typeof name === 'string' && availableTools.has(name) && !/run_code|shell|exec|write|delete/i.test(name)));
-  const send = value => { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value)); };
+  const send = (value, socket = ws) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); };
+  let knownSessionId = config.chatSessionId || '';
+  if (!knownSessionId && config.sessionFile) {
+    try { const saved = readFileSync(String(config.sessionFile), 'utf8').trim(); if (/^session-[A-Za-z0-9-]+$/.test(saved)) knownSessionId = saved; } catch {}
+  }
   const matching = id => [...pending.values()].find(p => p.sessionId === id);
   // The companion session can only use the exact, explicitly configured web tools.
   // This protects page analysis independently of the model following a prompt.
@@ -88,17 +93,18 @@ export function attachChatBridge(ctx, config) {
     return 'Desktop companion chat only permits its configured search tools and, in native mode, avatar_reply. Do not run code, access files, modify anything, or call other avatar tools.';
   });
   async function session() {
-    if (config.chatSessionId) return String(config.chatSessionId);
+    if (config.chatSessionId) return knownSessionId = String(config.chatSessionId);
     if (!sessionPromise) sessionPromise = (async () => {
       if (config.sessionFile) {
         try {
           const saved = readFileSync(String(config.sessionFile), 'utf8').trim();
-          if (/^session-[A-Za-z0-9-]+$/.test(saved)) { ownedSessions.add(saved); return saved; }
+          if (/^session-[A-Za-z0-9-]+$/.test(saved)) { ownedSessions.add(saved); knownSessionId = saved; return saved; }
         } catch {}
       }
       await mkdir(chatCwd, { recursive: true });
       const result = await ctx.sessionController.create({ cwd: chatCwd, ...(config.agentPreset ? { agentPreset: config.agentPreset } : {}) });
       const id = String(result.sessionId);
+      knownSessionId = id;
       ownedSessions.add(id);
       if (config.sessionFile) {
         const file = String(config.sessionFile);
@@ -112,7 +118,7 @@ export function attachChatBridge(ctx, config) {
   function finish(operation, problem) {
     if (!pending.has(operation.requestId)) return;
     pending.delete(operation.requestId); clearTimeout(operation.timer);
-    send({ type: 'chat-result', requestId: operation.requestId, ...(problem ? dshWireFailure(problem) : { reply: operation.text, nativeMode: config.native === true, nativePerformed: operation.nativeTool === true, searchAttempted: operation.searchAttempted, searchUsed: operation.searchUsed }) });
+    send({ type: 'chat-result', requestId: operation.requestId, ...(problem ? dshWireFailure(problem) : { reply: operation.text, nativeMode: config.native === true, nativePerformed: operation.nativeTool === true, searchAttempted: operation.searchAttempted, searchUsed: operation.searchUsed }) }, operation.socket);
   }
   async function cancel(operation, code = 'DSH_TURN_CANCELLED') {
     operation.failureCode = code;
@@ -123,7 +129,7 @@ export function attachChatBridge(ctx, config) {
   async function receive(message) {
     if (message.type === 'chat-cancel') { const operation = pending.get(message.requestId); if (operation) await cancel(operation); return; }
     if (message.type !== 'chat-request') return;
-    const operation = { requestId: message.requestId, controller: new AbortController(), sessionId: '', turn: null, text: '', nativeTool: false, searchAllowed: message.searchAllowed === true, searchAttempted: false, searchUsed: false, searchCalls: new Set() };
+    const operation = { requestId: message.requestId, socket: ws, controller: new AbortController(), sessionId: '', turn: null, text: '', nativeTool: false, searchAllowed: message.searchAllowed === true, searchAttempted: false, searchUsed: false, searchCalls: new Set() };
     pending.set(operation.requestId, operation);
     operation.timer = setTimeout(() => void cancel(operation, 'DSH_TURN_TIMEOUT'), 175000); operation.timer.unref?.();
     try {
@@ -162,22 +168,75 @@ export function attachChatBridge(ctx, config) {
     }
   });
   ctx.effect(() => {
+    const host = bridgeHost(config);
+    let backoff = 500, lifecycle, healthTimer, handshakeTimer;
+    const sleep = (ms, signal) => new Promise(resolve => {
+      const timer = setTimeout(done, ms);
+      function done() { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); }
+      signal.addEventListener('abort', done, { once: true }); if (signal.aborted) done();
+    });
+    function credential() {
+      // A changed local pairing file takes effect on the next connection.
+      return config.tokenFile ? readFileSync(String(config.tokenFile), 'utf8').trim() : config.token;
+    }
     function connect() {
       if (disposed) return;
-      ws = new WebSocket(config.baseUrl.replace(/^http/, 'ws') + '/events');
-      ws.on('open', () => send({ type: 'auth', token: config.token }));
-      ws.on('message', raw => {
+      clearTimeout(reconnect);
+      lifecycle = new AbortController();
+      const signal = lifecycle.signal;
+      const socket = ws = new WebSocket(config.baseUrl.replace(/^http/, 'ws') + '/events', { handshakeTimeout: 4000 });
+      let instanceId = '', recovery, token = '', pongPending = false;
+      function recover(requestId) {
+        if (!instanceId || signal.aborted) return;
+        if (!recovery) recovery = (async () => {
+          const probe = await probeCompanionMcp({ baseUrl: config.baseUrl, token, signal });
+          let nativeToolsReady = await registeredAvatarTools(ctx, knownSessionId);
+          // MCP plugins may finish loading after the chat bridge. Recheck only
+          // the local registry briefly; never wake a model to test tools.
+          for (const delay of [250, 500, 1000]) {
+            if (nativeToolsReady === true || signal.aborted) break;
+            await sleep(delay, signal); nativeToolsReady = await registeredAvatarTools(ctx, knownSessionId);
+          }
+          return { ...probe, nativeToolsReady, checkedAt: Date.now() };
+        })().finally(() => { recovery = null; });
+        void recovery.then(value => { if (!signal.aborted) send({ type: 'bridge-recovery', instanceId, ...(requestId ? { requestId } : {}), ...value }, socket); }).catch(() => {});
+      }
+      socket.on('open', () => {
+        try { token = credential(); } catch { socket.close(1008, 'Pairing file unavailable'); return; }
+        send({ type: 'auth', token }, socket);
+        handshakeTimer = setTimeout(() => socket.terminate(), 5000); handshakeTimer.unref?.();
+      });
+      socket.on('message', raw => {
         let message; try { message = JSON.parse(raw.toString()); } catch { return; }
-        if (message.type === 'auth' && message.ok) send({ type: 'bridge-register', name: 'dsh', chat: true, sessionControllerAvailable: true, sessionId: config.chatSessionId || '', searchAvailable: searchNames.size > 0 });
+        if (message.type === 'auth' && message.ok) {
+          instanceId = String(message.instanceId || '');
+          send({ type: 'bridge-register', name: 'dsh', chat: true, sessionControllerAvailable: true,
+            sessionId: knownSessionId, searchAvailable: searchNames.size > 0, recoveryProtocol: RECOVERY_PROTOCOL, host }, socket);
+        } else if (message.type === 'bridge-ready') {
+          clearTimeout(handshakeTimer); backoff = 500;
+          instanceId = String(message.instanceId || instanceId);
+          recover();
+          clearInterval(healthTimer);
+          healthTimer = setInterval(() => {
+            if (pongPending) { socket.terminate(); return; }
+            pongPending = true; send({ type: 'ping' }, socket);
+            void registeredAvatarTools(ctx, knownSessionId).then(nativeToolsReady => {
+              if (!signal.aborted && instanceId) send({ type: 'bridge-health', instanceId, nativeToolsReady, sessionId: knownSessionId }, socket);
+            }).catch(() => {});
+          }, 20000); healthTimer.unref?.();
+        } else if (message.type === 'bridge-recovery-request' && message.instanceId === instanceId) recover(message.requestId);
+        else if (message.type === 'pong') pongPending = false;
         else void receive(message);
       });
-      ws.on('error', () => {});
-      ws.on('close', () => {
+      socket.on('error', () => {});
+      socket.on('close', () => {
+        signal.aborted || lifecycle.abort(); clearTimeout(handshakeTimer); clearInterval(healthTimer);
+        if (ws === socket) ws = null;
         for (const operation of [...pending.values()]) void cancel(operation);
-        if (!disposed) { reconnect = setTimeout(connect, 3000); reconnect.unref?.(); }
+        if (!disposed) { reconnect = setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 5000); reconnect.unref?.(); }
       });
     }
     connect();
-    return () => { disposed = true; clearTimeout(reconnect); for (const operation of [...pending.values()]) void cancel(operation); ws?.close(); };
+    return () => { disposed = true; lifecycle?.abort(); clearTimeout(reconnect); clearTimeout(handshakeTimer); clearInterval(healthTimer); for (const operation of [...pending.values()]) void cancel(operation); ws?.close(); };
   });
 }

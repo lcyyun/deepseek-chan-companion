@@ -92,7 +92,7 @@ let service, win, bridge, mcpClient, nextDshError = false;
   await mcpClient.connect(new StreamableHTTPClientTransport(new URL(service.url + '/mcp'), { requestInit: { headers: { Authorization: 'Bearer ' + service.token } } }));
   await mcpClient.callTool({ name: 'avatar_capabilities', arguments: {} });
   await until('document.querySelector(".chat-connection-note")?.textContent.includes("DSH 表演已连接，聊天桥未启用")');
-  assert.match(await js('document.querySelector("[data-channel=performance]").textContent'), /MCP 已连接/);
+  assert.match(await js('document.querySelector("[data-channel=performance]").textContent'), /MCP 已接入/);
   assert.equal(await js('document.querySelector(".send").disabled'), true); assert.equal(await js('document.querySelector(".composer textarea").disabled'), true);
   assert.equal(report.chatRequests, 0); await noCodex(); await shot('mcp-only'); report.mcpOnlyBlocked = true;
   await connectBridge();

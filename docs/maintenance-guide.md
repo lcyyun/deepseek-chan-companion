@@ -1,5 +1,7 @@
 # 大肥鱼 · 项目维护与代码导读
 
+**0.21.0 增补：** `desktop/dsh-connect.cjs` 的固定连接流程与安装登记负责复用、身份核验和显式启动；`integrations/dsh/recovery-tools.mjs` 做只读 MCP 发现及真实工具目录查询；`server/dsh-manager.mjs` 以每次启动的实例 ID 关联恢复结果。普通状态刷新不改配置、不调用模型。新版界面区分首次配置、日常连接和诊断，保留旧桥聊天能力。详情与验证入口见[连接与自动恢复](dsh-reconnect.md)，对应 `dsh-connection-flow`、`dsh-recovery` 和 `desktop-dsh-connection` 测试。
+
 核对版本：**0.20.0** · 最近核对：**2026-11-02** · [文档目录](README.md)
 
 本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.20.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
