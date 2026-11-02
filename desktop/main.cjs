@@ -287,6 +287,11 @@ function hidePet() {
 function makeWindow(role, options) {
   const win = new BrowserWindow({show:false,frame:false,backgroundColor:'#00000000',hasShadow:false, ...options,
     icon:path.join(ROOT,'dist','icons','app.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,autoplayPolicy:'no-user-gesture-required',backgroundThrottling:role!=='pet'}});
+  // DirectComposition per-pixel transparency is not visible to other Chromium
+  // processes' Windows occlusion tracker. A SIMPLE setShape region still gets
+  // the full-screen HWND bounds classified as opaque. One alpha step makes the
+  // window explicitly WS_EX_LAYERED/LWA_ALPHA, without changing input or pinning.
+  if (process.platform === 'win32' && role === 'pet') win.setOpacity(254 / 255);
   roles.set(win.webContents.id,role);
   const windowTitle=role==='pet'?'大肥鱼 · 桌宠':role==='toggle'?'大肥鱼 · 聊天开关':'大肥鱼 · 便携聊天';
   win.setTitle(windowTitle);win.on('page-title-updated',event=>event.preventDefault());

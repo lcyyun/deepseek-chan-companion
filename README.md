@@ -2,7 +2,9 @@
 
 在 Windows 桌面陪你聊天、做小动作、一起看网页的 Live2D 平台。角色文件从本机加载，大模型通过结构化指令驱动表情、视线和已有手势；声音按实际播放音频驱动嘴型。
 
-**当前版本：0.20.0。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+**当前版本：0.20.1。** Electron 桌面程序，React + TypeScript 界面，官方 Cubism Web 渲染，Node.js 本地服务；支持兼容 API、Codex CLI 和 DeepSeek Harness。仓库是完整的应用源码项目，模型需要单独放在本机。
+
+0.20.1 修复 Windows 上显示桌宠时，DSH、Codex 等 Chromium 窗口画面停住的问题：为透明桌宠声明原生窗口透明属性，避免其全屏画布被当作不透明遮挡。保留原有置顶、点击保护与 DSH 原子工具；诊断依据见[窗口刷新问题](docs/windows-occlusion.md)。
 
 0.20.0 增加用户级启动与连接：便携版和桌面快捷方式、首次启动向导、DSH 接入提示词、B 会话持久化、A 会话列表，以及不依赖环境变量的 token 文件；DSH 由用户自己的智能体接入，大肥鱼不再自动启动或结束 DSH。
 

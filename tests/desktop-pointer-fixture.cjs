@@ -43,14 +43,17 @@ const lock=id=>invoke('pet','pet-pointer-lock',{locked:true,id});
 const unlock=id=>invoke('pet','pet-pointer-lock',{locked:false,id});
 async function verify(){
   const pet=windows.get('pet');
+  assert.ok(pet.getOpacity()<1&&pet.getOpacity()>=253/255,'Windows pet explicitly declares native translucency to other Chromium apps');
   assert.equal(pet.isFocusable(),true,'ordinary pet clicks must be able to activate the native window');
   assert.equal(windows.get('toggle').isFocusable(),false,'pet input fix does not alter the floating ball');
   const focusStates=[pet.isFocusable()];
   const nativeVisible=pet.isVisible.bind(pet);
   // Model a visible show callback without placing anything on the desktop.
   // This also catches deferred webContents.focus() restoration attempts.
-  pet.isVisible=()=>true;
+  let simulatedVisible=true;
+  pet.isVisible=()=>simulatedVisible;
   await invoke('chat','hide-pet',null);pet.emit('hide');
+  simulatedVisible=false;
   const inactiveBefore=pet.__inactiveShows;
   await invoke('chat','show-pet',null);await delay(20);
   assert.equal(pet.__inactiveShows,inactiveBefore+1);
@@ -90,6 +93,7 @@ async function verify(){
   await invoke('chat','show-pet',null);await delay(20);
   focusStates.push(pet.isFocusable());
   assert.deepEqual(focusStates,[true,true,true,true,true],'startup, restore and leaving drag mode preserve pet focusability');
+  assert.ok(pet.getOpacity()<1&&pet.getOpacity()>=253/255,'native translucency survives shape/capture/hide/show and drag mode changes');
   assert.equal(pet.__activeShows,0);assert.equal(pet.__focusCalls,0);
   await lock('input-cancel');await invoke('chat','pet-input-mode',true);assert.equal((await state()).locked,false);
   await invoke('chat','pet-input-mode',false);
