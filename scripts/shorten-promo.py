@@ -5,7 +5,7 @@ voice inference. --project points to the original output/video014 directory.
 The original final-v3 and all source media remain untouched.
 """
 from __future__ import annotations
-import argparse, concurrent.futures, importlib.util, json, math, shutil, subprocess, wave
+import argparse, concurrent.futures, hashlib, importlib.util, json, shutil, subprocess
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -204,11 +204,59 @@ def build(base, out, workers=2):
     shutil.copy2(source/'cover.png',out/'cover.png')
     print(json.dumps(dict(video=str(final),seconds=cursor,subtitle=str(out/'captions.srt')),ensure_ascii=False),flush=True)
 
+def remix_pipe(base, previous, out):
+    """Replace only the basin sound, preserving the delivered video stream."""
+    if out.exists(): raise FileExistsError(f'Choose a fresh output directory: {out}')
+    edit=json.loads((previous/'edit.json').read_text(encoding='utf-8-sig'))
+    basin=next(t for t in edit['segments'] if t['id']=='basin')
+    source=json.loads((base/'final-v3/edit.json').read_text(encoding='utf-8-sig'))
+    narration=next(s for s in source['segments'] if s['id']==basin['sourceId'])
+    pipe=ROOT/'public/audio/metal-pipe-falling.mp3'
+    video=previous/'大肥鱼_两分钟介绍.mp4'
+    for file in [pipe,video,Path(narration['wav']),previous/'chapters.ffmetadata']:
+        if not file.is_file(): raise FileNotFoundError(file)
+    out.mkdir(parents=True);(out/'clips').mkdir();(out/'qa').mkdir()
+    hits=[2623,3273,3973]
+    filters=[f"[1:a]atrim=duration={basin['sourceEnd']-basin['sourceStart']},asetpts=PTS-STARTPTS,apad,atrim=duration={basin['duration']}[narration]",
+             '[2:a]asplit=3[p0][p1][p2]']
+    for i,delay in enumerate(hits):
+        length,fade=(.62,.20) if i<2 else (2.80,.35)
+        filters.append(f'[p{i}]atrim=duration={length},asetpts=PTS-STARTPTS,afade=t=out:st={length-fade}:d={fade},volume=0.26,adelay={delay}:all=1[tap{i}]')
+    filters.append(f"[narration][tap0][tap1][tap2]amix=inputs=4:duration=first:normalize=0,afade=t=in:d=0.008,afade=t=out:st={basin['duration']-.012}:d=0.012,aresample=48000[a]")
+    replacement=out/'clips/basin.mkv'
+    run(['ffmpeg','-y','-hide_banner','-loglevel','error','-i',previous/'clips/basin.mkv',
+         '-ss',basin['sourceStart'],'-i',narration['wav'],'-i',pipe,
+         '-filter_complex',';'.join(filters),'-map','0:v','-map','[a]',
+         '-c:v','copy','-c:a','pcm_s16le','-ar','48000','-ac','2','-t',basin['duration'],replacement])
+    clips=[replacement if t['id']=='basin' else previous/'clips'/f"{t['id']}.mkv" for t in edit['segments']]
+    if any(not p.is_file() for p in clips): raise FileNotFoundError('Original lossless-audio clips are incomplete')
+    concat=out/'concat.txt'
+    concat.write_text('\n'.join("file '"+str(p.resolve()).replace('\\','/')+"'" for p in clips)+'\n',encoding='utf-8')
+    for name in ['captions.srt','chapters.txt','chapters.ffmetadata','cover.png','script.txt','credits.png']:
+        shutil.copy2(previous/name,out/name)
+    edit['remixedFrom']=str(previous)
+    edit['basinAudio']={'sound':'classic-metal-pipe','source':'public/audio/metal-pipe-falling.mp3',
+        'sourceSha256':hashlib.sha256(pipe.read_bytes()).hexdigest(),'gain':.26,'hitOffsetsMs':hits,
+        'tailLengthsSeconds':[.62,.62,2.80],'videoStreamCopied':True}
+    json_write(out/'edit.json',edit)
+    duration=edit['duration'];final=out/'大肥鱼_两分钟介绍_钢管音效版.mp4'
+    run(['ffmpeg','-y','-hide_banner','-loglevel','error','-i',video,'-f','concat','-safe','0','-i',concat,
+         '-i',base/'final-v3/original-mallet-score.wav','-f','ffmetadata','-i',out/'chapters.ffmetadata',
+         '-filter_complex',f'[1:a][2:a]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.84,afade=t=in:d=0.08,afade=t=out:st={duration-1.4}:d=1.4[a]',
+         '-map','0:v','-map','[a]','-map_metadata','3','-map_chapters','3','-t',duration,
+         '-c:v','copy','-c:a','aac','-b:a','192k','-ar','48000','-movflags','+faststart',
+         '-metadata','title=大肥鱼｜两分钟介绍 · 钢管音效版',
+         '-metadata','comment=Real Live2D runtime; scripted demo; AI narration; classic metal-pipe sound requested by the creator.',final])
+    print(json.dumps({'video':str(final),'seconds':duration,'videoStreamCopied':True},ensure_ascii=False),flush=True)
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser()
     parser.add_argument('--project',required=True,type=Path)
     parser.add_argument('--out',type=Path)
     parser.add_argument('--workers',type=int,default=2,choices=[1,2,3])
+    parser.add_argument('--remix-from',type=Path,help='Reuse a completed two-minute edit, replacing its basin sound with the classic pipe sample')
     args=parser.parse_args()
-    base=args.project.resolve();out=args.out.resolve() if args.out else base/'final-v4-2min'
-    build(base,out,args.workers)
+    base=args.project.resolve()
+    out=args.out.resolve() if args.out else base/('final-v4-2min-pipe' if args.remix_from else 'final-v4-2min')
+    if args.remix_from: remix_pipe(base,args.remix_from.resolve(),out)
+    else: build(base,out,args.workers)
