@@ -14,7 +14,7 @@ app.setName('大肥鱼 · DeepSeek-chan');
 // Portable builds use an ASCII LocalAppData profile. Electron's process
 // singleton lock can fail with access-denied in the older non-ASCII Roaming path.
 const legacyProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-chan');
-const packagedProfile = path.join(path.dirname(process.execPath), 'DeepSeek-chan-data');
+const packagedProfile = path.join(path.dirname(path.dirname(process.execPath)), 'DeepSeek-chan-data');
 if (app.isPackaged) {
   app.setPath('userData', packagedProfile);
   require('./profile-migration.cjs').migrateProfile(legacyProfile, packagedProfile);
@@ -319,6 +319,11 @@ async function connectDsh(payload = {}) {
   // the user must stop it manually before a patched instance can be started.
   if (info.running) return { ok: false, requiresManualStop: true, port: config.dshPort || info.open[0] || dshConnect.DEFAULT_PORT, openPorts: info.open };
   const port = Number(config.dshPort) || dshConnect.DEFAULT_PORT;
+  // DSH's first boot needs profiles/web. Create it from the app process before
+  // spawning so a transient child-process permission failure cannot hide the
+  // real setup problem behind a 30-second startup timeout.
+  try { fs.mkdirSync(path.join(info.home, 'profiles', 'web'), { recursive: true }); }
+  catch (error) { throw new Error(`无法创建 DSH profile 目录：${error.message}\n请先手动启动一次 DSH，确认它能在 ${info.home} 正常初始化。`); }
   const patch = dshConnect.writePatch({
     root: ROOT, dataDir, serviceUrl: service.url, token: service.token,
     mode, sessionId: payload.sessionId, sessionFile: dshConnect.sessionFile(dataDir), port,
