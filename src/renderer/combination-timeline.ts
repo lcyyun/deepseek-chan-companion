@@ -18,15 +18,17 @@ export function createCombinationTimeline(
       last = elapsed;
       if (!decided) {
         decided = true;
-        // Never compress a complete authored entrance/exit to fit a short reply,
-        // or replay the beginning after a late/seeked first playback callback.
-        if (combination && elapsed <= .25 && duration >= combination.durationMs / 1000 + .4) {
-          offset = combination.durationMs / 1000;
-          active = true;
+        // A preset must still be visible on a very short spoken reply. Compress
+        // the authored opening into the available audio instead of dropping it
+        // entirely; long replies keep the original authored duration.
+        if (combination && elapsed <= .6) {
+          const available = Math.max(.35, Math.min(combination.durationMs / 1000, duration - .05));
+          if (available > .2) { offset = available; active = true; }
         }
       }
       if (active && elapsed < offset) {
-        apply({ ...combination!, key, progress: Math.min(1, elapsed / offset) });
+        // Keep the behavior action in the same shortened clock as the timeline.
+        apply({ ...combination!, durationMs: offset * 1000, key, progress: Math.min(1, elapsed / offset) });
         return null;
       }
       if (active) { active = false; clear(true); }

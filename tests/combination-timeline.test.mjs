@@ -23,12 +23,18 @@ test('opening waits for playback, follows its clock once, then leaves the remain
   assert.deepEqual(clears, [true]);
 });
 
-test('short clips and late arrivals skip a preset instead of truncating or replaying it', () => {
-  for (const [elapsed, duration] of [[0, 2], [1, 14]]) {
-    const { clock, samples } = fixture();
-    assert.deepEqual(clock.update(elapsed, duration), { elapsed, duration });
-    assert.deepEqual(samples, []);
-  }
+test('short clips compress a preset into the available audio instead of dropping it', () => {
+  const { clock, samples } = fixture();
+  assert.equal(clock.update(0, 2), null);
+  assert.equal(samples.length, 1);
+  assert.equal(samples[0].durationMs, 1950);
+  assert.equal(samples[0].progress, 0);
+});
+
+test('a late first playback callback still skips a preset instead of replaying it', () => {
+  const { clock, samples } = fixture();
+  assert.deepEqual(clock.update(1, 14), { elapsed: 1, duration: 14 });
+  assert.deepEqual(samples, []);
 });
 
 test('stop releases an active opening once and rejects old audio callbacks', () => {
