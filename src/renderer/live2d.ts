@@ -755,6 +755,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     const frame = (time: number) => {
       requestId = 0;
       if (destroyed || !renderActive || !gl) return;
+      frameDiagnostics.observeRaf(time, performance.now());
       const step = frameClock.advance(time);
       if (step === null) { skippedFrames++; requestId = requestAnimationFrame(frame); return; }
       const renderStarted = performance.now();

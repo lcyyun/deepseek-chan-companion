@@ -10,6 +10,7 @@ const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement
 const { startMouseInput } = require('./mouse-input.cjs');
 const { createToggleDragSession } = require('./toggle-drag.cjs');
 const { createPetPointerSession } = require('./pet-pointer-session.cjs');
+const { createStablePetShape } = require('./stable-pet-shape.cjs');
 const dshConnect = require('./dsh-connect.cjs');
 const { createRenderDiagnostics, sanitizeGpuTimingStatus } = require('./render-diagnostics.cjs');
 const ROOT = path.resolve(__dirname, '..');
@@ -33,6 +34,7 @@ let config = {}, dataDir, configFile, failures = [], lastSaved = 0, setupRequire
 let sanitizeModelTuning, normalizeRenderMode, resolveRenderQuality;
 function currentRenderQuality() { return {...resolveRenderQuality(config.renderQuality,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true,preserveGlState:config.preserveGlState===true}; }
 const renderDiagnostics = createRenderDiagnostics();
+const stablePetShape = createStablePetShape();
 const renderRunId=randomUUID();let renderGeneration=0;
 let gpuTimingRequest=null;
 function cancelGpuTimingRequest(message) {
@@ -148,8 +150,8 @@ function initializeMouseTracking() {
   trackingTimer=setInterval(updateTracking,32);
 }
 function raiseTools() {
-  // Reassert the native topmost style after setShape, then keep controls above
-  // the protected pet surface without focusing them during every drag/resize.
+  // Visibility/focus/capture changes reassert controls without taking focus.
+  // Geometry updates already cut live holes for them and need no Z-order work.
   for (const win of [chat, toggle]) if (win && !win.isDestroyed() && win.isVisible()) {
     if (!win.isAlwaysOnTop()) win.setAlwaysOnTop(true,'screen-saver');
     win.moveTop();
@@ -184,8 +186,16 @@ function updateInputShape(options) {
   const exclusions=[toggle,chat].filter(win=>win&&!win.isDestroyed()&&win.isVisible()).map(win=>{
     const bounds=win.getBounds();return{x:bounds.x-origin.x,y:bounds.y-origin.y,width:bounds.width,height:bounds.height};
   });
-  const regions=fullBodyRegion?[fullBodyRegion,...inputRegions.slice(0,7)]:inputRegions;
-  const rects=buildInputShape({regions,width,height,fullWindow:pointerLocked,exclusions,padding:18*Math.max(1,config.petScale||1),fallbackRegions:geometrySeen?[]:[referenceBody(petScaleState())]});
+  const within=(a,b)=>a.x>=b.x&&a.y>=b.y&&a.x+a.width<=b.x+b.width&&a.y+a.height<=b.y+b.height;
+  // The full body already covers its clipped body rectangle. Avoid feeding
+  // duplicate, independently moving rectangles to the native region builder.
+  const regions=fullBodyRegion?[{key:'model',rect:fullBodyRegion}]:[];
+  inputRegions.forEach((rect,index)=>{if(!fullBodyRegion||!within(rect,fullBodyRegion))regions.push({key:`input-${index}`,rect});});
+  if(!regions.length&&!geometrySeen)regions.push({key:'fallback',rect:referenceBody(petScaleState())});
+  const protectedRegions=stablePetShape.update({regions,width,height,fullWindow:pointerLocked,
+    padding:18*Math.max(1,config.petScale||1),scale:config.petScale||1,revision:placementRevision,
+    contextKey:JSON.stringify([config.modelRoot||DEFAULT_MODEL,origin.x,origin.y]),now:performance.now()});
+  const rects=buildInputShape({regions:protectedRegions,width,height,exclusions,padding:0,fallbackRegions:[]});
   // [] means "remove the native shape", not an empty hit area. If controls
   // cover the whole pet, ignore input instead of accidentally protecting them.
   const ignored = passthrough || rects.length===0;
@@ -193,8 +203,8 @@ function updateInputShape(options) {
   if (ignoreChanged) { pet.setIgnoreMouseEvents(ignored, {forward:true}); ignoredMouseState=ignored; }
   const key=JSON.stringify(rects);
   const changed=key!==shapeKey;
-  if (changed) { try { const began=performance.now();pet.setShape(rects);const ms=performance.now()-began;nativeRenderStats.shapeChanges++;nativeRenderStats.shapeTotalMs+=ms;nativeRenderStats.shapeMaxMs=Math.max(nativeRenderStats.shapeMaxMs,ms);shapeKey=key; if(petTopmost) pet.setAlwaysOnTop(true,'screen-saver'); } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
-  if(changed||ignoreChanged||options?.forceTools)raiseTools();
+  if (changed) { try { const began=performance.now();pet.setShape(rects);const ms=performance.now()-began;nativeRenderStats.shapeChanges++;nativeRenderStats.shapeTotalMs+=ms;nativeRenderStats.shapeMaxMs=Math.max(nativeRenderStats.shapeMaxMs,ms);shapeKey=key; } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
+  if(ignoreChanged||options?.forceTools)raiseTools();
 }
 
 function saveConfig() {
@@ -370,12 +380,14 @@ function hidePet() {
   shapeKey = ''; ignoredMouseState=undefined;
 }
 function onPetHide() {
+  stablePetShape.clear();
   cancelGpuTimingRequest('桌宠已隐藏，GPU 计时启动已取消。');
   petVisibleRequested=false;ignoredMouseState=undefined;suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();
   pet.webContents.send('desktop-event',{type:'input-cancel'});
   pet.webContents.send('desktop-event',{type:'render-active',active:false});
 }
 function onPetShow() {
+  stablePetShape.clear();
   petVisibleRequested=true;syncPetTopmost();shapeKey='';ignoredMouseState=undefined;updateInputShape({forceTools:true});
   pet.webContents.send('desktop-event',{type:'render-active',active:true});
 }
@@ -510,7 +522,7 @@ else {
     toggle=makeWindow('toggle',{width:58,height:58,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
     chat=makeWindow('chat',{width:420,height:560,transparent:false,backgroundColor:'#f7f9fc',alwaysOnTop:true,skipTaskbar:true,resizable:false});
     updateInputShape();
-    pet.webContents.on('did-start-loading',()=>{cancelGpuTimingRequest('模型正在重新加载，GPU 计时启动已取消。');renderGeneration++;renderDiagnostics.reset();suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
+    pet.webContents.on('did-start-loading',()=>{cancelGpuTimingRequest('模型正在重新加载，GPU 计时启动已取消。');renderGeneration++;renderDiagnostics.reset();stablePetShape.clear();suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
     pet.webContents.on('render-process-gone',()=>{cancelGpuTimingRequest('桌宠渲染窗口已停止，GPU 计时启动已取消。');petPointer.clear();pointerLocked=false;updateInputShape();});
     pet.on('closed',()=>cancelGpuTimingRequest('桌宠窗口已关闭，GPU 计时启动已取消。'));
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});

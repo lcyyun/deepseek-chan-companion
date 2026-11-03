@@ -126,12 +126,68 @@ test('render diagnostics retain only the latest bounded samples and calculate p9
   assert.equal(result.recentFps, 50);
   assert.equal(result.frameIntervalP95Ms, 20);
   assert.equal(result.renderP95Ms, 8);
+  assert.equal(result.renderMeanMs, 6.5);
   assert.equal(result.wallElapsedMs, 140);
   assert.ok(Math.abs(result.logicElapsedSeconds - .16) < 1e-9);
   const bounded = createRenderDiagnostics(999);
   for (let i = 0; i < 1000; i++) bounded.record(i * 10, i < 880 ? 300 : 2, .01);
   assert.equal(bounded.snapshot().recentSamples, 120);
   assert.equal(bounded.snapshot().renderP95Ms, 2, 'old slow renders have left the rolling window');
+});
+
+test('rAF diagnostics distinguish browser callbacks from frames deliberately skipped by a cap', () => {
+  const diagnostics=createRenderDiagnostics(),clock=createRenderClock(60);
+  let rendered=0;
+  for(let i=0;i<240;i++){
+    const timestamp=Math.floor((1000+i*1000/120)*10)/10;
+    assert.equal(diagnostics.observeRaf(timestamp,timestamp+2),true);
+    const step=clock.advance(timestamp);
+    if(step!==null){rendered++;diagnostics.record(timestamp,7,step);}
+  }
+  const result=diagnostics.snapshot();
+  assert.equal(result.rafCallbacks,240);assert.equal(rendered,120);
+  assert.equal(result.rafRecentSamples,120);
+  assert.ok(Math.abs(result.rafRecentFps-120)<0.1);
+  assert.ok(Math.abs(result.recentFps-60)<0.1);
+  assert.ok(result.rafIntervalP95Ms<8.5);assert.ok(result.frameIntervalP95Ms>16.5);
+  assert.equal(result.rafCallbackLagMeanMs,2);assert.equal(result.rafCallbackLagP95Ms,2);
+  assert.equal(result.renderMeanMs,7);
+});
+
+test('rAF diagnostics bound the recent time window and clamp only negative stamp/entry differences', () => {
+  const diagnostics=createRenderDiagnostics(999);
+  for(let i=0;i<300;i++)diagnostics.observeRaf(i*10,i*10+100);
+  for(let i=1;i<=12;i++)diagnostics.observeRaf(2990+i*250,2990+i*250+3);
+  let result=diagnostics.snapshot();
+  assert.equal(result.rafCallbacks,312);assert.equal(result.rafRecentSamples,8);
+  assert.equal(result.rafWindowMs,2000);assert.equal(result.rafRecentFps,4);
+  assert.equal(result.rafCallbackLagMaxMs,3,'previous high-delay callbacks are outside the window');
+  diagnostics.observeRaf(8490,8489.9);result=diagnostics.snapshot();
+  assert.equal(result.rafWindowMs,2500);assert.equal(result.rafRecentSamples,1);
+  assert.equal(result.rafIntervalMaxMs,2500);assert.equal(result.rafCallbackLagMeanMs,0);
+});
+
+test('rAF diagnostics reject invalid input and reset hidden/backwards baselines without dropping lifetime counters', () => {
+  const diagnostics=createRenderDiagnostics();
+  diagnostics.observeRaf(1000,1001);diagnostics.record(1000,8,1/60);
+  diagnostics.observeRaf(1050,1054);diagnostics.record(1050,9,.05);
+  const before=diagnostics.snapshot();
+  for(const pair of [[NaN,1],[1,NaN],[Infinity,1],[1,Infinity],[-1,0],[1,-1]])assert.equal(diagnostics.observeRaf(...pair),false);
+  assert.deepEqual(diagnostics.snapshot(),before);
+  diagnostics.resetTiming();
+  let result=diagnostics.snapshot();
+  assert.equal(result.rafCallbacks,2);assert.equal(result.rafRecentSamples,0);
+  assert.equal(result.rafRecentFps,0);assert.equal(result.rafCallbackLagMaxMs,0);assert.equal(result.renderMeanMs,0);
+  diagnostics.observeRaf(61000,61001);diagnostics.record(61000,5,1/60);
+  diagnostics.observeRaf(61020,61022);diagnostics.record(61020,6,.02);
+  result=diagnostics.snapshot();
+  assert.equal(result.rafCallbacks,4);assert.equal(result.rafIntervalMaxMs,20);
+  assert.equal(result.frameIntervalMaxMs,20);assert.equal(result.longFrames,1);
+  diagnostics.observeRaf(10,11);diagnostics.record(10,2,1/60);
+  result=diagnostics.snapshot();
+  assert.equal(result.rafCallbacks,5);assert.equal(result.rafIntervalMaxMs,0);
+  assert.equal(result.rafRecentSamples,1);assert.equal(result.recentSamples,1);assert.equal(result.renderMeanMs,2);
+  assert.equal(result.longFrames,1);
 });
 
 test('render diagnostics distinguish real long intervals from capped simulation time', () => {

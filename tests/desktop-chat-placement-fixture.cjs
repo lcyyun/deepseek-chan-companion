@@ -25,8 +25,9 @@ app.on('browser-window-created',(_event,win)=>{
   win.hide=()=>{win.__visible=false;win.__focused=false;win.emit('hide');};
   win.isVisible=()=>win.__visible;win.isFocused=()=>win.__focused;
   win.focus=()=>{win.__focused=true;};
-  win.moveTop=()=>{};
-  const shape=win.setShape.bind(win);win.setShape=rects=>{win.__shape=rects;return shape(rects);};
+  win.__moveTopCalls=0;win.__shapeCalls=0;
+  win.moveTop=()=>{win.__moveTopCalls++;};
+  const shape=win.setShape.bind(win);win.setShape=rects=>{win.__shapeCalls++;win.__shape=rects;return shape(rects);};
   win.webContents.on('did-finish-load',async()=>{try{
     const role=await win.webContents.executeJavaScript('window.companion.bootstrap().then(value=>value.role)');
     windows.set(role,win);if(windows.size===3&&!running){running=true;await verify();}
@@ -55,6 +56,19 @@ async function verify(){
   chat.__focused=false;chat.emit('blur');
   assert.deepEqual(chat.getBounds(),manual,'focus loss must not re-anchor chat');
   const diag=await invoke('pet','diagnostics');
+  const protectedAt=(x,y)=>pet.__shape.some(rect=>x>=rect.x&&x<rect.x+rect.width&&y>=rect.y&&y<rect.y+rect.height);
+  const geometry=async(body,extras=[])=>invoke('pet','pet-hit-regions',{revision:diag.petScale.revision,regions:[body,...extras],body,fullBody:body});
+  const stableBody={x:600,y:120,width:300,height:400};await geometry(stableBody);
+  const initialShapeCalls=pet.__shapeCalls,initialOrderCalls=chat.__moveTopCalls+windows.get('toggle').__moveTopCalls;
+  for(let index=0;index<20;index++)await geometry({...stableBody,x:600+Math.sin(index)*3,y:120+Math.cos(index)*3});
+  assert.equal(pet.__shapeCalls,initialShapeCalls,'small pose changes reuse the real native clip envelope');
+  assert.equal(chat.__moveTopCalls+windows.get('toggle').__moveTopCalls,initialOrderCalls,'pose updates do not continually raise tool windows');
+  const extended={x:450,y:120,width:650,height:400};await geometry(extended);
+  assert.equal(protectedAt(1116,200),true,'a fast extension immediately includes its full original safety margin');
+  await geometry(stableBody);assert.equal(protectedAt(1100,200),false,'finished wide gesture releases distant input protection');
+  const caption={x:500,y:20,width:200,height:55};await geometry(stableBody,[caption]);
+  assert.equal(protectedAt(550,35),true,'caption above the body remains protected');
+  await geometry(stableBody);assert.equal(protectedAt(550,35),false,'removed caption does not leave a stale native blocker');
   for(let index=0;index<12;index++){
     const body={x:600-index*3,y:120-index,width:380+index*5,height:580};
     await invoke('pet','pet-hit-regions',{revision:diag.petScale.revision,regions:[body],body,fullBody:body});
@@ -79,7 +93,7 @@ async function verify(){
   chat.__focused=false;chat.emit('blur');assert.deepEqual(chat.getBounds(),recovered);
   fs.writeFileSync(expectedFile,JSON.stringify(recovered));
   assert.ok([...nativeVisibility.values()].every(visible=>!visible()));
-  fs.writeFileSync(output,JSON.stringify({ok:true,mode,manual,recovered,windowsHidden:true}));
+  fs.writeFileSync(output,JSON.stringify({ok:true,mode,manual,recovered,windowsHidden:true,stableGeometry:true,immediateExpansion:true,captionProtection:true}));
   clearTimeout(timer);app.quit();
 }
 timer=setTimeout(()=>fail(Error('Chat placement fixture timed out')),30000);

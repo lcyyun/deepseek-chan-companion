@@ -28,6 +28,41 @@ test('diagnostics reject invalid samples and never copy arbitrary credentials, p
   assert.equal(d.snapshot().sample.contextAttributes.antialias,false);assert.equal(d.snapshot().sample.maxFps,undefined);
 });
 
+test('reporting-window CPU and raw callback rates use matching counter deltas, not lifetime averages',()=>{
+  const d=diagnostics.createRenderDiagnostics();
+  d.update(sample(100,1000,{rafCallbacks:200,skippedFrames:100,totalRenderMs:5000,averageRenderMs:50}));
+  let result=d.snapshot().sample;
+  assert.equal(result.sampleRafFps,null);assert.equal(result.sampleSkippedFrames,null);assert.equal(result.sampleRenderMeanMs,null);
+  d.update(sample(220,3000,{rafCallbacks:440,skippedFrames:220,totalRenderMs:6200,averageRenderMs:28.18,
+    renderMeanMs:11,rafRecentFps:120,rafCallbackLagP95Ms:3}));
+  result=d.snapshot().sample;
+  assert.equal(result.sampleFps,60);assert.equal(result.sampleRafFps,120);assert.equal(result.sampleSkippedFrames,120);
+  assert.equal(result.sampleRenderMeanMs,10);assert.equal(result.renderMeanMs,11);assert.equal(result.averageRenderMs,28.18);
+  assert.equal(result.rafCallbackLagP95Ms,3);
+  d.update(sample(260,5000,{rafCallbacks:480,skippedFrames:220,totalRenderMs:6680}));
+  result=d.snapshot().sample;
+  assert.equal(result.sampleFps,20);assert.equal(result.sampleRafFps,20);assert.equal(result.sampleSkippedFrames,0);
+  assert.equal(result.sampleRenderMeanMs,12);
+});
+
+test('callback and CPU window deltas do not compare missing, reset or backwards samples',()=>{
+  const d=diagnostics.createRenderDiagnostics();
+  d.update(sample(100,1000,{rafCallbacks:200,skippedFrames:100,totalRenderMs:2000}));
+  d.update(sample(110,2000,{rafCallbacks:1,skippedFrames:0,totalRenderMs:100}));
+  let result=d.snapshot().sample;
+  assert.equal(result.sampleRafFps,null);assert.equal(result.sampleSkippedFrames,null);assert.equal(result.sampleRenderMeanMs,null);
+  d.update(sample(120,3000));result=d.snapshot().sample;
+  assert.equal(result.sampleRafFps,null);assert.equal(result.sampleSkippedFrames,null);assert.equal(result.sampleRenderMeanMs,null);
+  d.update(sample(1,100,{session:'new',rafCallbacks:1,skippedFrames:0,totalRenderMs:8}));
+  result=d.snapshot().sample;
+  assert.equal(result.sampleRafFps,null);assert.equal(result.sampleRenderMeanMs,null);
+  d.update(sample(1,200,{session:'new',rafCallbacks:1,skippedFrames:0,totalRenderMs:8}));
+  result=d.snapshot().sample;
+  assert.equal(result.sampleRafFps,0);assert.equal(result.sampleRenderMeanMs,null,'no rendered frame has no CPU mean');
+  d.update(sample(2,150,{session:'new',rafCallbacks:2,skippedFrames:0,totalRenderMs:16}));
+  assert.equal(d.snapshot().sample.sampleRafFps,null,'backwards sample clocks begin a new window');
+});
+
 test('GPU diagnostics retain only bounded summary values and known phases, never raw queries or samples',()=>{
   const gpuTiming={supported:true,active:false,reason:'completed',samples:20,pending:0,disjointCount:1,timeoutCount:2,
     gpuMeanMs:1.5,gpuP95Ms:3,gpuMaxMs:4,pollCpuMaxMs:0.2,rawSamples:[{token:'private'}],query:{path:'C:/private'},

@@ -2,7 +2,8 @@
 const STAGES={behavior:'totalBehaviorMs',physics:'totalPhysicsMs',model:'totalModelUpdateMs',handOverlay:'totalHandOverlayMs',stateSetup:'totalGlStateSetupMs',drawSubmit:'totalDrawMs',stateSave:'totalStateSaveMs',sdkDraw:'totalSdkDrawMs',stateRestore:'totalStateRestoreMs'};
 const CALLS={stateSave:'totalStateSaveCalls',sdkDraw:'totalSdkDrawCalls',stateRestore:'totalStateRestoreCalls'};
 const FIELDS = ['frames','skippedFrames','totalRenderMs','averageRenderMs','maxRenderMs','canvasWidth','canvasHeight','canvasPixels',
-  'textureBytes','textureCount','maxFps','recentFps','frameIntervalP95Ms','frameIntervalMaxMs','renderP95Ms','recentSamples','windowMs',
+  'textureBytes','textureCount','maxFps','recentFps','frameIntervalP95Ms','frameIntervalMaxMs','renderMeanMs','renderP95Ms','recentSamples','windowMs',
+  'rafCallbacks','rafRecentSamples','rafWindowMs','rafRecentFps','rafIntervalP95Ms','rafIntervalMaxMs','rafCallbackLagMeanMs','rafCallbackLagP95Ms','rafCallbackLagMaxMs',
   'longFrames','wallElapsedMs','logicElapsedSeconds','meshBufferUploads','meshBufferUploadSkips','meshBufferUploadBytes','meshBufferCount','meshBufferLegacyCalls',
   'stateSnapshotBypasses','stateRestoreBypasses','renderGeneration',...Object.values(STAGES),...Object.values(CALLS)];
 const STATES = new Set(['idle','thinking','listening','speaking','error']);
@@ -64,13 +65,21 @@ function createRenderDiagnostics({now=Date.now,limit=20}={}) {
       sample.stageAverageMs={};
       sample.stageCallsPerFrame={};
       const count=same?value.frames-previous.frames:0;
+      const delta=key=>same&&Number.isFinite(sample[key])&&Number.isFinite(previous.totals[key])&&sample[key]>=previous.totals[key]
+        ? sample[key]-previous.totals[key] : null;
+      const callbacks=delta('rafCallbacks'),skipped=delta('skippedFrames'),renderMs=delta('totalRenderMs');
+      sample.sampleRafFps=elapsed>0&&callbacks!==null?Math.round(callbacks*100000/elapsed)/100:null;
+      sample.sampleSkippedFrames=skipped;
+      // Current reporting-window mean, separate from averageRenderMs (lifetime)
+      // and renderMeanMs (recent rendered-frame ring). CPU/GPU may overlap.
+      sample.sampleRenderMeanMs=count>0&&renderMs!==null?Math.round(renderMs*100/count)/100:null;
       if(count>0)for(const [stage,key]of Object.entries(STAGES))if(Number.isFinite(sample[key])&&Number.isFinite(previous.totals[key])&&sample[key]>=previous.totals[key])
         sample.stageAverageMs[stage]=Math.round((sample[key]-previous.totals[key])*100/count)/100;
       if(count>0)for(const [stage,key]of Object.entries(CALLS))if(Number.isFinite(sample[key])&&Number.isFinite(previous.totals[key])&&sample[key]>=previous.totals[key])
         sample.stageCallsPerFrame[stage]=Math.round((sample[key]-previous.totals[key])*100/count)/100;
       sample.receivedAt=now();
       if(!same)samples.length=0;
-      previous={at:value.sampledAtMs,frames:value.frames,session:text(value.session),totals:Object.fromEntries([...Object.values(STAGES),...Object.values(CALLS)].map(key=>[key,sample[key]]))};
+      previous={at:value.sampledAtMs,frames:value.frames,session:text(value.session),totals:Object.fromEntries(['rafCallbacks','skippedFrames','totalRenderMs',...Object.values(STAGES),...Object.values(CALLS)].map(key=>[key,sample[key]]))};
       latest=sample;samples.push(sample);while(samples.length>limit)samples.shift();return true;
     },
     reset() { previous=null;latest=null;samples.length=0; },

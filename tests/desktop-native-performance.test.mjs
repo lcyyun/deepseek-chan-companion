@@ -21,7 +21,7 @@ function fixture() {
   class Window extends EventEmitter {
     constructor(options={}) {
       super();this.options=options;this.bounds={x:0,y:0,width:58,height:58,...options};
-      this.visible=true;this.topmost=true;this.events=[];this.opacity=1;
+      this.visible=true;this.topmost=true;this.events=[];this.opacity=1;this.topmostWrites=[];
       this.webContents=new EventEmitter();this.webContents.id=nextId++;
       this.webContents.send=(channel,event)=>this.events.push({channel,...event});
       this.webContents.setWindowOpenHandler=()=>{};
@@ -37,7 +37,7 @@ function fixture() {
     setIgnoreMouseEvents(ignored){counts.ignoreMouse++;this.ignored=ignored;}
     setShape(shape){counts.shape++;this.shape=shape;}
     moveTop(){counts.moveTop++;}
-    setAlwaysOnTop(topmost){this.topmost=topmost;}
+    setAlwaysOnTop(topmost){this.topmost=topmost;this.topmostWrites.push(topmost);}
     setOpacity(value){this.opacity=value;}
     setTitle(){}
     loadURL(){}
@@ -79,9 +79,39 @@ test('repeated identical geometry does not repeatedly write native bounds, input
   assert.deepEqual(f.counts,{toggleBounds:1,chatBounds:0,ignoreMouse:1,shape:1,moveTop:2,reloads:0});
   f.api.setFullBody({x:790,y:100,width:360,height:580});f.api.layoutTools();
   assert.equal(f.counts.shape,2,'a real protection change still reaches the native window');
-  assert.equal(f.counts.moveTop,4,'shape changes reassert the controls above the pet');
+  assert.equal(f.counts.moveTop,2,'geometry-only changes leave the established control order alone');
   assert.equal(f.counts.ignoreMouse,1,'a new shape does not redundantly change passthrough');
   assert.equal(f.counts.toggleBounds,1,'animation geometry does not move the frozen tool anchor');
+});
+
+test('mild model sway reuses native protection while fast gestures expand without z-order work',()=>{
+  const f=fixture();f.api.layoutTools();f.api.setPetTopmost(true);
+  const original={x:800,y:100,width:350,height:580},before={...f.counts},topWrites=f.windows.pet.topmostWrites.length;
+  for(let index=0;index<80;index++){
+    f.api.setFullBody({...original,x:800+Math.sin(index/10)*5,y:100+Math.cos(index/8)*4});f.api.layoutTools();
+  }
+  assert.equal(f.counts.shape,before.shape,'pose micro-movement does not change the native clip every sample');
+  const extended={x:600,y:80,width:620,height:580};f.api.setFullBody(extended);f.api.layoutTools();
+  assert.ok(f.counts.shape>before.shape);
+  const covered=(x,y)=>f.windows.pet.shape.some(r=>x>=r.x&&x<r.x+r.width&&y>=r.y&&y<r.y+r.height);
+  assert.equal(covered(583,300),true,'extension includes the original 18px clipping safety margin immediately');
+  assert.equal(f.counts.moveTop,before.moveTop);assert.equal(f.windows.pet.topmostWrites.length,topWrites,'geometry cannot reassert topmost on every pose');
+  f.api.setFullBody(original);f.api.layoutTools();assert.equal(covered(650,300),false,'completed wide poses release distant desktop pixels');
+});
+
+test('separate caption geometry stays protected and current exclusions are applied to a cached body',async()=>{
+  const f=fixture();f.api.layoutTools();
+  const body={x:800,y:100,width:350,height:580},caption={x:500,y:30,width:220,height:50};
+  const covered=(x,y)=>f.windows.pet.shape.some(r=>x>=r.x&&x<r.x+r.width&&y>=r.y&&y<r.y+r.height);
+  await f.invoke('pet','pet-hit-regions',{revision:0,regions:[body,caption],body,fullBody:body});
+  assert.equal(covered(600,50),true,'caption outside full body receives independent protection');
+  await f.invoke('pet','pet-hit-regions',{revision:0,regions:[body],body,fullBody:body});
+  assert.equal(covered(600,50),false,'removed caption is not retained by the body cache');
+  f.windows.chat.bounds={x:820,y:200,width:150,height:180};f.api.updateInputShape();
+  f.windows.toggle.bounds={x:1000,y:400,width:58,height:58};f.api.updateInputShape();
+  assert.equal(covered(850,250),false);assert.equal(covered(1020,420),false);
+  f.windows.chat.bounds.x=200;f.api.updateInputShape();assert.equal(covered(850,250),true,'moving a control restores model pixels without waiting for geometry');
+  f.windows.toggle.visible=false;f.api.updateInputShape();assert.equal(covered(1020,420),true,'hidden controls release their holes immediately');
 });
 
 test('hidden tools and HiDPI native rounding do not continually reposition identical windows',()=>{

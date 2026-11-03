@@ -68,9 +68,15 @@ export function createRenderClock(maxFps = 60) {
 export function createRenderDiagnostics(capacity = 120) {
   const limit = Math.max(1, Math.min(120, Math.floor(positive(capacity, 120))));
   const intervals = new Float64Array(limit), costs = new Float64Array(limit);
+  const rafIntervals = new Float64Array(limit), rafLags = new Float64Array(limit);
   let intervalAt = 0, intervalCount = 0, costAt = 0, costCount = 0;
+  let rafIntervalAt = 0, rafIntervalCount = 0, rafLagAt = 0, rafLagCount = 0;
+  let previousRaf = null, rafCallbacks = 0;
   let previous = null, wallElapsedMs = 0, logicElapsedSeconds = 0, longFrames = 0;
-  const resetTiming = () => { previous = null; intervalAt = intervalCount = costAt = costCount = 0; };
+  const resetTiming = () => {
+    previous = previousRaf = null; intervalAt = intervalCount = costAt = costCount = 0;
+    rafIntervalAt = rafIntervalCount = rafLagAt = rafLagCount = 0;
+  };
   const latest = (buffer, at, count) => Array.from({ length: count }, (_, i) => buffer[(at - 1 - i + limit) % limit]);
   const summary = values => {
     if (!values.length) return { mean: 0, p95: 0, max: 0 };
@@ -79,6 +85,22 @@ export function createRenderDiagnostics(capacity = 120) {
       p95: sorted[Math.ceil(sorted.length * .95) - 1], max: sorted[sorted.length - 1] };
   };
   return {
+    /** Observe every callback before the frame cap, including callbacks skipped
+     * by the app. The entry/stamp difference is NOT compositor or DWM latency. */
+    observeRaf(timestamp, enteredAt) {
+      if (!Number.isFinite(timestamp) || timestamp < 0 || !Number.isFinite(enteredAt) || enteredAt < 0) return false;
+      if (previousRaf !== null && timestamp < previousRaf) resetTiming();
+      if (previousRaf !== null) {
+        rafIntervals[rafIntervalAt] = timestamp - previousRaf;
+        rafIntervalAt = (rafIntervalAt + 1) % limit;
+        rafIntervalCount = Math.min(limit, rafIntervalCount + 1);
+      }
+      previousRaf = timestamp; rafCallbacks++;
+      // Browsers can quantize the two same-origin clocks differently.
+      rafLags[rafLagAt] = Math.max(0, enteredAt - timestamp);
+      rafLagAt = (rafLagAt + 1) % limit; rafLagCount = Math.min(limit, rafLagCount + 1);
+      return true;
+    },
     record(time, renderMs, logicStepSeconds) {
       if (!Number.isFinite(time) || time < 0 || !Number.isFinite(renderMs) || renderMs < 0 || !Number.isFinite(logicStepSeconds) || logicStepSeconds < 0) return false;
       if (previous !== null && time < previous) resetTiming();
@@ -107,8 +129,18 @@ export function createRenderDiagnostics(capacity = 120) {
       }
       const samples = Math.min(costCount, recentIntervals.length + (windowMs < 2000 ? 1 : 0));
       const interval = summary(recentIntervals), render = summary(latest(costs, costAt, samples));
+      const recentRafIntervals = []; let rafWindowMs = 0;
+      for (let i = 0; i < rafIntervalCount && rafWindowMs < 2000; i++) {
+        const value = rafIntervals[(rafIntervalAt - 1 - i + limit) % limit];
+        recentRafIntervals.push(value); rafWindowMs += value;
+      }
+      const rafRecentSamples = Math.min(rafLagCount, recentRafIntervals.length + (rafWindowMs < 2000 ? 1 : 0));
+      const rafInterval = summary(recentRafIntervals), lag = summary(latest(rafLags, rafLagAt, rafRecentSamples));
       return { recentSamples: samples, windowMs, recentFps: interval.mean > 0 ? 1000 / interval.mean : 0,
-        frameIntervalP95Ms: interval.p95, frameIntervalMaxMs: interval.max, renderP95Ms: render.p95,
+        frameIntervalP95Ms: interval.p95, frameIntervalMaxMs: interval.max, renderMeanMs: render.mean, renderP95Ms: render.p95,
+        rafCallbacks, rafRecentSamples, rafWindowMs, rafRecentFps: rafInterval.mean > 0 ? 1000 / rafInterval.mean : 0,
+        rafIntervalP95Ms: rafInterval.p95, rafIntervalMaxMs: rafInterval.max,
+        rafCallbackLagMeanMs: lag.mean, rafCallbackLagP95Ms: lag.p95, rafCallbackLagMaxMs: lag.max,
         longFrames, wallElapsedMs, logicElapsedSeconds };
     },
   };

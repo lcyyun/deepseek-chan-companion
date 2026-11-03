@@ -2,9 +2,9 @@
 
 **0.21.0 增补：** `desktop/dsh-connect.cjs` 的固定连接流程与安装登记负责复用、身份核验和显式启动；`integrations/dsh/recovery-tools.mjs` 做只读 MCP 发现及真实工具目录查询；`server/dsh-manager.mjs` 以每次启动的实例 ID 关联恢复结果。普通状态刷新不改配置、不调用模型。新版界面区分首次配置、日常连接和诊断，保留旧桥聊天能力。详情与验证入口见[连接与自动恢复](dsh-reconnect.md)，对应 `dsh-connection-flow`、`dsh-recovery` 和 `desktop-dsh-connection` 测试。
 
-核对版本：**0.23.0** · 最近核对：**2026-11-03** · [文档目录](README.md)
+核对版本：**0.23.1** · 最近核对：**2026-11-03** · [文档目录](README.md)
 
-本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.23.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
+本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.23.1 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
 
 第 1–14 节按当前实现阅读；第 15 节是历史方案，第 16–18 节说明仍在使用的模型适配机制，标题中的版本号表示引入时间。维护时以当前源码和接口返回为准，不把历史段落中的旧目录或字段当作现行契约。
 
@@ -172,6 +172,12 @@ node scripts/setup-mouse-input.mjs
 
 ## 5. 行为与每帧渲染
 
+0.23.1 的 `createRenderDiagnostics.observeRaf(timestamp, enteredAt)` 必须放在 `frameClock.advance()` 之前，观察包括主动跳过在内的每次回调。此热路径仅写有界 typed array 和计数，snapshot 时才计算分位数，禁止在热路径增加 IPC、GL 查询或逐帧对象日志。`resetTiming()` 清近期 rAF 和渲染帧窗口，保留累计计数；隐藏恢复不把中间的空档当成卡顿。
+
+`desktop/render-diagnostics.cjs` 使用相邻报告的同一窗口求 `sampleRafFps`、`sampleSkippedFrames`、`sampleRenderMeanMs`。`renderMeanMs/renderP95Ms` 来自渲染帧近期环形窗口，而 `averageRenderMs` 仍是生命周期均值，不能替代当前动作耗时。rAF 回调进入时间与其时间戳的差不代表 DWM 延迟；CPU/GPU均值也不能直接相加再与帧间隔 P95 相减。字段与用户原始数据复核见[性能说明](render-performance.md)，本版检查边界见[验证记录](release-validation-0.23.1.md)。
+
+两套近期 ring 的跨度可以不同：`rafRecent*` 在 240Hz 时 120 个回调仅约 0.5 秒，实际绘制 60fps 的 120 帧约两秒。跨字段比较优先使用共享报告窗口的 `sampleRafFps/sampleRenderMeanMs/sampleFps`，不能直接把两套近期指标当作同一段时间。
+
 0.23.0 的 `createRenderClock` 保持固定截止时间网格，并为 rAF 时间戳量化留不超过 1ms 的容差；同时避免相邻绘制过近。不要退回“当前时间小于理论间隔就丢帧”或每次从迟到时间重新安排下一帧的算法，前者会把正常 60Hz 误判为未到期，后者会漂移。回归位于 `tests/render-performance.test.mjs`；真实动作时间不靠帧数累计，隐藏恢复继续 reset。
 
 可选 GPU 诊断位于 `src/renderer/gpu-timing.ts`，回归位于 `tests/gpu-timing.test.mjs`。默认不探测扩展、不创建 query；用户点“采集 GPU 用时（15 秒）”后才开始，以异步计时包住本帧绘制状态设置、清屏与 SDK 完整绘制。查询轮询有间隔、并发上限、排空期限及开销熔断，不得通过 `finish/flush`、像素回读或忙等让结果提前就绪。现有性能诊断以 `sample.gpuTiming` 同步结果，不新增远程采样入口。使用与字段解释见[性能说明](render-performance.md)，CPU 提交、GPU 执行和 DWM 最终呈现不能混为同一计时；也不能用帧间隔 P95 减去 CPU 均值来推导等待时间。
@@ -249,6 +255,10 @@ node scripts/setup-mouse-input.mjs
 `getInteractionRegions()` 从实际可见网格、part 父子关系和当前投影计算区域，约每 100ms 缓存一次，不使用每帧 `readPixels`。头部的“是否含身体”判断先在未裁剪模型坐标下完成，再映射到画布并裁剪；顺序反过来会导致放大后摸脸失效。盆部件也纳入头部/道具命中。
 
 主进程用原生 `setShape` 保留模型、可见字幕与面板区域，扣除悬浮球和聊天窗口，其他透明处可点击后面的应用。只保护真实可见字幕子元素，不应把一个空的固定高度槽当成控件。注意 `setShape([])` 表示移除原生 shape 限制，不能当成空命中区。
+
+0.23.1 的 `desktop/stable-pet-shape.cjs` 仅稳定原生保护包络，不替代渲染器的精确命中坐标。各边已有保护距离 `P=18×max(1,petScale)` DIP 保持为最小值，目标包络为 1.5P、各边最多 2P；越界立即扩张／重建，不能等防抖计时结束再覆盖新位置。字幕／提示框单独按存在状态管理，消失即去；悬浮球与聊天窗口的排除区域每次按实际窗口位置重新计算，不稳定化排除矩形。隐藏、重载、重置和 placement/revision 变化必须丢弃旧包络。
+
+`updateInputShape` 的纯几何变化不再调用 `raiseTools()` 或重复 `pet.setAlwaysOnTop()`。改变置顶状态、显示／隐藏或需要恢复控件层级时仍由专用路径处理，不能为了少调用而移除这些生命周期。此处与 `setOpacity(254/255)` 的遮挡修复职责不同；后者仍用于避免其他 Chromium 应用被错误判为遮挡，不应以“简化透明合成”为由直接删除。调用次数、图形一致性、保护覆盖和真正鼠标交互需要分别检验。
 
 按住期间使用 pointer capture 和临时输入保护，结束、取消或隐藏时必须释放。不要用 `blur` 无条件结束非聚焦桌宠的合法触摸；应沿现有 pointer ID、capture 和 desktop `input-cancel` 生命周期处理。
 
