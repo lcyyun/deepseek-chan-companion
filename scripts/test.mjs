@@ -17,6 +17,7 @@ const desktop = new Set([
   'desktop-provider.test.mjs',
   'desktop-settings-select.test.mjs',
   'desktop-dsh-connection.test.mjs',
+  'desktop-render-diagnostics.test.mjs',
   'desktop-toggle.test.mjs', 'desktop-tuning.test.mjs',
   'expression-menu.test.mjs', 'pet-pointer.test.mjs',
   'speech-body.test.mjs', 'mouse-input-native.test.mjs',

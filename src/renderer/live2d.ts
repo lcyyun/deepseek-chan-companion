@@ -1,15 +1,17 @@
 /** Official Cubism Web SDK adapter. All model assets remain on the local server. */
 import { buildAssetLookup, resolveAssetFile } from '../shared/model-assets.mjs';
 import { DEFAULT_MODEL_TUNING, sanitizeModelTuning, type ModelTuning } from '../shared/model-tuning.mjs';
-import { createRenderClock, pngDimensions, renderCanvasSize, textureDecodeSize } from '../shared/render-performance.mjs';
+import { createRenderClock, createRenderDiagnostics, readGraphicsInfo, pngDimensions, renderCanvasSize, textureDecodeSize, type GraphicsInfo, type RenderDiagnosticsSnapshot } from '../shared/render-performance.mjs';
 export interface ParameterInfo { id: string; name: string; min: number; max: number; defaultValue: number; value: number }
 export interface InteractionRect { x: number; y: number; width: number; height: number }
 export interface ModelPlacement { scale: number; centerX: number; centerY: number; referenceWidth?: number; referenceHeight?: number; revision?: number }
 export interface ModelAsset { name: string; file: string }
 export interface Live2DManifest { modelUrl: string; expressions?: ModelAsset[]; motions?: ModelAsset[] }
 export interface MotionOptions { loop?: boolean; holdLastFrame?: boolean; fadeMs?: number; releaseMs?: number }
-export interface RenderPerformanceStats {
+export interface RenderPerformanceStats extends GraphicsInfo, RenderDiagnosticsSnapshot {
   frames: number; skippedFrames: number; totalRenderMs: number; averageRenderMs: number; maxRenderMs: number;
+  /** Renderer-thread elapsed time. Draw measures CPU submission, not GPU completion. */
+  totalBehaviorMs: number; totalPhysicsMs: number; totalModelUpdateMs: number; totalHandOverlayMs: number; totalDrawMs: number;
   canvasWidth: number; canvasHeight: number; canvasPixels: number;
   textureBytes: number; textureCount: number; maxFps: number; renderActive: boolean;
   contextAttributes: WebGLContextAttributes | null;
@@ -113,7 +115,10 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
   let sdk: Runtime, moc: any, model: any, renderer: any, mirrorRenderer: any, physics: any, motionManager: any, idleMotionManager: any;
   let requestId = 0, destroyed = false, gl: WebGLRenderingContext | null = null;
   let renderActive = true, textureBytes = 0, frames = 0, skippedFrames = 0, totalRenderMs = 0, maxRenderMs = 0;
+  let totalBehaviorMs = 0, totalPhysicsMs = 0, totalModelUpdateMs = 0, totalHandOverlayMs = 0, totalDrawMs = 0;
   const frameClock = createRenderClock(options.maxFps);
+  const frameDiagnostics = createRenderDiagnostics();
+  let graphicsInfo: GraphicsInfo | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let modelTuning = sanitizeModelTuning(DEFAULT_MODEL_TUNING);
   let chestSoftness = options.softenChestPhysics === false ? 1 : modelTuning.chestSoftness;
@@ -669,14 +674,16 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       setRenderActive(active) {
         const next = active !== false;
         if (destroyed || next === renderActive) return;
-        renderActive = next; cancelAnimationFrame(requestId); requestId = 0; frameClock.reset();
+        renderActive = next; cancelAnimationFrame(requestId); requestId = 0; frameClock.reset(); frameDiagnostics.resetTiming();
         if (next) requestId = requestAnimationFrame(frame);
       },
       getPerformanceStats() {
+        graphicsInfo ??= readGraphicsInfo(gl);
         return { frames, skippedFrames, totalRenderMs, averageRenderMs: frames ? totalRenderMs / frames : 0, maxRenderMs,
+          totalBehaviorMs, totalPhysicsMs, totalModelUpdateMs, totalHandOverlayMs, totalDrawMs,
           canvasWidth: canvas.width, canvasHeight: canvas.height, canvasPixels: canvas.width * canvas.height,
           textureBytes, textureCount: textures.length, maxFps: frameClock.maxFps, renderActive: renderActive && !destroyed,
-          contextAttributes: gl?.getContextAttributes() ?? null };
+          contextAttributes: gl?.getContextAttributes() ?? null, ...graphicsInfo, ...frameDiagnostics.snapshot() };
       },
     };
     const resize = () => {
@@ -722,7 +729,11 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           activeMotion = undefined;
         }
         for (let i = 0; i < parameters.length; i++) upstreamValues[i] = model.getParameterValueByIndex(i);
-        options.onFrame?.(dt, elapsed);
+        if (options.onFrame) {
+          const started = performance.now();
+          options.onFrame(dt, elapsed);
+          totalBehaviorMs += performance.now() - started;
+        }
         if (gestureHands?.active) {
           gestureHands.weight += (1 - gestureHands.weight) * (1 - Math.exp(-dt * 16));
           if (gestureHands.weight > .995) gestureHands.weight = 1;
@@ -783,7 +794,11 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           model.setParameterValueByIndex(to, Math.max(p.min, Math.min(p.max, current + (mirrored - current) * cuddleHandWeight)));
         }
         updateChestSprings(dt);
-        physics?.evaluate(model, dt);
+        if (physics) {
+          const started = performance.now();
+          physics.evaluate(model, dt);
+          totalPhysicsMs += performance.now() - started;
+        }
         for (let side = 0; side < 2; side++) {
           if (!earImpulse[side]) continue;
           for (let segment = 1; segment <= 3; segment++) {
@@ -792,9 +807,13 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
             model.setParameterValueByIndex(index, Math.max(p.min, Math.min(p.max, value)));
           }
         }
+        const modelUpdateStarted = performance.now();
         model.update();
+        totalModelUpdateMs += performance.now() - modelUpdateStarted;
         const restoreBasinShadow = adjustBasinShadow();
+        const handPreparationStarted = performance.now();
         const mirroredArm = prepareMirroredArm();
+        totalHandOverlayMs += performance.now() - handPreparationStarted;
         try {
         const aspect = canvas.width / canvas.height;
         const width = bounds.maxX - bounds.minX, height = bounds.maxY - bounds.minY;
@@ -818,12 +837,21 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
         renderer.setMvpMatrix(matrix);
         renderer.setRenderState(null, [0, 0, canvas.width, canvas.height]);
+        const handOverlayStarted = performance.now();
         const restorePupils = scalePupils();
         const restoreHandOrder = raiseThinkingHand();
-        try { mirroredArm.drawModel(); } finally { restoreHandOrder(); restorePupils(); }
+        totalHandOverlayMs += performance.now() - handOverlayStarted;
+        const drawStarted = performance.now();
+        try { mirroredArm.drawModel(); } finally {
+          totalDrawMs += performance.now() - drawStarted;
+          restoreHandOrder(); restorePupils();
+        }
         } finally { mirroredArm.restore(); restoreBasinShadow(); }
         const renderMs = performance.now() - renderStarted;
         frames++; totalRenderMs += renderMs; maxRenderMs = Math.max(maxRenderMs, renderMs);
+        // Measure the actual rendered interval before dt is capped for physics.
+        // No IPC or statistics sorting runs in the animation loop.
+        frameDiagnostics.record(time, renderMs, dt);
         if (renderActive) requestId = requestAnimationFrame(frame);
       } catch (error) { cancelAnimationFrame(requestId); options.onError?.(error instanceof Error ? error : new Error(String(error))); }
     };

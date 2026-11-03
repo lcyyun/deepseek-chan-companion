@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRenderClock, pngDimensions, renderCanvasSize, textureDecodeSize } from '../src/shared/render-performance.mjs';
+import { createRenderClock, createRenderDiagnostics, readGraphicsInfo, pngDimensions, renderCanvasSize, textureDecodeSize } from '../src/shared/render-performance.mjs';
 
 test('60-fps pacing remains near 60 on 60/75/120/144/240-Hz displays', () => {
   for (const refreshRate of [60, 75, 120, 144, 240]) {
@@ -71,4 +71,81 @@ test('PNG header parsing handles typed-array offsets and rejects non-PNG or inva
   assert.equal(pngDimensions(new Uint8Array(24)),null);
   view.setUint32(16,0);assert.equal(pngDimensions(bytes),null);
   view.setUint32(16,8192);view.setUint32(12,0);assert.equal(pngDimensions(bytes),null);
+});
+
+test('render diagnostics retain only the latest bounded samples and calculate p95 on snapshots', () => {
+  const diagnostics = createRenderDiagnostics(4);
+  for (let i = 0; i < 8; i++) diagnostics.record(i * 20, i + 1, .02);
+  const result = diagnostics.snapshot();
+  assert.equal(result.recentSamples, 4);
+  assert.equal(result.recentFps, 50);
+  assert.equal(result.frameIntervalP95Ms, 20);
+  assert.equal(result.renderP95Ms, 8);
+  assert.equal(result.wallElapsedMs, 140);
+  assert.ok(Math.abs(result.logicElapsedSeconds - .16) < 1e-9);
+  const bounded = createRenderDiagnostics(999);
+  for (let i = 0; i < 1000; i++) bounded.record(i * 10, i < 880 ? 300 : 2, .01);
+  assert.equal(bounded.snapshot().recentSamples, 120);
+  assert.equal(bounded.snapshot().renderP95Ms, 2, 'old slow renders have left the rolling window');
+});
+
+test('render diagnostics distinguish real long intervals from capped simulation time', () => {
+  const diagnostics = createRenderDiagnostics();
+  diagnostics.record(0, 12, 1/60);
+  diagnostics.record(250, 13, .05);
+  const result = diagnostics.snapshot();
+  assert.equal(result.frameIntervalP95Ms, 250);
+  assert.equal(result.frameIntervalMaxMs, 250);
+  assert.equal(result.longFrames, 1);
+  assert.equal(result.recentFps, 4);
+  assert.equal(result.wallElapsedMs, 250);
+  assert.ok(Math.abs(result.logicElapsedSeconds - (1/60+.05)) < 1e-9);
+});
+
+test('render diagnostics use about two active seconds even after falling to low fps', () => {
+  const diagnostics = createRenderDiagnostics();
+  for (let i = 0; i < 120; i++) diagnostics.record(i * 16, 200, .016);
+  for (let i = 1; i <= 12; i++) diagnostics.record(119 * 16 + i * 250, 2, .05);
+  const low = diagnostics.snapshot();
+  assert.equal(low.windowMs, 2000);
+  assert.equal(low.recentSamples, 8);
+  assert.equal(low.recentFps, 4);
+  assert.equal(low.frameIntervalP95Ms, 250);
+  assert.equal(low.renderP95Ms, 2, 'old render costs do not dilute the new low-fps window');
+  diagnostics.record(119 * 16 + 12 * 250 + 2500, 100, .05);
+  assert.equal(diagnostics.snapshot().windowMs, 2500);
+  assert.equal(diagnostics.snapshot().frameIntervalP95Ms, 2500, 'one large interval is not discarded by the window');
+  assert.equal(diagnostics.snapshot().recentSamples, 1);
+});
+
+test('render diagnostics ignore invalid input and exclude hidden time after reset', () => {
+  const diagnostics = createRenderDiagnostics();
+  diagnostics.record(1000, 5, .02); diagnostics.record(1050, 6, .05);
+  const before = diagnostics.snapshot();
+  for (const args of [[NaN,1,.01],[Infinity,1,.01],[1100,NaN,.01],[1100,-1,.01],[1100,1,Infinity],[1100,1,-1]]) {
+    assert.equal(diagnostics.record(...args), false);
+  }
+  assert.deepEqual(diagnostics.snapshot(), before);
+  diagnostics.resetTiming();
+  assert.equal(diagnostics.snapshot().recentSamples, 0);
+  assert.equal(diagnostics.snapshot().recentFps, 0);
+  diagnostics.record(61000, 4, 1/60); diagnostics.record(61020, 4, .02);
+  assert.equal(diagnostics.snapshot().longFrames, 1);
+  assert.equal(diagnostics.snapshot().wallElapsedMs, 70);
+  assert.equal(diagnostics.snapshot().frameIntervalP95Ms, 20);
+  diagnostics.record(10, 3, 1/60);
+  assert.equal(diagnostics.snapshot().frameIntervalMaxMs, 0, 'backwards time starts a new interval baseline');
+  assert.equal(diagnostics.snapshot().longFrames, 1);
+});
+
+test('graphics diagnostics prefer the active unmasked backend and safely fall back', () => {
+  const fake = (extension, values) => ({ VENDOR: 1, RENDERER: 2, getExtension: () => extension, getParameter: key => values[key] });
+  assert.deepEqual(readGraphicsInfo(fake({UNMASKED_VENDOR_WEBGL:3,UNMASKED_RENDERER_WEBGL:4}, {1:'WebKit',2:'WebGL',3:'NVIDIA',4:'ANGLE RTX 4060'})),
+    {gpuVendor:'NVIDIA',gpuRenderer:'ANGLE RTX 4060',gpuInfoSource:'unmasked'});
+  assert.deepEqual(readGraphicsInfo(fake(null,{1:'WebKit',2:'WebKit WebGL'})),
+    {gpuVendor:'WebKit',gpuRenderer:'WebKit WebGL',gpuInfoSource:'standard'});
+  assert.deepEqual(readGraphicsInfo({getExtension(){throw Error('blocked');},getParameter(){throw Error('lost');}}),
+    {gpuVendor:'',gpuRenderer:'',gpuInfoSource:'unavailable'});
+  assert.equal(readGraphicsInfo(fake(null,{1:42,2:undefined})).gpuInfoSource,'unavailable');
+  assert.equal(readGraphicsInfo(fake(null,{1:'\nVendor\0',2:'x'.repeat(1000)})).gpuRenderer.length,512);
 });

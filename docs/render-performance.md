@@ -1,8 +1,32 @@
 # 性能优化与验收
 
-适用版本：0.22.0。日期：2026-11-03。[文档导航](README.md)
+适用版本：0.22.1。日期：2026-11-03。[文档导航](README.md)
 
 用户在 RTX 4060、2K 屏幕、16GB 内存的另一台电脑上反馈：互动和播放轻微卡顿、拖影。本轮先处理可复现的重复工作与内存开销。没有在那台电脑上直接测量，因此仍需用户更新后复验。
+
+## 0.22.1：思考仍卡顿时收集实际数据
+
+后续录像确认均衡档仍有问题：思考阶段多次短暂停住再跳到下一姿态，同时聊天窗口仍在更新。源动作只有一次加载，不能把它描述为反复下载导致。原来的离屏基准没有覆盖用户的完整呈现环境，也不能据此认定问题已解决。
+
+更新并重启后，复现一次思考卡顿，打开“设置 → 性能与画质 → 复制性能诊断”。也可让已配对的 DSH 请求 `GET /api/performance`；`GET /api/state` 与 MCP `avatar_state` 的 `rendering` 是不带历史的摘要。
+
+报告每两秒接收一次本地计数，最多保留二十条近期样本，没有逐帧 IPC，也不上传到外网；复制内容不含聊天、配对码、API 密钥或模型路径。主要字段：
+
+| 字段 | 用途 |
+|---|---|
+| `version`、`quality` | 确认实际运行版本和档位 |
+| `sample.gpuRenderer`、`gpuVendor` | 实际 WebGL/ANGLE 设备，不能用“电脑安装了4060”代替 |
+| `hardwareAcceleration`、`gpuFeatures`、`flags` | 是否启用硬件渲染、软件回退或相关进程参数 |
+| `sample.sampleFps`、`sampleWindowMs` | 相邻两次采样间实际完成的模型绘制次数与时间 |
+| `visible`、`petFocused`、`chatFocused`、`sample.documentVisibility`、`rendererPriority` | 原生窗口、网页可见性与渲染进程优先级是否一致；优先级读不到时为 null |
+| `frameIntervalP95Ms`、`frameIntervalMaxMs` | 最近约两秒、至多120条记录的帧间隔，包含真正的长停顿 |
+| `renderP95Ms` | 模型更新及提交绘制的 CPU 耗时，不是 DWM 最终呈现时间 |
+| `stageAverageMs` | 同一采样窗口内行为、物理、模型更新、手部图层调整和绘制提交的单帧平均耗时；绘制提交不等于 GPU 完成时间 |
+| `wallElapsedMs`、`logicElapsedSeconds` | 活跃状态下实际时间与动作逻辑时间；隐藏时间不计为停顿 |
+| `native.shapeChanges`、`shapeMaxMs` | 原生保护区域变更的次数和最大调用耗时 |
+| `samples` | 最近各阶段的记录，便于对比待机和思考 |
+
+第一条样本的 `sampleFps` 为 null，尚无完整采样窗口；`ageMs` 较大表示数据已过时。若模型绘制本身仍约60帧而屏幕录像跳帧，应继续检查原生呈现，不能将绘制次数直接当作屏幕实得帧率。本版新增的是定位能力，没有宣称已解决目标电脑的思考卡顿。
 
 ## 使用设置
 

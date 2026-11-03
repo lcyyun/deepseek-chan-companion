@@ -1,7 +1,8 @@
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, Tray, Menu, nativeImage, safeStorage, dialog, shell, clipboard } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { totalmem } = require('node:os');
+const { totalmem, getPriority } = require('node:os');
+const { performance } = require('node:perf_hooks');
 const { pathToFileURL } = require('node:url');
 const zlib = require('node:zlib');
 const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, petTopmostForFocus, validRect } = require('./pet-input.cjs');
@@ -9,6 +10,7 @@ const { startMouseInput } = require('./mouse-input.cjs');
 const { createToggleDragSession } = require('./toggle-drag.cjs');
 const { createPetPointerSession } = require('./pet-pointer-session.cjs');
 const dshConnect = require('./dsh-connect.cjs');
+const { createRenderDiagnostics } = require('./render-diagnostics.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
 app.setName('大肥鱼 · DeepSeek-chan');
@@ -28,6 +30,38 @@ if (!app.isPackaged && path.resolve(app.getPath('userData')) === path.resolve(de
 let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;
 let config = {}, dataDir, configFile, failures = [], lastSaved = 0, setupRequired = false;
 let sanitizeModelTuning, normalizeRenderMode, resolveRenderQuality;
+const renderDiagnostics = createRenderDiagnostics();
+const nativeRenderStats = { shapeChanges:0, shapeTotalMs:0, shapeMaxMs:0 };
+let performanceHostCache, performanceHostAt=0;
+function renderingDiagnostics(options={}) {
+  const now=Date.now();
+  if(!performanceHostCache||now-performanceHostAt>2000){
+    let featureStatus={},metrics=[],hardwareAcceleration=null;
+    try { featureStatus=app.getGPUFeatureStatus?.()||{}; metrics=app.getAppMetrics?.()||[]; hardwareAcceleration=app.isHardwareAccelerationEnabled?.()??null; } catch {}
+    const flags={};
+    for(const flag of ['disable-gpu','disable-gpu-compositing','disable-software-rasterizer','disable-gpu-vsync','no-sandbox'])
+      flags[flag]=app.commandLine?.hasSwitch(flag)===true;
+    for(const flag of ['use-angle','use-gl','force-device-scale-factor']) {
+      const value=app.commandLine?.getSwitchValue(flag)||'';
+      if(value)flags[flag]=/^[a-zA-Z0-9_,.-]{1,64}$/.test(value)?value:'other';
+    }
+    const rendererPid=pet&&!pet.isDestroyed()?pet.webContents.getOSProcessId?.():null;
+    const rendererMetric=metrics.find(item=>item.pid===rendererPid),gpuMetric=metrics.find(item=>item.type==='GPU');
+    let rendererPriority=null;try{if(rendererPid&&typeof getPriority==='function')rendererPriority=getPriority(rendererPid);}catch{}
+    performanceHostCache={version:require(path.join(ROOT,'package.json')).version,electron:process.versions?.electron||null,
+      totalMemoryGiB:Math.round(totalmem()/1024**3*10)/10,hardwareAcceleration,flags,
+      gpuFeatures:Object.fromEntries(['gpu_compositing','webgl','webgl2','rasterization'].map(key=>[key,String(featureStatus[key]||'unknown').slice(0,64)])),
+      processWorkingSetMiB:Math.round(metrics.reduce((sum,item)=>sum+(Number(item.memory?.workingSetSize)||0),0)/1024*10)/10,
+      rendererCpuPercent:Number(rendererMetric?.cpu?.percentCPUUsage)||0,gpuCpuPercent:Number(gpuMetric?.cpu?.percentCPUUsage)||0,rendererPriority};
+    performanceHostAt=now;
+  }
+  return renderDiagnostics.snapshot({...performanceHostCache,
+    visible:!!pet&&!pet.isDestroyed()&&pet.isVisible(),
+    petFocused:!!pet&&!pet.isDestroyed()&&pet.isFocused?.()===true,
+    chatFocused:!!chat&&!chat.isDestroyed()&&chat.isFocused?.()===true,
+    quality:typeof resolveRenderQuality==='function'?resolveRenderQuality(config.renderQuality,totalmem()):null,
+    native:{...nativeRenderStats}},options);
+}
 const roles = new Map();
 const windowBoundsState = new WeakMap();
 const sameBounds=(a,b)=>a&&b&&['x','y','width','height'].every(key=>a[key]===b[key]);
@@ -125,7 +159,7 @@ function updateInputShape(options) {
   if (ignoreChanged) { pet.setIgnoreMouseEvents(ignored, {forward:true}); ignoredMouseState=ignored; }
   const key=JSON.stringify(rects);
   const changed=key!==shapeKey;
-  if (changed) { try { pet.setShape(rects); shapeKey=key; if(petTopmost) pet.setAlwaysOnTop(true,'screen-saver'); } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
+  if (changed) { try { const began=performance.now();pet.setShape(rects);const ms=performance.now()-began;nativeRenderStats.shapeChanges++;nativeRenderStats.shapeTotalMs+=ms;nativeRenderStats.shapeMaxMs=Math.max(nativeRenderStats.shapeMaxMs,ms);shapeKey=key; if(petTopmost) pet.setAlwaysOnTop(true,'screen-saver'); } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
   if(changed||ignoreChanged||options?.forceTools)raiseTools();
 }
 
@@ -428,7 +462,7 @@ else {
     config.modelTuning=sanitizeModelTuning(config.modelTuning);
     petPinned=config.petPinned===true;
     const {createService}=await import(pathToFileURL(path.join(ROOT,'server/index.mjs')).href);
-    service=await createService({port:Number(process.env.COMPANION_PORT)||39181,modelRoot:config.modelRoot||DEFAULT_MODEL,dataDir,staticRoot:path.join(ROOT,'dist'),
+    service=await createService({port:Number(process.env.COMPANION_PORT)||39181,modelRoot:config.modelRoot||DEFAULT_MODEL,dataDir,staticRoot:path.join(ROOT,'dist'),getRenderingDiagnostics:renderingDiagnostics,
       encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Windows凭据加密不可用，暂时无法保存密钥');return safeStorage.encryptString(value);},
       decrypt:value=>safeStorage.decryptString(value)});
     const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();
@@ -505,6 +539,12 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-input-mode':petPointer.clear();config.clickThrough=data===true;saveConfig();updateInputShape();pet.webContents.send('desktop-event',{type:'input-mode',clickThrough:config.clickThrough});return config.clickThrough;
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
+    case 'render-sample':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以提交渲染计数');return renderDiagnostics.update(data);
+    case 'copy-performance':{
+      if(roles.get(event.sender.id)!=='chat')throw new Error('请从设置复制性能诊断');
+      const report=renderingDiagnostics({history:true});clipboard.writeText(JSON.stringify(report,null,2));
+      return {available:report.available,fps:report.sample?.sampleFps??null,gpuRenderer:report.sample?.gpuRenderer||'',ageMs:report.sample?.ageMs??null};
+    }
     case 'basin-enabled':config.basinEnabled=data===true;saveConfig();for(const win of [pet,chat])if(win&&!win.isDestroyed())win.webContents.send('desktop-event',{type:'basin-enabled',enabled:config.basinEnabled});return config.basinEnabled;
     case 'pet-pin':{
       const next = data === true;

@@ -60,7 +60,7 @@ async function scanManifest(root) {
   return { modelUrl: `/model/${encodeURIComponent(model)}`, modelFile: model, expressions, motions, capabilities: CAPABILITIES };
 }
 
-export async function createService({ port = 39181, modelRoot, dataDir, staticRoot, encrypt, decrypt, chatAdapters, connectionLeaseMs = 65000 } = {}) {
+export async function createService({ port = 39181, modelRoot, dataDir, staticRoot, encrypt, decrypt, chatAdapters, connectionLeaseMs = 65000, getRenderingDiagnostics } = {}) {
   if (!dataDir) throw new Error('createService requires dataDir');
   await mkdir(dataDir, { recursive: true });
   const tokenFile = join(dataDir, 'bridge-token');
@@ -157,11 +157,26 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     for (const registry of [mcpClients, mcpScopes, bridges]) while (registry.size > 128) registry.delete(registry.keys().next().value);
     publishConnections();
   }
+  // The desktop supplies an already-whitelisted, synchronous cached snapshot.
+  // The service never collects process information or samples the renderer itself.
+  function renderingDiagnostics(history = false) {
+    if (typeof getRenderingDiagnostics !== 'function') return null;
+    try {
+      const snapshot = getRenderingDiagnostics({ history });
+      if (typeof snapshot?.then === 'function') {
+        // getState is synchronous; an accidental async provider must neither
+        // leak an unresolved promise nor cause an unhandled rejection.
+        void Promise.resolve(snapshot).catch(() => {});
+        return { available: false };
+      }
+      return snapshot ?? null;
+    } catch { return { available: false }; }
+  }
   function getState() {
     return { instanceId, bridgeProtocolVersion: 1, state: currentState, status: currentState, busy: Boolean(activeRequest), requestId: activeRequest?.id ?? null, lastCommand, latestReply,
       model: { ready: Boolean(manifest), error: modelError, modelUrl: manifest?.modelUrl || null },
       watch: { ...store.get().watch, sessionId: watchSessionId, hasContext: Boolean(freshContext()) },
-      ...connectionState(),
+      ...connectionState(), rendering: renderingDiagnostics(false),
       bridges: [...bridges].filter(([,b]) => Date.now() - b.lastSeen < 65000).map(([id,b]) => ({ id, ...b })),
       clients: [...connections].filter(w => w.authenticated).length };
   }
@@ -285,6 +300,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
       if ((path.startsWith('/api/') || path.startsWith('/model/') || path === '/mcp') && !authenticated(req, target)) return send(res, 401, { error: '需要配对码。', code: 'UNAUTHORIZED' });
       if (path === '/mcp') return await handleMcp(req, res, req.method === 'POST' ? await body(req) : undefined, { dispatch, getState, presentNativeReply, capabilities: CAPABILITIES, freshContext, bridgeSeen(name) { noteMcpActivity(name, req); } });
       if (path === '/api/state' && req.method === 'GET') return send(res, 200, getState());
+      if (path === '/api/performance' && req.method === 'GET') return send(res, 200, renderingDiagnostics(true));
       if (path === '/api/capabilities' && req.method === 'GET') return send(res, 200, CAPABILITIES);
       if (path === '/api/settings' && req.method === 'GET') return send(res, 200, publicSettings());
       if (path === '/api/settings' && ['PUT', 'POST'].includes(req.method)) {

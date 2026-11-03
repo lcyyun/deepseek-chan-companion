@@ -16,7 +16,7 @@ const plain=value=>JSON.parse(JSON.stringify(value));
 // No Electron, process, filesystem write, mouse input or private profile is used.
 function fixture() {
   const counts={toggleBounds:0,chatBounds:0,ignoreMouse:0,shape:0,moveTop:0,reloads:0};
-  const handlers=new Map(),writes=[],commands=[];
+  const handlers=new Map(),writes=[],commands=[],copied=[];
   let nextId=1,focused=null;
   class Window extends EventEmitter {
     constructor(options={}) {
@@ -48,7 +48,7 @@ function fixture() {
   const windows={pet:new Window(area),toggle:new Window({x:100,y:100,width:58,height:58}),chat:new Window({x:0,y:0,width:420,height:560})};
   for(const [role,window]of Object.entries(windows))window.role=role;
   const fakeApp=new EventEmitter();Object.assign(fakeApp,{isPackaged:false,setName(){},getPath:key=>'Z:/companion-vm-fixture/'+key,requestSingleInstanceLock:()=>false,quit(){}});
-  const electron={app:fakeApp,BrowserWindow:Window,ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},
+  const electron={app:fakeApp,BrowserWindow:Window,ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},clipboard:{writeText:value=>copied.push(value)},
     screen:{getAllDisplays:()=>[{workArea:area}],getDisplayMatching:()=>({workArea:area})}};
   const model={windows,area,profile:mode=>({mode,effective:mode==='auto'?'balanced':mode,label:mode,maxFps:45}),commands};
   const context=vm.createContext({require:name=>name==='electron'?electron:name==='node:os'?{totalmem:()=>16*1024**3}:name==='node:fs'?{...fs,writeFileSync:(file,data)=>writes.push({file,data})}:require(name),
@@ -68,7 +68,7 @@ function fixture() {
       setFullBody:value=>{fullBodyRegion=value;inputRegions=[value];},
       requested:()=>petVisibleRequested};
   `,context,{timeout:5000});
-  return{...model,counts,writes,commands,api:context.api,handlers,
+  return{...model,counts,writes,commands,copied,api:context.api,handlers,
     invoke:(role,action,data)=>handlers.get('window-control')({sender:windows[role].webContents},action,data),
     bootstrap:role=>handlers.get('bootstrap')({sender:windows[role].webContents}),
     focus:role=>{focused=role?windows[role]:null;}};
@@ -131,4 +131,15 @@ test('only chat may change render quality; saved mode is exposed before a contro
   assert.ok(f.windows.chat.events.some(e=>e.type==='render-quality'&&e.profile.mode==='balanced'));
   const diagnostics=await f.invoke('chat','diagnostics');assert.equal(diagnostics.renderActive,false);assert.equal(diagnostics.renderQuality.mode,'balanced');
   await f.invoke('chat','render-quality','balanced');assert.equal(f.counts.reloads,1,'saving the same explicit mode is idempotent');
+});
+
+test('performance samples are pet-only and copied diagnostics exclude pairing and private profile fields',async()=>{
+  const f=fixture(),packet={session:'renderer',sampledAtMs:1000,frames:30,state:'thinking',renderActive:true,gpuRenderer:'ANGLE (NVIDIA)',token:'do-not-copy',modelRoot:'private-model'};
+  await assert.rejects(f.invoke('chat','render-sample',packet),/仅桌宠/);
+  assert.equal(await f.invoke('pet','render-sample',packet),true);
+  await assert.rejects(f.invoke('pet','copy-performance'),/设置/);
+  const result=await f.invoke('chat','copy-performance');assert.equal(result.available,true);
+  assert.equal(result.gpuRenderer,'ANGLE (NVIDIA)');assert.equal(f.copied.length,1);
+  assert.doesNotMatch(f.copied[0],/do-not-copy|private-model|fixture-token|modelRoot|dataDir/);
+  assert.equal(JSON.parse(f.copied[0]).samples.length,1);assert.equal(f.writes.length,0);
 });

@@ -401,6 +401,11 @@ function Pet(){
     // The main process owns hide/held-button suppression. A renderer-only latch
     // here can race the release event and swallow the first press after showing.
     const cancel=()=>endPointer(true),visibility=()=>{if(!window.companion){renderActive.current=!document.hidden;runtime.current?.setRenderActive(renderActive.current);}if(document.hidden){cancel();clearGestureTimeline();behavior.current?.clearBodyAnimation();behavior.current?.clearExpressionPreview();behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}};window.addEventListener('blur',cancel);document.addEventListener('visibilitychange',visibility);
+    const renderSession=crypto.randomUUID();
+    const metricsTimer=setInterval(()=>{
+      const stats=runtime.current?.getPerformanceStats?.();if(!stats)return;
+      window.companion?.control('render-sample',{...stats,sampledAtMs:performance.now(),session:renderSession,state:activeState.current,intent:(behavior.current as any)?.action?.intent,documentVisibility:document.visibilityState,focused:document.hasFocus()}).catch(()=>{});
+    },2000);
     let lastShape='';const regionsTimer=setInterval(()=>{
       if(!renderActive.current)return;
       const r=runtime.current?.getInteractionRegions(),rect=canvas.current?.getBoundingClientRect();if(!rect)return;
@@ -421,7 +426,7 @@ function Pet(){
       const key=JSON.stringify({revision,head:stableHead,body:stableBody,fullBody:stableFullBody,regions:stableRegions});
       if(key!==lastShape){lastShape=key;if(r)setModelRegion({body:stableBody||body,head:stableHead||head});setGuardRects(stableRegions);window.companion?.control('pet-hit-regions',{regions:stableRegions,body:stableBody,fullBody:stableFullBody,revision}).catch(()=>{});}
     },100);
-    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);dragMoves.current?.dispose();dragMoves.current=null;clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
+    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);dragMoves.current?.dispose();dragMoves.current=null;clearInterval(regionsTimer);clearInterval(metricsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
   },[]);
   dragEnabled.current=drag;
   const anchor=modelRegion?.head||{x:(petPlacement.current?.centerX??innerWidth/2)-80,y:(petPlacement.current?.centerY??innerHeight/2)-250,width:160,height:160};
@@ -535,6 +540,8 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
         {value:'quality',label:'高清',description:'60 帧，更清晰的贴图与抗锯齿'},
       ]}/>
       <p className="hint">当前：{diagnostics?.renderQuality?.label||'均衡'}。隐藏桌宠时暂停渲染，显示后恢复。切换模式会重新加载模型并停止当前表演，选择后自动保存。</p>
+      <div className="button-row"><button disabled={!window.companion} onClick={async()=>{try{const report:any=await window.companion?.control('copy-performance');setResult(report?.available?'性能诊断已复制，请把内容发给排查问题的智能体。':'尚未收到模型渲染数据；诊断已复制，请等模型显示后再试。');}catch(e:any){onError(e.message);}}}>复制性能诊断</button></div>
+      <p className="hint">复现卡顿后复制，可查看实际渲染设备和帧间隔。不包含聊天、密钥或模型路径。</p>
     </details>
     <details className="settings-group"><summary>声音与口型</summary>
       <p className="hint">选择大肥鱼说话的声音。口型和肢体节奏跟随实际播放的音频。</p>

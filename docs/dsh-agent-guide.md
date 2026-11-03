@@ -512,6 +512,14 @@ Invoke-RestMethod "$bridgeBase/api/stop" -Method Post -Headers $bridgeHeaders `
 
 采集故障材料时只保留：版本、工具名、错误码、脱敏的连接状态、是否配置搜索。用户问题、模型回复、网页内容、令牌及原始环境变量都不应出现在默认诊断附件里。
 
+## 性能排查（0.22.1 起）
+
+用户报告思考／播放卡顿时，读取已运行桌宠的 `GET /api/performance`，继续使用已有配对认证；也可用 `avatar_state` 的 `rendering` 读摘要。不要为了排查另开一套桌宠、DSH home 或会话。
+
+先确认报告 `version` 与当前源码一致、`visible=true`、`quality.effective` 为实际选中档位。分别记录待机和用户复现思考时的样本，关注实际 `gpuRenderer`、`hardwareAcceleration`、`gpuFeatures`、`documentVisibility`、`sampleFps`、帧间隔与 `stageAverageMs`。不要用已安装的显卡型号代替实际 WebGL 设备，也不要把模型绘制回调次数直接当作 DWM 最终屏幕帧率。
+
+该诊断接口已经限制为性能字段，回传它即可；不要附带完整 `/api/state` 的聊天内容、配对码或原始启动命令。没有证据前不要关闭硬件加速、改驱动或修改全局系统设置。完整字段说明见[性能排查](render-performance.md#0221思考仍卡顿时收集实际数据)。
+
 ## 12. 明确未开放的控制能力
 
 当前外部智能体使用的是上述十一个 MCP 工具和共用 HTTP 命令。没有开放任意 Cubism 参数写入、胸部参数调节、窗口坐标操作、拖动悬浮球、修改表情微调、切换敲击音色或模拟触摸的 MCP／HTTP 控制 API。
