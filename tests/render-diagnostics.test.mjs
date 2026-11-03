@@ -6,14 +6,16 @@ const sample=(frames,at,extra={})=>({session:'test-instance',sampledAtMs:at,fram
 test('render diagnostics measure actual reporting windows, bounded history and reload resets',()=>{
   let now=100;const d=diagnostics.createRenderDiagnostics({now:()=>now,limit:2});
   assert.equal(d.snapshot().available,false);
-  d.update(sample(30,1000,{totalDrawMs:90}));now+=2000;d.update(sample(40,3000,{totalDrawMs:140}));
+  d.update(sample(30,1000,{totalDrawMs:90,totalStateSaveCalls:30}));now+=2000;d.update(sample(40,3000,{totalDrawMs:140,totalStateSaveCalls:40}));
   assert.equal(d.snapshot().sample.sampleFps,5);
   assert.equal(d.snapshot().sample.stageAverageMs.drawSubmit,5);
+  assert.equal(d.snapshot().sample.stageCallsPerFrame.stateSave,1);
   now+=2000;d.update(sample(160,5000));assert.equal(d.snapshot().sample.sampleFps,60);
   assert.equal(d.snapshot({}, {history:true}).samples.length,2);
   assert.equal('samples' in d.snapshot(),false);
   d.update(sample(1,300,{session:'reloaded'}));
   assert.equal(d.snapshot().sample.sampleFps,null);assert.equal(d.snapshot({}, {history:true}).samples.length,1);
+  d.reset();assert.equal(d.snapshot().available,false);assert.equal(d.snapshot({}, {history:true}).samples.length,0);
 });
 
 test('diagnostics reject invalid samples and never copy arbitrary credentials, paths or chat fields',()=>{

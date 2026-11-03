@@ -3,6 +3,7 @@ import { buildAssetLookup, resolveAssetFile } from '../shared/model-assets.mjs';
 import { DEFAULT_MODEL_TUNING, sanitizeModelTuning, type ModelTuning } from '../shared/model-tuning.mjs';
 import { createRenderClock, createRenderDiagnostics, readGraphicsInfo, pngDimensions, renderCanvasSize, textureDecodeSize, type GraphicsInfo, type RenderDiagnosticsSnapshot } from '../shared/render-performance.mjs';
 import { createMeshBufferCache } from './mesh-buffer-cache';
+import { createOwnedGlState } from './owned-gl-state';
 export interface ParameterInfo { id: string; name: string; min: number; max: number; defaultValue: number; value: number }
 export interface InteractionRect { x: number; y: number; width: number; height: number }
 export interface ModelPlacement { scale: number; centerX: number; centerY: number; referenceWidth?: number; referenceHeight?: number; revision?: number }
@@ -15,6 +16,9 @@ export interface RenderPerformanceStats extends GraphicsInfo, RenderDiagnosticsS
   totalBehaviorMs: number; totalPhysicsMs: number; totalModelUpdateMs: number; totalHandOverlayMs: number; totalDrawMs: number;
   /** SDK sub-stages inside totalDrawMs; these are not additional independent costs. */
   totalStateSaveMs: number; totalSdkDrawMs: number; totalStateRestoreMs: number;
+  totalStateSaveCalls: number; totalSdkDrawCalls: number; totalStateRestoreCalls: number;
+  ownedGlStateEnabled: boolean; stateSnapshotBypasses: number; stateRestoreBypasses: number;
+  totalGlStateSetupMs: number;
   canvasWidth: number; canvasHeight: number; canvasPixels: number;
   textureBytes: number; textureCount: number; maxFps: number; renderActive: boolean;
   meshBufferCacheEnabled: boolean; meshBufferUploads: number; meshBufferUploadSkips: number;
@@ -66,6 +70,8 @@ export interface Live2DOptions {
   antialias?: boolean;
   /** Opt in to per-mesh GPU reuse. Default retains the pinned SDK upload path. */
   cacheMeshBuffers?: boolean;
+  /** Keep SDK external-state snapshots for compatibility. The app owns this canvas by default. */
+  preserveGlState?: boolean;
   /** Mild local tuning of the two authored chest spring groups. */
   softenChestPhysics?: boolean;
   /** Author's effect loop runs beneath gestures; false disables it for calibration. */
@@ -122,13 +128,16 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
   let sdk: Runtime, moc: any, model: any, renderer: any, mirrorRenderer: any, physics: any, motionManager: any, idleMotionManager: any;
   let requestId = 0, destroyed = false, gl: WebGLRenderingContext | null = null;
   let meshBufferCache: ReturnType<typeof createMeshBufferCache> | undefined;
+  let ownedGlState: ReturnType<typeof createOwnedGlState> | undefined;
   let renderActive = true, textureBytes = 0, frames = 0, skippedFrames = 0, totalRenderMs = 0, maxRenderMs = 0;
   let totalBehaviorMs = 0, totalPhysicsMs = 0, totalModelUpdateMs = 0, totalHandOverlayMs = 0, totalDrawMs = 0;
+  let totalGlStateSetupMs = 0;
   const drawStages = { totalStateSaveMs:0, totalSdkDrawMs:0, totalStateRestoreMs:0 };
+  const drawStageCalls = { totalStateSaveCalls:0, totalSdkDrawCalls:0, totalStateRestoreCalls:0 };
   const observeDrawStages = (target:any) => {
-    for(const [method,key] of [['saveProfile','totalStateSaveMs'],['doDrawModel','totalSdkDrawMs'],['restoreProfile','totalStateRestoreMs']] as const){
+    for(const [method,key,count] of [['saveProfile','totalStateSaveMs','totalStateSaveCalls'],['doDrawModel','totalSdkDrawMs','totalSdkDrawCalls'],['restoreProfile','totalStateRestoreMs','totalStateRestoreCalls']] as const){
       const original=target[method];if(typeof original!=='function')continue;
-      target[method]=function(...args:any[]){const start=performance.now();try{return original.apply(this,args);}finally{drawStages[key]+=performance.now()-start;}};
+      target[method]=function(...args:any[]){drawStageCalls[count]++;const start=performance.now();try{return original.apply(this,args);}finally{drawStages[key]+=performance.now()-start;}};
     }
   };
   const frameClock = createRenderClock(options.maxFps);
@@ -162,6 +171,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     motionManager?.release();
     idleMotionManager?.release();
     meshBufferCache?.dispose();
+    ownedGlState?.dispose();
     renderer?.release();
     mirrorRenderer?.release();
     physics?.release();
@@ -229,6 +239,10 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     renderer.startUp(gl);
     renderer.setIsPremultipliedAlpha(true);
     observeDrawStages(renderer);
+    if (options.preserveGlState !== true) {
+      ownedGlState=createOwnedGlState(gl);
+      ownedGlState.attach(renderer);
+    }
     if (options.cacheMeshBuffers === true) {
       meshBufferCache = createMeshBufferCache(gl, model);
       meshBufferCache.attach(renderer);
@@ -465,6 +479,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
             mirrorRenderer.setClippingMaskBufferSize(1024); mirrorRenderer.startUp(gl); mirrorRenderer.setIsPremultipliedAlpha(true);
             textures.forEach((texture, index) => mirrorRenderer.bindTexture(index, texture));
             observeDrawStages(mirrorRenderer);
+            ownedGlState?.attach(mirrorRenderer);
             meshBufferCache?.attach(mirrorRenderer);
           }
           mirrorRenderer.setMvpMatrix(matrix); mirrorRenderer.setRenderState(null, [0, 0, canvas.width, canvas.height]);
@@ -703,9 +718,12 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       getPerformanceStats() {
         graphicsInfo ??= readGraphicsInfo(gl);
         const buffers = meshBufferCache?.stats();
+        const owned = ownedGlState?.stats();
         return { frames, skippedFrames, totalRenderMs, averageRenderMs: frames ? totalRenderMs / frames : 0, maxRenderMs,
           totalBehaviorMs, totalPhysicsMs, totalModelUpdateMs, totalHandOverlayMs, totalDrawMs,
-          ...drawStages,
+          ...drawStages,totalGlStateSetupMs,
+          ...drawStageCalls,ownedGlStateEnabled:!!owned?.ready&&!!owned.rendererCount&&!owned.disposed,
+          stateSnapshotBypasses:owned?.bypassedSaves??0,stateRestoreBypasses:owned?.bypassedRestores??0,
           canvasWidth: canvas.width, canvasHeight: canvas.height, canvasPixels: canvas.width * canvas.height,
           textureBytes, textureCount: textures.length, maxFps: frameClock.maxFps, renderActive: renderActive && !destroyed,
           meshBufferCacheEnabled:!!buffers?.rendererCount,meshBufferUploads:buffers?.uploads??0,meshBufferUploadSkips:buffers?.skips??0,
@@ -856,6 +874,8 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           updateInteractionRegions(sx, sy, -centerX * sx + offsetX, -centerY * sy + offsetY);
           regionUpdatedAt = elapsed;
         }
+        const stateSetupStarted=performance.now();
+        ownedGlState?.beginFrame(canvas.width,canvas.height);
         gl.viewport(0, 0, canvas.width, canvas.height);
         // The SDK owns mask FBO/state changes. Clear the entire transparent
         // default target explicitly, even if its previous saved state differed.
@@ -863,6 +883,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         gl.disable(gl.SCISSOR_TEST);
         gl.colorMask(true, true, true, true);
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+        totalGlStateSetupMs+=performance.now()-stateSetupStarted;
         renderer.setMvpMatrix(matrix);
         renderer.setRenderState(null, [0, 0, canvas.width, canvas.height]);
         const handOverlayStarted = performance.now();

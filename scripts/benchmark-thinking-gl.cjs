@@ -1,6 +1,7 @@
 /* Visible native-window probe. Run with an ordinary Electron runtime:
  * electron scripts/benchmark-thinking-gl.cjs --model=ABSOLUTE_DIR
- * Measures thinking GL calls/profile stages and cache A/B; never connects to the user's companion.
+ * Measures thinking GL calls/profile stages, owned-context and cache A/B.
+ * Never connects to the user's companion; no forced GPU synchronization is inserted.
  */
 'use strict';
 const { app, BrowserWindow, ipcMain } = require('electron');
@@ -23,8 +24,9 @@ const hz = Number(arg('hz', '240'));
 const cssWidth=Number(arg('css-width',String(width))),cssHeight=Number(arg('css-height',String(height)));
 const tag=arg('tag','gl');if(!/^[a-z0-9-]+$/.test(tag))throw Error('Invalid tag');
 const glProfile=arg('gl-profile','on')!=='off',cacheMode=arg('cache-mode','legacy'),suite=arg('suite','profile');
+const preserveState=arg('preserve-gl-state','on');
 const sampleMs=Number(arg('sample-ms','4000')),settleMs=Number(arg('settle-ms','1800'));
-if(!['legacy','cached'].includes(cacheMode)||!['profile','cache'].includes(suite))throw Error('Invalid cache-mode or suite');
+if(!['legacy','cached'].includes(cacheMode)||!['profile','cache','state'].includes(suite)||!['on','off'].includes(preserveState))throw Error('Invalid cache-mode, suite or preserve-gl-state');
 const scale=Number(arg('scale','4')),centerYFactor=Number(arg('center-y-factor','.9'));
 if(!Number.isFinite(scale)||scale<.5||scale>4||!Number.isFinite(centerYFactor)||centerYFactor<0||centerYFactor>2)throw Error('Invalid scale or center-y-factor');
 const modelRoot = path.resolve(arg('model', process.env.L2D_MODEL_ROOT || path.join(root, 'models', 'DeepSeek')));
@@ -68,9 +70,12 @@ async function main() {
   progress('start');
   const adapter = path.join(root, 'src/renderer/live2d.ts');
   const snapshot = variant === 'baseline' ? execFileSync('git', ['show', `${baselineRef}:src/renderer/live2d.ts`], { cwd: root, encoding: 'utf8', windowsHide: true }) : await fs.readFile(adapter, 'utf8');
+  if(preserveState==='off'&&!snapshot.includes('preserveGlState'))throw Error('Owned-context integration is not ready; refusing an ignored A/B option');
   await fs.writeFile(path.join(output, 'adapter-snapshot.ts'), snapshot);
   const cachePath=path.join(root,'src/renderer/mesh-buffer-cache.ts');const cacheSource=await fs.readFile(cachePath,'utf8').catch(()=>null);
   if(cacheSource)await fs.writeFile(path.join(output,'mesh-buffer-cache-snapshot.ts'),cacheSource);
+  const ownedPath=path.join(root,'src/renderer/owned-gl-state.ts');const ownedSource=await fs.readFile(ownedPath,'utf8').catch(()=>null);
+  if(ownedSource)await fs.writeFile(path.join(output,'owned-gl-state-snapshot.ts'),ownedSource);
   const sourceRevision = execFileSync('git', ['rev-parse', variant === 'baseline' ? baselineRef : 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).trim();
   const contents = `export {createLive2D} from ${JSON.stringify(adapter.replaceAll('\\', '/'))};export {BehaviorController} from ${JSON.stringify(path.join(root, 'src/shared/behavior.mjs').replaceAll('\\', '/'))};`;
   const beforeAnchor = '// Each frame starts at authored defaults;';
@@ -79,6 +84,7 @@ async function main() {
   await build({ stdin: { contents, loader: 'ts', resolveDir: root }, outfile: path.join(output, 'harness.js'), bundle: true, format: 'esm', platform: 'browser',
     plugins: [{ name: 'observe-real-frames', setup(builder) {
       if(cacheSource)builder.onLoad({filter:/[\\/]mesh-buffer-cache\.ts$/},()=>({loader:'ts',resolveDir:path.dirname(cachePath),contents:cacheSource}));
+      if(ownedSource)builder.onLoad({filter:/[\\/]owned-gl-state\.ts$/},()=>({loader:'ts',resolveDir:path.dirname(ownedPath),contents:ownedSource}));
       builder.onLoad({ filter: /[\\/]renderer[\\/]live2d\.ts$/ }, () => ({ loader: 'ts', resolveDir: path.dirname(adapter), contents: snapshot
         .replace('if (!thinkingHandFront || !handDrawables.size)', 'if ((window as any).__probeNoForeground || !thinkingHandFront || !handDrawables.size)')
         .replace('renderer = new sdk.CubismRenderer_WebGL();', `
@@ -128,7 +134,7 @@ async function main() {
     try { const bytes = Buffer.alloc(24); await fd.read(bytes, 0, 24, 0); modelTextures.push({ width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }); }
     finally { await fd.close(); }
   }
-  const options = { cacheMeshBuffers:cacheMode==='cached', maxTextureSize: 3072, maxFps: 60, maxPixelRatio: 1.5, maxCanvasPixels: 2560 * 1440, antialias: false };
+  const options = { preserveGlState:preserveState==='on', cacheMeshBuffers:cacheMode==='cached', maxTextureSize: 3072, maxFps: 60, maxPixelRatio: 1.5, maxCanvasPixels: 2560 * 1440, antialias: false };
   const entry = `import {createLive2D,BehaviorController} from '/harness.js';
     window.glProfileEnabled=${glProfile};window.__probeNoForeground=false;window.__probeNoLoading=false;window.__probeNoProfile=false;window.profileGroups={};window.glGroups={};window.meshGroups={};window.glCollect=false;
     const contextOriginal=HTMLCanvasElement.prototype.getContext;
@@ -147,6 +153,11 @@ async function main() {
             const started=performance.now();
             try{return original.apply(this,values);}finally{
               const ms=performance.now()-started;row.count++;row.totalMs+=ms;if(name==='activeTexture')textureUnit=values[0];if(name==='bindTexture'){const slot=textureUnit+':'+values[0];if(textureBindings.get(slot)!==values[1]){row.changed=(row.changed||0)+1;textureBindings.set(slot,values[1]);}}row.maxMs=Math.max(row.maxMs,ms);if(ms>1)row.over1ms++;
+              if(name==='getParameter'||name==='getVertexAttrib'||name==='isEnabled'){
+                const slot=name==='getVertexAttrib'?values[0]+':'+values[1]:String(values[0]);
+                const argumentsMap=row.arguments||(row.arguments={});const call=argumentsMap[slot]||(argumentsMap[slot]={count:0,totalMs:0,maxMs:0});
+                call.count++;call.totalMs+=ms;call.maxMs=Math.max(call.maxMs,ms);
+              }
               if(name==='bufferData')row.bytes+=typeof values[1]==='number'?values[1]:(values[1]?.byteLength||0);
               if(name==='bufferSubData')row.bytes+=values[2]?.byteLength||0;
               if(name==='drawElements')row.elements+=values[1]||0;
@@ -165,7 +176,7 @@ async function main() {
     }).then(handle=>{window.avatar=handle;const expressionOriginal=handle.setExpression.bind(handle);handle.setExpression=(name,active)=>expressionOriginal(name,name==='加载'&&window.__probeNoLoading?false:active);window.behavior=new BehaviorController(handle,{random:()=>.4,onEvent:event=>{if(event.type==='error')benchErrors.push(event.message||String(event.error));}});
       handle.setPlacement({scale:${scale},centerX:${width*.32},centerY:${height*centerYFactor},referenceWidth:370,referenceHeight:575});handle.setRenderActive?.(true);window.benchLoadMs=performance.now()-benchStart;window.benchGeometryTimer=setInterval(()=>{const r=handle.getInteractionRegions();if(r)window.nativeProbe.geometry(r);},100);return true;});
     window.benchMark=name=>{benchPhase=name;benchPhases.push({name,at:performance.now(),frame:benchTimes.length,cost:__benchFrameCosts.length,visibility:document.visibilityState,focused:document.hasFocus()});return true;};
-    window.benchSnapshot=()=>{const canvas=document.querySelector('canvas'),gl=canvas.getContext('webgl');return{glGroups:window.glGroups,meshGroups:window.meshGroups,profileGroups:window.profileGroups,time:performance.now(),documentVisibility:document.visibilityState,visibilityEvents:benchVisibility,loadMs:benchLoadMs,phases:benchPhases,frames:benchTimes,dt:benchDt,costs:__benchFrameCosts,errors:benchErrors,canvas:{width:canvas.width,height:canvas.height,cssWidth:canvas.clientWidth,cssHeight:canvas.clientHeight,dpr:devicePixelRatio},context:gl.getContextAttributes(),renderer:gl.getParameter(gl.getExtension('WEBGL_debug_renderer_info')?.UNMASKED_RENDERER_WEBGL||gl.RENDERER),stats:avatar.getPerformanceStats?.()||null};};`;
+    window.benchSnapshot=()=>{const canvas=document.querySelector('canvas'),gl=canvas.getContext('webgl');return{glGroups:window.glGroups,meshGroups:window.meshGroups,profileGroups:window.profileGroups,time:performance.now(),documentVisibility:document.visibilityState,visibilityEvents:benchVisibility,loadMs:benchLoadMs,phases:benchPhases,frames:benchTimes,dt:benchDt,costs:__benchFrameCosts,errors:benchErrors,canvas:{width:canvas.width,height:canvas.height,cssWidth:canvas.clientWidth,cssHeight:canvas.clientHeight,dpr:devicePixelRatio},context:gl.getContextAttributes(),glErrorAfterMeasurement:gl.getError(),renderer:gl.getParameter(gl.getExtension('WEBGL_debug_renderer_info')?.UNMASKED_RENDERER_WEBGL||gl.RENDERER),stats:avatar.getPerformanceStats?.()||null};};`;
   await fs.writeFile(path.join(output, 'entry.js'), entry);
   const csp = (await fs.readFile(path.join(root, 'index.html'), 'utf8')).match(/<meta[^>]+http-equiv="Content-Security-Policy"[^>]*>/i)?.[0];
   if (!csp) throw Error('Production CSP missing');
@@ -202,16 +213,19 @@ async function main() {
   progress('model ready');
   win.showInactive();
   await wait(3000);
-  const phase=async(name,{state='thinking',noForeground=false,noLoading=false,loadingOnly=false,pointerOnly=false,noProfile=false,cuddle=false}={})=>{
+  const phase=async(name,{state='thinking',noForeground=false,noLoading=false,loadingOnly=false,pointerOnly=false,noProfile=false,cuddle=false,idea=false,talk=false}={})=>{
     progress(name);phaseName=name;shapeMode='dynamic';shapeKey='';shapeEnvelope=null;
     rendererPrioritySamples.push({phase:name,...sampleOwnRendererPriority()});
-    await evaluate(`glCollect=false;behavior.reset();window.__probeNoForeground=${noForeground};window.__probeNoLoading=${noLoading};window.__probeNoProfile=${noProfile};behavior.setState(${JSON.stringify(state)});${loadingOnly?"avatar.setExpression('加载',true);":''}${pointerOnly?"behavior.perform({type:'perform',intent:'explain',gesture:'pointer',durationMs:20000});":''}${cuddle?"behavior.perform({type:'perform',intent:'cuddle',emotion:'happy',durationMs:20000});":''}true`);
+    await evaluate(`glCollect=false;benchAudio=${talk};behavior.reset();window.__probeNoForeground=${noForeground};window.__probeNoLoading=${noLoading};window.__probeNoProfile=${noProfile};behavior.setState(${JSON.stringify(state)});${loadingOnly?"avatar.setExpression('加载',true);":''}${pointerOnly?"behavior.perform({type:'perform',intent:'explain',gesture:'pointer',durationMs:20000});":''}${cuddle?"behavior.perform({type:'perform',intent:'cuddle',emotion:'happy',durationMs:20000});":''}${idea?"behavior.perform({type:'perform',intent:'idea',emotion:'happy',gesture:'pointer',durationMs:6000,replyIntro:true});behavior.setState('idle');":''}${talk?"behavior.previewBodyAnimation('talk',{durationMs:20000,intensity:.7});":''}true`);
     await wait(settleMs);
     await evaluate(`benchMark(${JSON.stringify(name)});glCollect=true;true`);
     await wait(sampleMs);
     await evaluate(`glCollect=false;benchMark(${JSON.stringify(name+'-end')});true`);
   };
-  if(suite==='cache'){
+  if(suite==='state'){
+    await phase('idle',{state:'idle'});await phase('thinking-full');await phase('idea-reply-intro-extended',{idea:true});
+    await phase('speaking-talk',{state:'speaking',talk:true});await phase('cuddle',{state:'idle',cuddle:true});
+  }else if(suite==='cache'){
     await phase('idle',{state:'idle'});await phase('thinking-full');await phase('cuddle',{state:'idle',cuddle:true});
   }else{
   await phase('idle',{state:'idle'});
@@ -227,6 +241,14 @@ async function main() {
   sample();clearInterval(sampleTimer);clearInterval(loopTimer);
   const result=await evaluate('benchSnapshot()');
   progress('snapshot received');
+  const verificationErrors=[];
+  if(result.glErrorAfterMeasurement!==0)verificationErrors.push(`WebGL error after measurement: ${result.glErrorAfterMeasurement}`);
+  if(cacheMode==='legacy'&&result.stats?.meshBufferCacheEnabled)verificationErrors.push('Mesh buffer caching unexpectedly enabled in the state-snapshot comparison');
+  if(preserveState==='off'&&result.stats?.ownedGlStateEnabled!==true)verificationErrors.push('Owned GL state was not actually enabled');
+  if(preserveState==='on'&&result.stats?.ownedGlStateEnabled===true)verificationErrors.push('Legacy state preservation was not actually selected');
+  if(glProfile&&preserveState==='off')for(const [name,group]of Object.entries(result.glGroups))for(const query of ['getParameter','getVertexAttrib','isEnabled']){
+    if(group[query]?.count)verificationErrors.push(`${name}: unexpected steady-state ${query} calls: ${group[query].count}`);
+  }
   const summaries=[];
   for(let i=0;i<result.phases.length-1;i++){
     const p=result.phases[i],next=result.phases[i+1];if(p.name.endsWith('-end'))continue;const times=result.frames.slice(p.frame,next.frame);
@@ -236,9 +258,9 @@ async function main() {
   const finalMetrics=memory.at(-1).processes;
   const peakKb=type=>Math.max(...memory.map(sample=>sample.processes.filter(p=>!type||p.type===type).reduce((sum,p)=>sum+p.memory.workingSetSize,0)));
   const shapeSummary=result.phases.filter(p=>p.name!=='end').map(p=>{const rows=shapeEvents.filter(e=>e.phase===p.name),applied=rows.filter(e=>e.applied);return{name:p.name,geometryMessages:rows.length,shapeChanges:applied.length,shapeCallMs:stats(applied.map(e=>e.duration)),mainLoopMs:stats(loopSamples.filter(e=>e.phase===p.name).map(e=>e.ms))};});
-  const report={variant,sourceRevision,glProfile,cacheMode,suite,sampleMs,settleMs,cacheModuleSha256:cacheSource?createHash('sha256').update(cacheSource).digest('hex'):null,adapterSha256:createHash('sha256').update(snapshot).digest('hex'),afterUsesWorkingTree:variant==='after',isolated:true,noModelOrTtsRequests:true,fixtureMode:'Visible native transparent window; GL methods wrapped only by probe; A/B foreground and loading; CPU method timings are not GPU completion timings' ,
-    window:{width,height,cssWidth,cssHeight,scale,centerYFactor,forcedDpr:dpr,opacity:win.getOpacity(),visible:win.isVisible(),focusable:win.isFocusable(),bounds:win.getBounds()},schedulingFlags:{backgroundThrottling:false,disableBackgroundTimerThrottling:app.commandLine.hasSwitch('disable-background-timer-throttling'),disableRendererBackgrounding:app.commandLine.hasSwitch('disable-renderer-backgrounding')},options,modelTextures,modelLoadMs:result.loadMs,canvas:result.canvas,context:result.context,adapterStats:result.stats,glGroups:result.glGroups,meshGroups:result.meshGroups,profileGroups:result.profileGroups,
-    shapeSummary,rendererPrioritySamples,documentVisibility:result.documentVisibility,visibilityEvents:result.visibilityEvents,gpuFeatures:app.getGPUFeatureStatus(),renderer:result.renderer,phaseResults:summaries,memory:{units:'KiB',peakAllWorkingSet:peakKb(),peakRendererWorkingSet:peakKb('Tab'),peakGpuWorkingSet:peakKb('GPU'),finalProcesses:finalMetrics},errors:[...result.errors,...consoleErrors]};
+  const report={variant,sourceRevision,glProfile,cacheMode,preserveGlState:preserveState==='on',suite,sampleMs,settleMs,cacheModuleSha256:cacheSource?createHash('sha256').update(cacheSource).digest('hex'):null,ownedStateModuleSha256:ownedSource?createHash('sha256').update(ownedSource).digest('hex'):null,adapterSha256:createHash('sha256').update(snapshot).digest('hex'),afterUsesWorkingTree:variant==='after',isolated:true,noModelOrTtsRequests:true,fixtureMode:'Visible native transparent window; GL methods wrapped only when requested; CPU/frame-clock timings are not GPU completion or final DWM presentation timings' ,
+    window:{width,height,cssWidth,cssHeight,scale,centerYFactor,forcedDpr:dpr,opacity:win.getOpacity(),visible:win.isVisible(),focusable:win.isFocusable(),bounds:win.getBounds()},schedulingFlags:{backgroundThrottling:false,disableBackgroundTimerThrottling:app.commandLine.hasSwitch('disable-background-timer-throttling'),disableRendererBackgrounding:app.commandLine.hasSwitch('disable-renderer-backgrounding')},options,ideaTest:suite==='state'?{durationMs:6000,order:'setState(thinking), perform(idea, replyIntro), setState(idle)',note:'Duration extended from the production 3400ms only to obtain a stable measurement window'}:null,modelTextures,modelLoadMs:result.loadMs,canvas:result.canvas,context:result.context,glErrorAfterMeasurement:result.glErrorAfterMeasurement,adapterStats:result.stats,glGroups:result.glGroups,meshGroups:result.meshGroups,profileGroups:result.profileGroups,
+    shapeSummary,rendererPrioritySamples,documentVisibility:result.documentVisibility,visibilityEvents:result.visibilityEvents,gpuFeatures:app.getGPUFeatureStatus(),renderer:result.renderer,phaseResults:summaries,memory:{units:'KiB',peakAllWorkingSet:peakKb(),peakRendererWorkingSet:peakKb('Tab'),peakGpuWorkingSet:peakKb('GPU'),finalProcesses:finalMetrics},errors:[...result.errors,...consoleErrors,...verificationErrors]};
   await fs.writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2));
   await fs.writeFile(path.join(output,'samples.json'),JSON.stringify({memory,shapeEvents,loopSamples,frameTimes:result.frames,frameCosts:result.costs},null,2));
   await fs.writeFile(path.join(output,'model.png'),(await win.webContents.capturePage()).toPNG());

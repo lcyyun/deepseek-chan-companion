@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { totalmem, getPriority } = require('node:os');
 const { performance } = require('node:perf_hooks');
+const { randomUUID } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const zlib = require('node:zlib');
 const { buildInputShape, computePetZoom, createPetPlacement, restorePetPlacement, constrainPosition, referenceBody, transformRegion, clipRegion, constrainToolBounds, layoutToolBounds, createToolAnchor, petTopmostForFocus, validRect } = require('./pet-input.cjs');
@@ -30,8 +31,9 @@ if (!app.isPackaged && path.resolve(app.getPath('userData')) === path.resolve(de
 let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;
 let config = {}, dataDir, configFile, failures = [], lastSaved = 0, setupRequired = false;
 let sanitizeModelTuning, normalizeRenderMode, resolveRenderQuality;
-function currentRenderQuality() { return {...resolveRenderQuality(config.renderQuality,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true}; }
+function currentRenderQuality() { return {...resolveRenderQuality(config.renderQuality,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true,preserveGlState:config.preserveGlState===true}; }
 const renderDiagnostics = createRenderDiagnostics();
+const renderRunId=randomUUID();let renderGeneration=0;
 const nativeRenderStats = { shapeChanges:0, shapeTotalMs:0, shapeMaxMs:0 };
 let performanceHostCache, performanceHostAt=0;
 function renderingDiagnostics(options={}) {
@@ -57,6 +59,7 @@ function renderingDiagnostics(options={}) {
     performanceHostAt=now;
   }
   return renderDiagnostics.snapshot({...performanceHostCache,
+    runId:renderRunId,renderGeneration,
     visible:!!pet&&!pet.isDestroyed()&&pet.isVisible(),
     petFocused:!!pet&&!pet.isDestroyed()&&pet.isFocused?.()===true,
     chatFocused:!!chat&&!chat.isDestroyed()&&chat.isFocused?.()===true,
@@ -476,7 +479,7 @@ else {
     toggle=makeWindow('toggle',{width:58,height:58,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
     chat=makeWindow('chat',{width:420,height:560,transparent:false,backgroundColor:'#f7f9fc',alwaysOnTop:true,skipTaskbar:true,resizable:false});
     updateInputShape();
-    pet.webContents.on('did-start-loading',()=>{suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
+    pet.webContents.on('did-start-loading',()=>{renderGeneration++;renderDiagnostics.reset();suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
     pet.webContents.on('render-process-gone',()=>{petPointer.clear();pointerLocked=false;updateInputShape();});
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
     pet.on('hide',onPetHide);
@@ -514,7 +517,7 @@ else {
     if(process.env.COMPANION_SHOW_CHAT==='1'||setupRequired)chat.once('ready-to-show',()=>chat.show());
   }).catch(error=>{console.error(error);dialog.showErrorBox('大肥鱼启动失败',String(error.message||error));app.quit();});
 }
-ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,setupRequired,modelTuning:config.modelTuning,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality()};});
+ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,setupRequired,modelTuning:config.modelTuning,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality(),renderGeneration};});
 ipcMain.handle('window-control',async(event,action,data)=>{
   if(!roles.has(event.sender.id))throw new Error('未知窗口');
   switch(action){
@@ -540,12 +543,22 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-input-mode':petPointer.clear();config.clickThrough=data===true;saveConfig();updateInputShape();pet.webContents.send('desktop-event',{type:'input-mode',clickThrough:config.clickThrough});return config.clickThrough;
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
-    case 'render-sample':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以提交渲染计数');return renderDiagnostics.update(data);
+    case 'render-sample':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以提交渲染计数');if(data?.renderGeneration!==renderGeneration)return false;return renderDiagnostics.update(data);
+    case 'render-state-snapshots':{
+      if(roles.get(event.sender.id)!=='chat')throw new Error('仅聊天设置可以切换绘制状态');
+      if(typeof data!=='boolean')throw new Error('绘制状态选项无效');
+      if((config.preserveGlState===true)===data)return currentRenderQuality();
+      config.preserveGlState=data;saveConfig();service.dispatch({type:'stop'});renderDiagnostics.reset();
+      if(pet&&!pet.isDestroyed())pet.webContents.reload();
+      const profile=currentRenderQuality();
+      if(chat&&!chat.isDestroyed())chat.webContents.send('desktop-event',{type:'render-quality',profile});
+      return profile;
+    }
     case 'render-buffer-cache':{
       if(roles.get(event.sender.id)!=='chat')throw new Error('仅聊天设置可以切换绘制路径');
       if(typeof data!=='boolean')throw new Error('绘制优化选项无效');
       if((config.cacheMeshBuffers===true)===data)return currentRenderQuality();
-      config.cacheMeshBuffers=data;saveConfig();service.dispatch({type:'stop'});
+      config.cacheMeshBuffers=data;saveConfig();service.dispatch({type:'stop'});renderDiagnostics.reset();
       if(pet&&!pet.isDestroyed())pet.webContents.reload();
       const profile=currentRenderQuality();
       if(chat&&!chat.isDestroyed())chat.webContents.send('desktop-event',{type:'render-quality',profile});
@@ -572,8 +585,8 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'render-quality':{
       if(roles.get(event.sender.id)!=='chat')throw new Error('仅聊天设置可以调整渲染质量');
       if(typeof data!=='string'||normalizeRenderMode(data)!==data)throw new Error('渲染质量选项无效');
-      const profile={...resolveRenderQuality(data,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true};
-      if(config.renderQuality!==data){config.renderQuality=data;saveConfig();service.dispatch({type:'stop'});petPointer.clear();suppressTracking();if(pet&&!pet.isDestroyed())pet.webContents.reload();}
+      const profile={...resolveRenderQuality(data,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true,preserveGlState:config.preserveGlState===true};
+      if(config.renderQuality!==data){config.renderQuality=data;saveConfig();service.dispatch({type:'stop'});renderDiagnostics.reset();petPointer.clear();suppressTracking();if(pet&&!pet.isDestroyed())pet.webContents.reload();}
       if(chat&&!chat.isDestroyed())chat.webContents.send('desktop-event',{type:'render-quality',profile});
       return profile;
     }
@@ -594,7 +607,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'dsh-open':{const status=await connectionFlow().status();if(!status.canOpenDsh)throw new Error('尚未确认这个 DSH 实例的网页地址，请使用已打开的 DSH 窗口。');await shell.openExternal(`http://127.0.0.1:${status.openPort}/`);return true;}
     case 'dsh-open-launcher':{const installation=dshConnect.readInstallation({root:ROOT,dataDir,config,serviceUrl:service.url});if(!installation.valid)throw new Error(installation.message);shell.showItemInFolder(installation.descriptor.launcher);return installation.descriptor.launcher;}
     case 'reset-position':resetPosition();break;
-    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality()};
+    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality(),renderGeneration};
     case 'quit':app.quit();break;
     default:throw new Error('不支持的操作');
   }

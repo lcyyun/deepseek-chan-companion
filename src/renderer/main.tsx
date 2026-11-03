@@ -404,7 +404,7 @@ function Pet(){
     const renderSession=crypto.randomUUID();
     const metricsTimer=setInterval(()=>{
       const stats=runtime.current?.getPerformanceStats?.();if(!stats)return;
-      window.companion?.control('render-sample',{...stats,sampledAtMs:performance.now(),session:renderSession,state:activeState.current,intent:(behavior.current as any)?.action?.intent,documentVisibility:document.visibilityState,focused:document.hasFocus()}).catch(()=>{});
+      window.companion?.control('render-sample',{...stats,sampledAtMs:performance.now(),session:renderSession,renderGeneration:credentials().renderGeneration??0,renderQualityMode:credentials().renderQuality?.mode,renderQualityEffective:credentials().renderQuality?.effective,state:activeState.current,intent:(behavior.current as any)?.action?.intent,documentVisibility:document.visibilityState,focused:document.hasFocus()}).catch(()=>{});
     },2000);
     let lastShape='';const regionsTimer=setInterval(()=>{
       if(!renderActive.current)return;
@@ -542,6 +542,8 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
       <p className="hint">当前：{diagnostics?.renderQuality?.label||'均衡'}。隐藏桌宠时暂停渲染，显示后恢复。切换模式会重新加载模型并停止当前表演，选择后自动保存。</p>
       <label className="check-row"><input type="checkbox" checked={diagnostics?.renderQuality?.cacheMeshBuffers===true} disabled={qualityChanging||!window.companion} onChange={async e=>{setQualityChanging(true);try{const profile=await window.companion?.control('render-buffer-cache',e.target.checked);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('绘制设置已保存，模型正在重新加载。');}catch(error:any){onError(error.message);}finally{setQualityChanging(false);}}}/>GPU 数据复用（实验）</label>
       <p className="hint">减少重复上传，可能增加 CPU 和内存开销。默认关闭，可在卡顿场景对照；切换时重新加载模型。</p>
+      <label className="check-row"><input type="checkbox" checked={diagnostics?.renderQuality?.preserveGlState===true} disabled={qualityChanging||!window.companion} onChange={async e=>{setQualityChanging(true);try{const profile=await window.companion?.control('render-state-snapshots',e.target.checked);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('绘制状态设置已保存，模型正在重新加载。');}catch(error:any){onError(error.message);}finally{setQualityChanging(false);}}}/>保留 SDK 状态快照（兼容对照）</label>
+      <p className="hint">默认关闭，由桌宠直接管理画布状态，减少同步查询。如需对照旧路径可勾选；切换后请等模型重新加载。</p>
       <div className="button-row"><button disabled={!window.companion} onClick={async()=>{try{const report:any=await window.companion?.control('copy-performance');setResult(report?.available?'性能诊断已复制，请把内容发给排查问题的智能体。':'尚未收到模型渲染数据；诊断已复制，请等模型显示后再试。');}catch(e:any){onError(e.message);}}}>复制性能诊断</button></div>
       <p className="hint">复现卡顿后复制，可查看实际渲染设备和帧间隔。不包含聊天、密钥或模型路径。</p>
     </details>

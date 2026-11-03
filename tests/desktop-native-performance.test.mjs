@@ -134,7 +134,7 @@ test('only chat may change render quality; saved mode is exposed before a contro
 });
 
 test('performance samples are pet-only and copied diagnostics exclude pairing and private profile fields',async()=>{
-  const f=fixture(),packet={session:'renderer',sampledAtMs:1000,frames:30,state:'thinking',renderActive:true,gpuRenderer:'ANGLE (NVIDIA)',token:'do-not-copy',modelRoot:'private-model'};
+  const f=fixture(),packet={session:'renderer',renderGeneration:0,sampledAtMs:1000,frames:30,state:'thinking',renderActive:true,gpuRenderer:'ANGLE (NVIDIA)',token:'do-not-copy',modelRoot:'private-model'};
   await assert.rejects(f.invoke('chat','render-sample',packet),/仅桌宠/);
   assert.equal(await f.invoke('pet','render-sample',packet),true);
   await assert.rejects(f.invoke('pet','copy-performance'),/设置/);
@@ -142,6 +142,18 @@ test('performance samples are pet-only and copied diagnostics exclude pairing an
   assert.equal(result.gpuRenderer,'ANGLE (NVIDIA)');assert.equal(f.copied.length,1);
   assert.doesNotMatch(f.copied[0],/do-not-copy|private-model|fixture-token|modelRoot|dataDir/);
   assert.equal(JSON.parse(f.copied[0]).samples.length,1);assert.equal(f.writes.length,0);
+});
+
+test('owned canvas state is default, compatibility snapshots are explicit and late samples are rejected',async()=>{
+  const f=fixture();assert.equal(f.bootstrap('pet').renderQuality.preserveGlState,false);
+  await assert.rejects(f.invoke('pet','render-state-snapshots',true),/仅聊天/);
+  await assert.rejects(f.invoke('chat','render-state-snapshots',1),/无效/);
+  assert.equal(await f.invoke('pet','render-sample',{session:'late',renderGeneration:999,sampledAtMs:1000,frames:1}),false);
+  f.api.hidePet();const profile=await f.invoke('chat','render-state-snapshots',true);
+  assert.equal(profile.preserveGlState,true);assert.equal(f.counts.reloads,1);assert.equal(f.api.requested(),false);
+  assert.equal((await f.invoke('chat','render-quality','quality')).preserveGlState,true);
+  const restored=await f.invoke('chat','render-state-snapshots',false);
+  assert.equal(restored.preserveGlState,false);assert.equal(restored.mode,'quality');
 });
 
 test('GPU buffer reuse can be compared with legacy rendering without changing quality or hidden intent',async()=>{
