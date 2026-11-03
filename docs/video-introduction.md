@@ -1,10 +1,32 @@
 # 大肥鱼桌宠：视频记录与参考稿
 
-文档按应用 **0.21.1** 核对，日期：**2026-11-03**。[文档导航](README.md) · [当前使用方法](../README.md)
+文档按应用 **0.24.0** 核对，日期：**2026-11-03**。[文档导航](README.md) · [当前使用方法](../README.md)
 
-介绍视频已经完成。最新本机成片为原视频素材工程内的 `output/video014/final-v4-2min-pipe/大肥鱼_两分钟介绍_钢管音效版.mp4`，约 **2 分 01 秒**，1920×1080、30fps，带中文字幕和章节。原 4 分 05 秒完整版仍保留在 `final-v3`。`video014` 是最初制作时的工程目录名，不表示当前应用仍是 0.14；素材工程与目前的软件源码目录可以位于不同位置。
+最新高清成片位于当前源码工程的 `output/video1080/final/大肥鱼_两分钟介绍_1080p高清版.mp4`，约 **2 分 01 秒**，1920×1080、30fps，带中文字幕和章节。角色与界面重新录制，原诗歌剧配音、配乐和钢管音效保持原音轨。原素材工程中的两分钟钢管版和 4 分 05 秒完整版继续保留；`video014` 是最初制作时的目录名，不表示当前应用仍是 0.14。
 
-成片使用真实 Cubism/行为控制器的脚本演示和实际界面素材，配音为用户提供的诗歌剧／曼波 GPT-SoVITS v4 模型。悬浮球菜单段采用明确标注的操作示意。它不是 DSH 自主决策录像；沿用的早期界面素材也不作为 0.21.1 连接设置的逐项说明。
+成片使用真实 Cubism/行为控制器的脚本演示和实际界面素材，配音为用户提供的诗歌剧／曼波 GPT-SoVITS v4 模型。悬浮球菜单段采用明确标注的操作示意，不是 DSH 自主决策录像。高清版界面来自当前用户版，连接状态如实显示为未连接；安装画面说明 Releases 的用户版和开发版。
+
+## 1080p 高清重录
+
+此前文件虽为 1920×1080，但录制与多次剪辑经过 VP8、H.264 等多代有损压缩。旧模型 CSS 画布为 750×1200，随后合成为更大的角色区域；历史 DPR 未记录，不能将 CSS 尺寸当作当时实际渲染像素。
+
+新录制显式使用 1500×2400 WebGL 画布、8192 最大贴图与抗锯齿，动作和物理按 60Hz 推进，逐帧输出 1920×1080、30fps 无损 RGB 素材。它是当前模型的离线脚本表演，不是对旧视频放大或插帧。口型使用原 WAV 的音频能量驱动；录制时不调用真实大模型或播放声音。
+
+当前 UI 以最终内框 1504×846 原生捕获，菜单从官方 SVG 与代码绘制为 960×540 的明确示意；不放大原 58 像素悬浮球截图。中间合成保持 RGB/FFV1 无损，最终统一绘制字幕、转换 BT.709/yuv420p，并以 H.264 CRF15/slow 编码一次。最终原 AAC 音轨直接复制并校验哈希，37 条字幕与 7 个章节保持原时间线；总计 3636 帧、121.2 秒。
+
+摸头段另行对齐“松手以后”的旁白：原音频提示约在素材 7.8267 秒，重录实际松手约 7.8333 秒，末段展示收手，保留两秒后的闭眼抚胸过程。
+
+复建需要原 `video014` 素材工程、已有旁白/图文、用户版前端构建、本地模型、普通 Electron 环境、Node.js、Python/Pillow 和 ffmpeg。以下命令使用全新的默认 `output/video1080`；已交付成片存在时请另设输出目录并相应调整各入口路径：
+
+```powershell
+python scripts/rebuild-promo-hd.py --project "<原素材工程>/output/video014" --prepare
+electron scripts/record-promo-hq.cjs --manifest=output/video1080/capture-jobs.json --out=output/video1080/capture --model="<模型目录>"
+electron scripts/record-promo-hq.cjs --manifest=output/video1080/capture-jobs-pet-sync.json --out=output/video1080/capture-pet-sync --model="<模型目录>"
+electron scripts/record-ui-promo-hq.cjs --static-root=output/build/user --out=output/video1080/ui
+python scripts/rebuild-promo-hd.py --project "<原素材工程>/output/video014" --assemble
+```
+
+录制使用独立 profile 和随机回环服务，不访问用户真实聊天或账号。素材、成片、模型与配音权重留在忽略目录，不随源码推送。成片校验位于 `output/video1080/final/qa/validation.json`，包括分辨率、帧数、完整解码和原音轨一致性。
 
 ## 已完成的成片
 
@@ -17,6 +39,7 @@
 | `output/video014/final-v3` | 保留彩蛋，再增加悬浮球右键快捷功能 | 约 4:05 |
 | `output/video014/final-v4-2min` | 两分钟重点版，保留更多使用演示 | 约 2:01 |
 | `output/video014/final-v4-2min-pipe` | 按用户要求将敲盆段改为经典钢管声，复用两分钟版画面 | 约 2:01 |
+| 当前源码工程 `output/video1080/final` | 高清重录角色与当前 UI，保留原音轨，安装卡更新为 Releases 两版 | 约 2:01 |
 
 各版本目录含成片、`captions.srt`、`chapters.txt`、`cover.png`、`edit.json`、逐段 `clips/` 和验证记录。完整版 `final-v3` 的彩蛋约从 **1:41** 开始，悬浮球菜单约从 **2:45** 开始；两分钟版的对应位置为 **0:52** 和 **1:15**。媒体检查不替代某个 DSH 账号的真实对话验收。
 
@@ -98,13 +121,13 @@ python scripts/shorten-promo.py --project "<原视频工程>/output/video014" --
 
 ## 给观众自己的智能体：简短安装提示
 
-仓库已于 2026-11-03 改为公开，可向观众提供下方地址。目前没有单独发布 GitHub Release 安装包，安装智能体应按 README 从源码构建。
+仓库与 [v0.24.0 Releases](https://github.com/lcyyun/deepseek-chan-companion/releases/tag/v0.24.0) 已公开。普通使用下载 `user` 用户版；需要修改代码时选择附源码的 `developer` 开发版。
 
 ~~~text
 请根据这个仓库的 README，在我的 Windows 电脑上安装并启动“大肥鱼 · DeepSeek-chan”桌宠：
 https://github.com/lcyyun/deepseek-chan-companion
 
-先检查所需环境，按仓库说明准备依赖与 Live2D 运行库，再启动程序。
+先从 Releases 选择用户纯净版并完整解压；如果我要修改代码，再选择开发版并准备开发依赖。
 模型使用我自己取得的完整本地目录，不修改或重新发布原模型文件。
 先沿用已有手动来源；全新安装优先使用自动 DSH 模式，只连 MCP 时不要误判聊天桥已就绪。没有可用 DSH 时保持未连接，需要我明确选择才接入 Codex 或其他服务。声音先用默认晓伊；需要离线时再选 Windows 中文系统语音，或使用我提供的 TTS 服务。
 最后验证：模型显示、摸头、一个独立表情、一个肢体动作，以及一次带语音的短回复。
@@ -148,7 +171,7 @@ AI 配音模型分享：顾不快付通，B 站 `BV1fobL6nEjG`；推理框架：
 - 用“实际语音驱动开合”，不写“逐字精准口型”。当前是音频能量驱动，尚非完整音素口型。
 - 用“支持 Chrome / Edge 主动分享页面”，不写“自动看见整个屏幕”。
 - 用“可连接智能体和语音服务”，不写“整套 AI 无需网络或完全免费”。本地摸头和敲盆无需大模型请求，对话和语音取决于配置。
-- 当前源码仓库公开，可说“源码可直接访问”；不要把源码公开等同于已经发布安装包，或取得模型、音效的再分发授权。
+- 当前源码与两版 Releases 已公开；模型和素材仍遵循各自许可，应用源码公开不改变它们的授权范围。
 
 ## 已制作的增补段落
 
