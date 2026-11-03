@@ -1,6 +1,7 @@
 {
   "name": "deepseek-chan-companion",
-  "version": "0.23.1",
+  "version": "0.24.0",
+  "companionEdition": "developer",
   "private": true,
   "description": "大肥鱼 · DeepSeek-chan 本地桌面伙伴",
   "main": "desktop/main.cjs",

@@ -7,6 +7,7 @@
 const { app, screen, dialog, clipboard, session, contentTracing } = require('electron');
 const fs = require('node:fs'), path = require('node:path'), net = require('node:net');
 const root=path.resolve(__dirname,'..');
+const {readBenchmarkRevision}=require('./benchmark-source.cjs');
 const arg=(key,fallback)=>process.argv.find(value=>value.startsWith(`--${key}=`))?.slice(key.length+3)||fallback;
 const tag=arg('tag','baseline');if(!/^[a-z0-9-]+$/.test(tag))throw Error('Invalid tag');
 const output=path.join(root,'output/compositor-probe',tag),directory=path.join(output,'profile');
@@ -18,7 +19,7 @@ fs.mkdirSync(directory,{recursive:true});app.setPath('userData',directory);
 app.commandLine.appendSwitch('force-device-scale-factor',arg('dpr','1.5'));
 const windows=new Map(),errors=[],nativeCalls=[],focusEvents=[];let variant='normal',currentPhase='startup',started=false,trace=false;
 const fingerprint=file=>require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(root,file))).digest('hex');
-const report={sourceRevision:require('node:child_process').execFileSync('git',['rev-parse','HEAD'],{cwd:root,windowsHide:true,encoding:'utf8'}).trim(),
+const report={sourceRevision:readBenchmarkRevision({root}),
   sourceHashes:Object.fromEntries(['desktop/main.cjs','desktop/preload.cjs','src/renderer/main.tsx','src/renderer/live2d.ts','dist/index.html'].map(file=>[file,fingerprint(file)])),
   isolated:true,productionEntry:true,errors,phases:[],focusEvents,createdAt:new Date().toISOString()};
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));

@@ -1,6 +1,6 @@
 # 图标来源与格式
 
-按 **0.18.0** 核对：**2026-11-01**。[文档导航](README.md)
+按 **0.18.0** 核对：**2026-11-01**。[文档导航](https://github.com/lcyyun/deepseek-chan-companion/blob/main/docs/README.md)
 
 本次核对下列本地文件的尺寸／校验记录及源码使用位置；图标资产没有因对话来源或菜单更新而更换。
 

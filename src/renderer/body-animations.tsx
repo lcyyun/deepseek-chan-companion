@@ -13,7 +13,7 @@ const groups = [
 export function BodyAnimationPreviews({ onError }: { onError: (message: string) => void }) {
   const send = (command: object) => api('/api/command', command).catch(error => onError(error.message));
   return <div className="body-animation-previews">
-    <div className="section-intro"><h2>肢体动画</h2><p>先选一段连续讲述，或单独检查左右手势。左右以画面为准，表情可在「小表情」中另选。</p></div>
+    <div className="section-intro"><h2>肢体动画</h2><p>选一段连续讲述，或单独播放左右手势。左右以画面为准，表情可在「小表情」中另选。</p></div>
     {groups.map(group => <section key={group.title} className="body-animation-group"><h3 className="reaction-heading">{group.title}</h3>
     <div className="action-grid">{BODY_ANIMATION_PRESETS.filter(preset => group.ids.includes(preset.id)).map(preset => <button className="action-card" data-body-animation={preset.id} key={preset.id}
       onClick={() => send({ type: 'body', animation: preset.id, intensity: .8, durationMs: preset.durationMs })}>

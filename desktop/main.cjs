@@ -14,25 +14,34 @@ const { createStablePetShape } = require('./stable-pet-shape.cjs');
 const dshConnect = require('./dsh-connect.cjs');
 const { createRenderDiagnostics, sanitizeGpuTimingStatus } = require('./render-diagnostics.cjs');
 const ROOT = path.resolve(__dirname, '..');
+const {editionConfig,DEVELOPER_CONTROLS}=require('./app-edition.cjs');
+const edition=editionConfig(require(path.join(ROOT,'package.json')).companionEdition);
+const DEVELOPER_TOOLS=edition.developerTools;
+const hotkeysEnabled=!DEVELOPER_TOOLS||process.env.COMPANION_DEV_HOTKEYS==='1';
 const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
-app.setName('大肥鱼 · DeepSeek-chan');
+const previousDefaultProfile=path.join(app.getPath('appData'),app.getName?.()||'deepseek-chan-companion');
+const usesDefaultProfile=path.resolve(app.getPath('userData'))===path.resolve(previousDefaultProfile);
+app.setName(edition.appName);
+app.setAppUserModelId?.(DEVELOPER_TOOLS?'deepseek.chan.companion.developer':'deepseek.chan.companion');
 // Portable builds keep their profile beside the application directory. The
 // installer places both under LocalAppData; moving the EXE alone loses this data.
-const legacyProfile = path.join(app.getPath('appData'), '大肥鱼 · DeepSeek-chan');
-const packagedProfile = path.join(path.dirname(path.dirname(process.execPath)), 'DeepSeek-chan-data');
+const legacyProfile = path.join(app.getPath('appData'), edition.appName);
+const packagedProfile = path.join(path.dirname(path.dirname(process.execPath)), edition.profileDirectory);
 if (app.isPackaged) {
   app.setPath('userData', packagedProfile);
-  require('./profile-migration.cjs').migrateProfile(legacyProfile, packagedProfile);
-}
+  if(!DEVELOPER_TOOLS)require('./profile-migration.cjs').migrateProfile(legacyProfile, packagedProfile);
+} else if(usesDefaultProfile)app.setPath('userData',legacyProfile);
 // A custom userData path (tests/portable hosts) must never read the real profile.
 const defaultProfile = app.isPackaged ? packagedProfile : legacyProfile;
-if (!app.isPackaged && path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
+if (!DEVELOPER_TOOLS && !app.isPackaged && path.resolve(app.getPath('userData')) === path.resolve(defaultProfile)) {
   require('./profile-migration.cjs').migrateProfile(path.join(app.getPath('appData'), '小鲸 · DeepSeek-chan'), defaultProfile);
 }
 let service, pet, toggle, chat, tray, quitting = false, dragMode = false, petTopmost = false, petPinned = false;
 let config = {}, dataDir, configFile, failures = [], lastSaved = 0, setupRequired = false;
 let sanitizeModelTuning, normalizeRenderMode, resolveRenderQuality;
-function currentRenderQuality() { return {...resolveRenderQuality(config.renderQuality,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true,preserveGlState:config.preserveGlState===true}; }
+function currentRenderQuality() { return DEVELOPER_TOOLS
+  ? {...resolveRenderQuality(config.renderQuality,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true,preserveGlState:config.preserveGlState===true}
+  : {...resolveRenderQuality('quality'),cacheMeshBuffers:false,preserveGlState:false}; }
 const renderDiagnostics = createRenderDiagnostics();
 const stablePetShape = createStablePetShape();
 const renderRunId=randomUUID();let renderGeneration=0;
@@ -69,6 +78,7 @@ function acknowledgeGpuTiming(sender,data) {
 const nativeRenderStats = { shapeChanges:0, shapeTotalMs:0, shapeMaxMs:0 };
 let performanceHostCache, performanceHostAt=0;
 function renderingDiagnostics(options={}) {
+  if(!DEVELOPER_TOOLS)return null;
   const now=Date.now();
   if(!performanceHostCache||now-performanceHostAt>2000){
     let featureStatus={},metrics=[],hardwareAcceleration=null;
@@ -203,7 +213,7 @@ function updateInputShape(options) {
   if (ignoreChanged) { pet.setIgnoreMouseEvents(ignored, {forward:true}); ignoredMouseState=ignored; }
   const key=JSON.stringify(rects);
   const changed=key!==shapeKey;
-  if (changed) { try { const began=performance.now();pet.setShape(rects);const ms=performance.now()-began;nativeRenderStats.shapeChanges++;nativeRenderStats.shapeTotalMs+=ms;nativeRenderStats.shapeMaxMs=Math.max(nativeRenderStats.shapeMaxMs,ms);shapeKey=key; } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
+  if (changed) { try { const began=DEVELOPER_TOOLS?performance.now():0;pet.setShape(rects);if(DEVELOPER_TOOLS){const ms=performance.now()-began;nativeRenderStats.shapeChanges++;nativeRenderStats.shapeTotalMs+=ms;nativeRenderStats.shapeMaxMs=Math.max(nativeRenderStats.shapeMaxMs,ms);}shapeKey=key; } catch { /* Topmost controls remain accessible if native shape is unavailable. */ } }
   if(ignoreChanged||options?.forceTools)raiseTools();
 }
 
@@ -393,7 +403,7 @@ function onPetShow() {
 }
 function makeWindow(role, options) {
   const win = new BrowserWindow({show:false,frame:false,backgroundColor:'#00000000',hasShadow:false, ...options,
-    icon:path.join(ROOT,'dist','icons','app.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,autoplayPolicy:'no-user-gesture-required',backgroundThrottling:role!=='pet'}});
+    icon:path.join(ROOT,'dist','icons','app.ico'),webPreferences:{preload:path.join(__dirname,'preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,devTools:DEVELOPER_TOOLS,autoplayPolicy:'no-user-gesture-required',backgroundThrottling:role!=='pet'}});
   // DirectComposition per-pixel transparency is not visible to other Chromium
   // processes' Windows occlusion tracker. A SIMPLE setShape region still gets
   // the full-screen HWND bounds classified as opaque. One alpha step makes the
@@ -401,10 +411,10 @@ function makeWindow(role, options) {
   if (process.platform === 'win32' && role === 'pet') win.setOpacity(254 / 255);
   roles.set(win.webContents.id,role);
   const windowTitle=role==='pet'?'大肥鱼 · 桌宠':role==='toggle'?'大肥鱼 · 聊天开关':'大肥鱼 · 便携聊天';
-  win.setTitle(windowTitle);win.on('page-title-updated',event=>event.preventDefault());
+  win.setTitle(windowTitle+(DEVELOPER_TOOLS?' · 开发版':''));win.on('page-title-updated',event=>event.preventDefault());
   win.webContents.setWindowOpenHandler(({url})=>{openSafe(url);return{action:'deny'};});
   win.webContents.on('will-navigate',(event,url)=>{if(!url.startsWith(service.url+'/')){event.preventDefault();openSafe(url);}});
-  win.webContents.on('console-message',event=>{if(process.env.COMPANION_DEBUG) console.log(`[${role}] ${event.message}`);});
+  win.webContents.on('console-message',event=>{if(DEVELOPER_TOOLS&&process.env.COMPANION_DEBUG) console.log(`[${role}] ${event.message}`);});
   win.webContents.on('render-process-gone',(_event,details)=>console.error(`${role} renderer stopped: ${details.reason}`));
   win.loadURL(`${service.url}/?view=${role}`);
   return win;
@@ -502,6 +512,10 @@ else {
     dataDir=app.getPath('userData');fs.mkdirSync(dataDir,{recursive:true});configFile=path.join(dataDir,'desktop.json');
     let hadConfig=true;
     try{config=JSON.parse(fs.readFileSync(configFile,'utf8'));}catch{config={};hadConfig=false;}
+    if(DEVELOPER_TOOLS){
+      config.dshPort??=edition.dshPort;
+      if(!config.dshHome){config.dshHome=path.join(dataDir,'dsh-home');fs.mkdirSync(config.dshHome,{recursive:true});}
+    }
     if(!hadConfig)config.firstRun=true;
     setupRequired=config.setupCompleted!==true&&(hadConfig===false||config.firstRun===true);
     ({sanitizeModelTuning}=await import(pathToFileURL(path.join(ROOT,'src/shared/model-tuning.mjs')).href));
@@ -509,7 +523,7 @@ else {
     config.modelTuning=sanitizeModelTuning(config.modelTuning);
     petPinned=config.petPinned===true;
     const {createService}=await import(pathToFileURL(path.join(ROOT,'server/index.mjs')).href);
-    service=await createService({port:Number(process.env.COMPANION_PORT)||39181,modelRoot:config.modelRoot||DEFAULT_MODEL,dataDir,staticRoot:path.join(ROOT,'dist'),getRenderingDiagnostics:renderingDiagnostics,
+    service=await createService({port:Number(process.env.COMPANION_PORT)||edition.port,edition:edition.edition,modelRoot:config.modelRoot||DEFAULT_MODEL,dataDir,staticRoot:path.join(ROOT,'dist'),getRenderingDiagnostics:DEVELOPER_TOOLS?renderingDiagnostics:undefined,
       encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Windows凭据加密不可用，暂时无法保存密钥');return safeStorage.encryptString(value);},
       decrypt:value=>safeStorage.decryptString(value)});
     const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();
@@ -554,16 +568,17 @@ else {
     pet.on('close',event=>{if(!quitting){event.preventDefault();pet.hide();}});
     const refreshDisplay=()=>{const display=screen.getAllDisplays().find(item=>item.id===config.petDisplayId)||screen.getPrimaryDisplay();petWorkArea={...display.workArea};config.petDisplayId=display.id;commitPlacement(restorePetPlacement(config,petWorkArea));layoutTools({recoverChat:true});saveConfig();};
     screen.on('display-metrics-changed',refreshDisplay);screen.on('display-removed',refreshDisplay);
-    tray=new Tray(icon());tray.setToolTip('大肥鱼 · DeepSeek-chan');
-    tray.setContextMenu(Menu.buildFromTemplate([{label:'打开聊天   Ctrl+Alt+Space',click:showChat},{label:'显示桌宠',click:showPet},{label:'移动桌宠',click:()=>setDragMode(!dragMode)},{label:'恢复位置',click:resetPosition},{label:'悬浮球跟随桌宠',click:followToggle},{label:'停止说话和动作',click:()=>service.dispatch({type:'stop'})},{type:'separator'},{label:'退出大肥鱼',click:()=>app.quit()}]));
-    tray.on('double-click',showChat);registerKeys();
+    tray=new Tray(icon());tray.setToolTip(edition.appName);
+    tray.setContextMenu(Menu.buildFromTemplate([{label:hotkeysEnabled?'打开聊天   Ctrl+Alt+Space':'打开聊天',click:showChat},{label:'显示桌宠',click:showPet},{label:'移动桌宠',click:()=>setDragMode(!dragMode)},{label:'恢复位置',click:resetPosition},{label:'悬浮球跟随桌宠',click:followToggle},{label:'停止说话和动作',click:()=>service.dispatch({type:'stop'})},{type:'separator'},{label:'退出大肥鱼',click:()=>app.quit()}]));
+    tray.on('double-click',showChat);if(hotkeysEnabled)registerKeys();
     initializeMouseTracking();
     if(process.env.COMPANION_SHOW_CHAT==='1'||setupRequired)chat.once('ready-to-show',()=>chat.show());
   }).catch(error=>{console.error(error);dialog.showErrorBox('大肥鱼启动失败',String(error.message||error));app.quit();});
 }
-ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,setupRequired,modelTuning:config.modelTuning,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality(),renderGeneration};});
+ipcMain.handle('bootstrap',event=>{const role=roles.get(event.sender.id);if(!role)throw new Error('未知窗口');return{url:service.url,token:service.token,role,edition:edition.edition,developerTools:DEVELOPER_TOOLS,hotkeysEnabled,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:config.petPinned===true,setupRequired,modelTuning:config.modelTuning,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality(),renderGeneration};});
 ipcMain.handle('window-control',async(event,action,data)=>{
   if(!roles.has(event.sender.id))throw new Error('未知窗口');
+  if(!DEVELOPER_TOOLS&&DEVELOPER_CONTROLS.has(action))throw new Error('此功能仅在智能体开发版提供。');
   switch(action){
     case 'toggle-chat':showChat();break;
     case 'toggle-menu':if(roles.get(event.sender.id)!=='toggle')throw new Error('仅悬浮球可以打开自身菜单');showToggleMenu();break;
@@ -641,7 +656,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'move-pet':{if(data&&Number.isFinite(data.dx)&&Number.isFinite(data.dy)){const current=petScaleState();const footprint=fullBodyRegion?{...fullBodyRegion,x:fullBodyRegion.x+current.bounds.x-current.position.x,y:fullBodyRegion.y+current.bounds.y-current.position.y}:undefined;const position=constrainPosition({x:current.position.x+Math.max(-2000,Math.min(2000,data.dx)),y:current.position.y+Math.max(-2000,Math.min(2000,data.dy))},petWorkArea,current.scale,footprint);return commitPlacement(createPetPlacement({area:petWorkArea,scale:current.scale,position}));}break;}
     case 'resize-pet':{if(data&&typeof data==='object'&&'factor'in data){if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以使用滚轮缩放');if(!dragMode)return petScaleState();}return resizePet(data);}
     case 'choose-model':{const result=await dialog.showOpenDialog(chat,{title:'选择包含 .model3.json 的模型文件夹',properties:['openDirectory']});if(result.canceled)return null;const folder=result.filePaths[0];if(!fs.readdirSync(folder).some(f=>f.endsWith('.model3.json')))throw new Error('这个文件夹中没有 .model3.json');config.modelRoot=folder;fullBodyRegion=null;delete config.petFootprint;saveConfig();if(service.setModelRoot)await service.setModelRoot(folder);else {app.relaunch();app.quit();}pet.webContents.reload();return folder;}
-    case 'open-extension':await shell.openPath(path.join(ROOT,'extension'));break;
+    case 'open-extension':await shell.openPath(fs.existsSync(path.join(ROOT,'dist','extension'))?path.join(ROOT,'dist','extension'):path.join(ROOT,'extension'));break;
     case 'open-url':openSafe(data);break;
     case 'copy-pairing':clipboard.writeText(service.token);return true;
     case 'copy-text':clipboard.writeText(String(data||''));return true;
@@ -653,7 +668,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'dsh-open':{const status=await connectionFlow().status();if(!status.canOpenDsh)throw new Error('尚未确认这个 DSH 实例的网页地址，请使用已打开的 DSH 窗口。');await shell.openExternal(`http://127.0.0.1:${status.openPort}/`);return true;}
     case 'dsh-open-launcher':{const installation=dshConnect.readInstallation({root:ROOT,dataDir,config,serviceUrl:service.url});if(!installation.valid)throw new Error(installation.message);shell.showItemInFolder(installation.descriptor.launcher);return installation.descriptor.launcher;}
     case 'reset-position':resetPosition();break;
-    case 'diagnostics':return {dataDir,hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,pointerSession:petPointer.state(),petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality(),renderGeneration};
+    case 'diagnostics':return {edition:edition.edition,developerTools:DEVELOPER_TOOLS,hotkeysEnabled,...(DEVELOPER_TOOLS?{dataDir,pointerSession:petPointer.state(),renderGeneration}:{}),hotkeyConflicts:failures,modelRoot:config.modelRoot||DEFAULT_MODEL,clickThrough:config.clickThrough===true,dragMode,petScale:petScaleState(),togglePlacement:togglePlacement(),basinEnabled:config.basinEnabled===true,glassesEnabled:config.glassesEnabled===true,glassesStyle:config.glassesStyle==='monocle'?'monocle':'black',smallFormEnabled:config.smallFormEnabled===true,petPinned:petPinned===true,modelTuning:config.modelTuning,mouseTracking:config.mouseTracking!==false,mouseInputError,renderActive:!!pet&&!pet.isDestroyed()&&pet.isVisible(),renderQuality:currentRenderQuality()};
     case 'quit':app.quit();break;
     default:throw new Error('不支持的操作');
   }

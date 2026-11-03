@@ -60,6 +60,20 @@ test('a service without an Electron diagnostics host returns null', async t => {
   assert.equal(await response.json(), null);
 });
 
+test('user edition disables diagnostic API and sampling while retaining real avatar control and MCP state',async t=>{
+  let calls=0;
+  const {service,request}=await fixture(t,{edition:'user',getRenderingDiagnostics:()=>{calls++;throw Error('Must not sample');}});
+  assert.equal((await fetch(service.url+'/api/performance')).status,401);
+  const response=await request('/api/performance');assert.equal(response.status,404);
+  assert.equal((await response.json()).code,'DEVELOPER_FEATURE_UNAVAILABLE');
+  service.dispatch({type:'state',state:'thinking'});
+  const state=await (await request('/api/state')).json();
+  assert.equal(state.edition,'user');assert.equal(state.rendering,null);assert.equal(state.state,'thinking');
+  assert.equal(typeof state.performance,'object');assert.equal(calls,0);
+  const command=await request('/api/command',{method:'POST',body:JSON.stringify({type:'perform',intent:'agree',emotion:'happy'})});
+  assert.equal(command.status,202);assert.equal(calls,0);
+});
+
 test('a failed diagnostics host cannot break state, commands or chat', async t => {
   let chatCalls = 0;
   const { service, request } = await fixture(t, {

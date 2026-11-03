@@ -18,7 +18,7 @@ export interface AvatarCommand {
 }
 export interface ReplySegment { id?: string; text: string; intent?: AvatarIntent; emotion?: AvatarEmotion; gesture?: string; bodyAnimation?: SpeechGestureId | 'auto' | 'none'; combination?: CombinationId | 'auto' | 'none'; expressionCues?: ExpressionCue[] }
 export interface Reply { id: string; requestId?: string; segments: ReplySegment[]; details?: string; sources?: {title?: string; url: string}[]; }
-export interface Bootstrap { url: string; token: string; role: 'pet'|'toggle'|'chat'; renderActive?: boolean; renderQuality?: RenderQuality; renderGeneration?: number; }
+export interface Bootstrap { url: string; token: string; role: 'pet'|'toggle'|'chat'; edition?: 'user'|'developer'; developerTools?: boolean; hotkeysEnabled?: boolean; renderActive?: boolean; renderQuality?: RenderQuality; renderGeneration?: number; }
 declare global {
   interface Window {
     companion?: {

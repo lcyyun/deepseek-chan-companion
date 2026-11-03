@@ -5,18 +5,19 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import mouseInput from '../desktop/mouse-input.cjs';
+import { parsePackageOptions, USER_DOCUMENTS, DEVELOPMENT_ROOT_FILES, developmentScriptAllowed } from './package-editions.mjs';
 
 const run = promisify(execFile);
 const root = await realpath(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
 const releaseRoot = path.join(root, 'release');
-const args = process.argv.slice(2);
-if (args.length > 1 || args.some(arg => !arg.startsWith('--out-dir='))) throw new Error('Usage: node scripts/package.mjs [--out-dir=release/candidate]');
-const release = args[0] ? path.resolve(root, args[0].slice('--out-dir='.length)) : releaseRoot;
+const { edition, outDir } = parsePackageOptions(process.argv.slice(2));
+const release = path.resolve(root, outDir);
 if (release !== releaseRoot) assertInside(releaseRoot, release);
 const folderName = 'DeepSeek-chan-win32-x64';
 const markerName = '.companion-package.json';
 const runtimeSource = path.join(root, 'node_modules', 'electron', 'dist');
 const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+const buildRoot = path.join(root, 'output', 'build', edition);
 const exists = async value => { try { await access(value); return true; } catch { return false; } };
 
 function contained(parent, value) {
@@ -65,19 +66,30 @@ await checkedExisting(root, release);
 console.log('Preparing the Windows mouse-button observer…');
 await mouseInput.ensureMouseInput();
 
-console.log('Building the interface using the local Vite installation…');
-const buildResult = await run(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build'], { cwd: root, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+// Vite clears its selected output. Validate every ancestor before allowing that
+// mutation, rather than following a pre-existing junction out of the workspace.
+let buildAncestor = root;
+for (const component of path.relative(root, buildRoot).split(path.sep)) {
+  buildAncestor = path.join(buildAncestor, component);
+  if (await exists(buildAncestor)) await checkedExisting(root, buildAncestor);
+  else await mkdir(buildAncestor);
+}
+console.log(`Building the ${edition} interface using the local Vite installation…`);
+const buildResult = await run(process.execPath, [path.join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'build', '--outDir', buildRoot], {
+  cwd: root, env: { ...process.env, COMPANION_EDITION: edition }, windowsHide: true, maxBuffer: 4 * 1024 * 1024,
+});
 if (buildResult.stdout.trim()) console.log(buildResult.stdout.trim());
 if (buildResult.stderr.trim()) console.error(buildResult.stderr.trim());
 
-for (const file of ['dist/index.html', 'dist/vendor/live2dcubismcore.min.js', 'dist/vendor/cubism-framework.js', 'dist/vendor/Cubism-Core-LICENSE.md', 'dist/vendor/Cubism-Framework-LICENSE.md', 'dist/vendor/Cubism-Core-RedistributableFiles.txt']) {
-  if (!(await exists(path.join(root, file)))) throw new Error(`Required runtime asset is missing: ${file}. Run npm run setup:live2d, then retry.`);
+for (const file of ['index.html', 'vendor/live2dcubismcore.min.js', 'vendor/cubism-framework.js', 'vendor/Cubism-Core-LICENSE.md', 'vendor/Cubism-Framework-LICENSE.md', 'vendor/Cubism-Core-RedistributableFiles.txt']) {
+  if (!(await exists(path.join(buildRoot, file)))) throw new Error(`Required runtime asset is missing: ${file}. Run npm run setup:live2d, then retry.`);
 }
+if (JSON.parse(await readFile(path.join(buildRoot, 'edition.json'), 'utf8')).edition !== edition) throw new Error('Renderer edition does not match the requested package.');
 
 const target = assertInside(release, path.join(release, folderName));
 const stage = await mkdtemp(path.join(release, '.package-'));
 await checkedExisting(release, stage);
-const marker = { package: manifest.name, version: manifest.version, workspace: root, createdAt: new Date().toISOString() };
+const marker = { package: manifest.name, version: manifest.version, edition, workspace: root, createdAt: new Date().toISOString() };
 await writeFile(path.join(stage, markerName), JSON.stringify(marker, null, 2));
 let published = false;
 
@@ -89,8 +101,8 @@ try {
   const resourceEditor = await checkedExisting(root, path.join(root, 'node_modules', 'rcedit', 'bin', 'rcedit-x64.exe'));
   await run(resourceEditor, [path.join(stage, 'DeepSeek-chan.exe'),
     '--set-icon', path.join(root, 'public', 'icons', 'app.ico'),
-    '--set-version-string', 'ProductName', '大肥鱼 · DeepSeek-chan',
-    '--set-version-string', 'FileDescription', '大肥鱼 · DeepSeek-chan 桌面伙伴',
+    '--set-version-string', 'ProductName', edition === 'developer' ? '大肥鱼 · 开发版' : '大肥鱼 · DeepSeek-chan',
+    '--set-version-string', 'FileDescription', edition === 'developer' ? '大肥鱼 · 智能体开发版' : '大肥鱼 · DeepSeek-chan 桌面伙伴',
     '--set-version-string', 'OriginalFilename', 'DeepSeek-chan.exe',
     '--set-version-string', 'InternalName', 'DeepSeek-chan',
     '--set-version-string', 'CompanyName', '',
@@ -99,13 +111,37 @@ try {
   const appRoot = path.join(stage, 'resources', 'app');
   await mkdir(appRoot, { recursive: true });
 
-  for (const item of ['desktop', 'server', 'dist', 'extension', 'integrations', 'docs', 'src/shared', 'package.json', 'README.md']) {
+  const copyOptions = { recursive: true, dereference: false, filter: source => edition === 'developer' || !source.endsWith('.map') };
+  for (const item of ['desktop', 'server', 'integrations', 'src/shared']) {
     const source = path.join(root, item);
     await checkedExisting(root, source);
-    await cp(source, path.join(appRoot, item), { recursive: true, dereference: false });
+    await cp(source, path.join(appRoot, item), copyOptions);
   }
-  await cp(path.join(root, 'README.md'), path.join(stage, 'README.md'));
-  await cp(path.join(root, 'docs'), path.join(stage, 'docs'), { recursive: true });
+  await cp(buildRoot, path.join(appRoot, 'dist'), copyOptions);
+  await cp(path.join(buildRoot, 'extension'), path.join(appRoot, 'extension'), copyOptions);
+  const stagedManifest = { ...manifest, companionEdition: edition };
+  if (edition === 'user') { delete stagedManifest.devDependencies; delete stagedManifest.scripts; }
+  await writeFile(path.join(appRoot, 'package.json'), JSON.stringify(stagedManifest, null, 2) + '\n');
+  const guide = path.join(root, 'docs', `${edition === 'user' ? 'user' : 'developer'}-guide.md`);
+  await cp(guide, path.join(stage, 'README.md'));
+  await cp(edition === 'user' ? guide : path.join(root, 'README.md'), path.join(appRoot, 'README.md'));
+  if (edition === 'developer') {
+    for (const item of ['src', 'tests', 'public', ...DEVELOPMENT_ROOT_FILES]) {
+      await checkedExisting(root, path.join(root, item));
+      await cp(path.join(root, item), path.join(appRoot, item), copyOptions);
+    }
+    await mkdir(path.join(appRoot, 'scripts'), { recursive: true });
+    for (const item of await readdir(path.join(root, 'scripts'))) if (developmentScriptAllowed(item)) {
+      await checkedExisting(root, path.join(root, 'scripts', item));
+      await cp(path.join(root, 'scripts', item), path.join(appRoot, 'scripts', item), copyOptions);
+    }
+    for (const destination of [path.join(stage, 'docs'), path.join(appRoot, 'docs')]) await cp(path.join(root, 'docs'), destination, copyOptions);
+  } else {
+    for (const destination of [path.join(stage, 'docs'), path.join(appRoot, 'docs')]) {
+      await mkdir(destination, { recursive: true });
+      for (const name of USER_DOCUMENTS) await cp(path.join(root, 'docs', name), path.join(destination, name));
+    }
+  }
 
   const nodeModules = await realpath(path.join(root, 'node_modules'));
   const copied = new Map();
@@ -140,7 +176,7 @@ try {
     // Copy package files; nested dependencies are copied through the closure below.
     await cp(source, destination, {
       recursive: true, dereference: true,
-      filter: candidate => candidate === source || !path.relative(source, candidate).split(path.sep).includes('node_modules'),
+      filter: candidate => (candidate === source || !path.relative(source, candidate).split(path.sep).includes('node_modules')) && (edition === 'developer' || !candidate.endsWith('.map')),
     });
     for (const dependency of Object.keys(pkg.dependencies ?? {})) await copyDependency(dependency, source, Object.hasOwn(pkg.optionalDependencies ?? {}, dependency));
     for (const dependency of Object.keys(pkg.optionalDependencies ?? {})) await copyDependency(dependency, source, true);
@@ -157,6 +193,7 @@ try {
       if (entry.isDirectory()) await audit(file);
       else {
         if (/\.(?:moc3|cmo3|psd|zip)$/i.test(entry.name) || /\.(?:model3|motion3|exp3|physics3|vtube)\.json$/i.test(entry.name)) throw new Error(`A model/source archive must not be included in the package: ${file}`);
+        if (edition === 'user' && entry.name.endsWith('.map')) throw new Error(`User edition must not ship source maps: ${file}`);
         totalBytes += (await stat(file)).size;
         fileCount += 1;
       }
@@ -176,13 +213,14 @@ try {
     if (!codexVersion) throw new Error('The bundled Codex executable did not return its version.');
     console.log(`Bundled native CLI: ${codexVersion}`);
   }
-  await writeFile(path.join(stage, 'package-info.json'), JSON.stringify({ version: manifest.version, platform: 'win32-x64', createdAt: marker.createdAt, fileCount, bytes: totalBytes, codexVersion, productionPackages: [...copied.values()].sort((a, b) => a.name.localeCompare(b.name)), modelIncluded: false }, null, 2));
+  await writeFile(path.join(stage, 'package-info.json'), JSON.stringify({ version: manifest.version, edition, platform: 'win32-x64', createdAt: marker.createdAt, fileCount, bytes: totalBytes, codexVersion, productionPackages: [...copied.values()].sort((a, b) => a.name.localeCompare(b.name)), modelIncluded: false }, null, 2));
 
   let previous;
   if (await exists(target)) {
     await checkedExisting(release, target);
     const oldMarker = JSON.parse(await readFile(path.join(target, markerName), 'utf8'));
     if (oldMarker.workspace !== root || oldMarker.package !== manifest.name) throw new Error(`Existing output is not a package generated by this workspace: ${target}`);
+    if ((oldMarker.edition || 'user') !== edition) throw new Error('The existing output belongs to another edition. Choose a separate --out-dir.');
     previous = assertInside(release, path.join(release, `.previous-${Date.now()}`));
     await rename(target, previous);
   }

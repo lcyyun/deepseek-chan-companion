@@ -4,6 +4,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, mkdir, readdir, realpath, stat } from 'node:fs/promises';
 import { resolve, relative, join, extname, sep } from 'node:path';
 import { createReadStream } from 'node:fs';
+import { createRequire } from 'node:module';
 import { WebSocketServer, WebSocket } from 'ws';
 import { CAPABILITIES, nativePlanWarnings, normalizeCommand, normalizeReply, responseBudget, needsSpeechRepair } from './protocol.mjs';
 import { createSettingsStore } from './settings.mjs';
@@ -13,6 +14,7 @@ import { createDshManager } from './dsh-manager.mjs';
 import { resolveProvider } from './provider-resolution.mjs';
 
 const MAX_BODY = 1024 * 1024;
+const defaultEdition = createRequire(import.meta.url)('../package.json').companionEdition;
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.wasm': 'application/wasm', '.moc3': 'application/octet-stream', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg' };
 const error = (message, code = 'BAD_REQUEST', status = 400) => Object.assign(new Error(message), { code, status });
 
@@ -60,7 +62,8 @@ async function scanManifest(root) {
   return { modelUrl: `/model/${encodeURIComponent(model)}`, modelFile: model, expressions, motions, capabilities: CAPABILITIES };
 }
 
-export async function createService({ port = 39181, modelRoot, dataDir, staticRoot, encrypt, decrypt, chatAdapters, connectionLeaseMs = 65000, getRenderingDiagnostics } = {}) {
+export async function createService({ port = 39181, edition = defaultEdition, modelRoot, dataDir, staticRoot, encrypt, decrypt, chatAdapters, connectionLeaseMs = 65000, getRenderingDiagnostics } = {}) {
+  const developerTools = edition === 'developer';
   if (!dataDir) throw new Error('createService requires dataDir');
   await mkdir(dataDir, { recursive: true });
   const tokenFile = join(dataDir, 'bridge-token');
@@ -160,7 +163,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
   // The desktop supplies an already-whitelisted, synchronous cached snapshot.
   // The service never collects process information or samples the renderer itself.
   function renderingDiagnostics(history = false) {
-    if (typeof getRenderingDiagnostics !== 'function') return null;
+    if (!developerTools || typeof getRenderingDiagnostics !== 'function') return null;
     try {
       const snapshot = getRenderingDiagnostics({ history });
       if (typeof snapshot?.then === 'function') {
@@ -173,7 +176,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     } catch { return { available: false }; }
   }
   function getState() {
-    return { instanceId, bridgeProtocolVersion: 1, state: currentState, status: currentState, busy: Boolean(activeRequest), requestId: activeRequest?.id ?? null, lastCommand, latestReply,
+    return { edition:developerTools?'developer':'user', developerTools, instanceId, bridgeProtocolVersion: 1, state: currentState, status: currentState, busy: Boolean(activeRequest), requestId: activeRequest?.id ?? null, lastCommand, latestReply,
       model: { ready: Boolean(manifest), error: modelError, modelUrl: manifest?.modelUrl || null },
       watch: { ...store.get().watch, sessionId: watchSessionId, hasContext: Boolean(freshContext()) },
       ...connectionState(), rendering: renderingDiagnostics(false),
@@ -306,7 +309,10 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
       if ((path.startsWith('/api/') || path.startsWith('/model/') || path === '/mcp') && !authenticated(req, target)) return send(res, 401, { error: '需要配对码。', code: 'UNAUTHORIZED' });
       if (path === '/mcp') return await handleMcp(req, res, req.method === 'POST' ? await body(req) : undefined, { dispatch, getState, presentNativeReply, capabilities: CAPABILITIES, freshContext, bridgeSeen(name) { noteMcpActivity(name, req); } });
       if (path === '/api/state' && req.method === 'GET') return send(res, 200, getState());
-      if (path === '/api/performance' && req.method === 'GET') return send(res, 200, renderingDiagnostics(true));
+      if (path === '/api/performance' && req.method === 'GET') {
+        if(!developerTools)throw error('此入口仅在智能体开发版提供。','DEVELOPER_FEATURE_UNAVAILABLE',404);
+        return send(res, 200, renderingDiagnostics(true));
+      }
       if (path === '/api/capabilities' && req.method === 'GET') return send(res, 200, CAPABILITIES);
       if (path === '/api/settings' && req.method === 'GET') return send(res, 200, publicSettings());
       if (path === '/api/settings' && ['PUT', 'POST'].includes(req.method)) {
@@ -385,7 +391,7 @@ export async function createService({ port = 39181, modelRoot, dataDir, staticRo
     } catch (err) {
       if (res.headersSent) return res.destroy();
       const status = err.status || (err.code === 'ENOENT' ? 404 : 500);
-      if (process.env.L2D_DEBUG) console.error(err);
+      if (developerTools && process.env.L2D_DEBUG) console.error(err);
       // Do not leak paths, command output, provider response bodies, or credentials.
       const message = err.status || ['INVALID_MODEL_OUTPUT', 'EMPTY_MODEL_OUTPUT', 'CODEX_EXEC_FAILED', 'PROVIDER_HTTP_ERROR'].includes(err.code) ? err.message : status === 404 ? '文件不存在。' : '请求失败，请检查设置后重试。';
       const details = ['api', 'codex', 'dsh'].includes(err.provider) ? { provider: err.provider } : {};

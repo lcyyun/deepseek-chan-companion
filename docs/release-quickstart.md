@@ -1,6 +1,12 @@
 # 发行版快速开始
 
-适用版本：0.23.1；更新日期：2026-11-03。[返回文档导航](README.md)
+适用版本：0.24.0；更新日期：2026-11-03。[返回文档导航](README.md)
+
+## 先选择版本
+
+普通使用选择 `DeepSeek-chan-0.24.0-user-win32-x64.zip`，固定高清并保留完整日常功能；希望让自己的智能体修改源码、分析帧率或试验渲染路径，选择 `DeepSeek-chan-0.24.0-developer-win32-x64.zip`。
+
+两包根目录分别是[用户指南](user-guide.md)与[开发指南](developer-guide.md)的副本。用户版不展示性能与实验工具，开发版包含完整应用源码和测试。以下日常使用步骤以用户版为主；两版不共用数据目录、端口或配对码。
 
 ## 准备
 
@@ -12,12 +18,12 @@
 
 ## 安装与第一次打开
 
-1. 将正式 ZIP **完整解压**到普通用户目录，在解压目录中运行随包的 `Install.ps1`。0.23.1 安装到 `%LOCALAPPDATA%\Programs\DeepSeekChan\app-0.23.1` 并创建快捷方式；以后每个版本有自己的 `app-<版本号>` 目录。不想安装快捷方式，也可以将完整解压目录作为便携版直接使用。不要在 ZIP 预览中运行，也不要只复制 exe。
+1. 将正式 ZIP **完整解压**到普通用户目录，在解压目录中运行随包的 `Install.ps1`。用户版安装到 `%LOCALAPPDATA%\Programs\DeepSeekChan\app-0.24.0`，开发版安装到 `%LOCALAPPDATA%\Programs\DeepSeekChanDeveloper\app-0.24.0` 并创建快捷方式；以后每个版本有自己的 `app-<版本号>` 目录。不想安装快捷方式，也可以将完整解压目录作为便携版直接使用。不要在 ZIP 预览中运行，也不要只复制 exe。
 2. 双击“大肥鱼”快捷方式或 `DeepSeek-chan.exe`，以当前 Windows 用户正常运行，不需要管理员权限或 `--no-sandbox` 参数。
 3. 在首次向导中选择包含 `.model3.json` 的模型文件夹，保留原有贴图、动作和物理文件结构。
 4. 等角色显示后，点击悬浮球打开聊天窗口。先在“小表情”和“肢体”中各预览一个动作，确认模型加载正常。
 
-用户数据放在程序文件夹**旁边**的 `DeepSeek-chan-data`。推荐安装位置对应 `%LOCALAPPDATA%\Programs\DeepSeekChan\DeepSeek-chan-data`。这里保存偏好、配对信息和 DSH 会话引用；模型仍位于用户选择的原文件夹。
+用户数据放在程序文件夹**旁边**的 `DeepSeek-chan-data`。推荐安装位置对应 `%LOCALAPPDATA%\Programs\DeepSeekChan\DeepSeek-chan-data`。这里保存偏好、配对信息和 DSH 会话引用；模型仍位于用户选择的原文件夹。开发版使用自己安装根目录中的 `DeepSeek-chan-developer-data`，不自动迁移用户版数据。
 
 安装脚本可在 PowerShell 中运行：
 
@@ -28,7 +34,7 @@ powershell -NoProfile -File .\Install.ps1
 发布 ZIP 旁的 `.zip.sha256` 文件记录归档校验值；ZIP 内 `release-manifest.json` 记录逐文件校验值。也可以让脚本校验旁边的 ZIP 校验文件并从 ZIP 安装：
 
 ```powershell
-powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.23.1-win32-x64.zip
+powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.24.0-user-win32-x64.zip
 ```
 
 校验值不能代替确认下载来源。当前包未做代码签名。安装脚本只写当前用户目录，不更改安全标签或申请管理员权限。不同版本安装到各自目录，并把快捷方式指向新版本；同版本只有内容完全一致时才允许重复安装，不擅自覆盖异常文件。
@@ -46,7 +52,7 @@ powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.23.1-win32-
 
 从旧版升级到 0.23.0 时，等当前 DSH 工作结束，再正常更新并重新加载桥插件一次。`/api/state` 的 `dsh.promptProtocol` 为 `2` 后，桌宠发到 DSH 的消息只包含本次正文，规约和网页引用由隐藏提示通道提供。仅重启大肥鱼不会替换 DSH 已加载的旧模块；无需删除原会话或 session 文件，旧历史也不会被自动清理。
 
-从已经启用 `promptProtocol:2` 的 0.23.0 升级到 0.23.1，本版渲染和原生窗口优化不需要重新建立 DSH 会话；按原配置正常连接即可。
+从已启用 `promptProtocol:2` 的旧版升级用户版时，保留现有会话与配对数据。若安装路径变化，按界面提示确认新版桥路径；不要为了版本整理另建 B 会话。开发版是独立实例，首次需要为其独立 DSH home 配置模型，具体见开发指南。
 
 默认对话来源是“自动 · 优先 DeepSeek Harness”。桥就绪后显示 DeepSeek Harness；没有聊天桥时显示未连接，不会偷偷改用 Codex。若你曾手动选择其他来源，自动连接会尊重原选择；要改回自动模式，请在设置中选择并保存。
 
@@ -64,7 +70,7 @@ powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.23.1-win32-
 
 - **DSH 仍在运行：** 打开大肥鱼后等待自动恢复，必要时点“连接／重新连接”。无需重新发接入提示词，也不用重启 DSH。
 - **已登记的 DSH 后端没有运行：** 点“启动已配置的 DSH”。这是一次明确的用户操作，后端首次启动需要自己的初始化时间。
-- **DSH 显示正在使用，但未完成桥接：** 展开诊断，按当前实例加载配置；不要另开一套 home 或重复新建会话。
+- **DSH 显示正在使用，但未完成桥接：** 按界面的连接提示确认当前实例与配置；不要另开一套 home 或重复新建会话。
 - **旧桥需要升级：** 在 DSH 工作结束后重载一次新版插件。只更新桌宠画面而未修改桥代码时，不必重载 DSH。
 
 连接恢复不调用大模型。界面上的“已接入 · 空闲”表示暂时没有工具调用，不是断线。桌宠不会为了恢复连接结束现有 DSH 进程。
@@ -82,7 +88,7 @@ powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.23.1-win32-
 
 更新前正常退出大肥鱼，并保留程序目录旁的 `DeepSeek-chan-data`。不要将个人数据、模型、配对码或 DSH 日志放进要发给别人的 ZIP。
 
-运行新版本的安装脚本即可写入新的 `app-<版本号>` 目录，并更新“大肥鱼”快捷方式。旧版本目录保留，各版本共享同一个 `DeepSeek-chan-data`。不要同时运行两个版本。需要回退时，先退出当前版本，再打开旧版本目录中的 exe；旧版读取新版设置的兼容性仍应按该次版本说明检查。
+运行新版本的安装脚本即可写入新的 `app-<版本号>` 目录，并更新“大肥鱼”快捷方式。旧版本目录保留，同一 edition 的版本共用其数据目录。不要同时运行同一 edition 的两个版本；用户版与开发版则按各自端口和 profile 运行，开发版默认不抢日常全局快捷键。需要回退时，先退出当前版本，再打开旧版本目录中的 exe；旧版读取新版设置的兼容性仍应按该次版本说明检查。
 
 看到“同版本目录内容不一致”时，保留现有程序与数据，按提示核对，不要删除整个 `DeepSeekChan` 文件夹。安装脚本不会代替你搬运另一处安装中的私人配置。
 
@@ -98,7 +104,16 @@ powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.23.1-win32-
 
 ## 给发行维护者的检查
 
-1. 执行 `npm run package` 和 `npm run release`，保留 ZIP、旁边的 `.zip.sha256` 与 ZIP 内 `release-manifest.json`；不要把本机 `DeepSeek-chan-data`、模型或日志附在包里。
+1. 分别按以下命令构建与导出两版。保留各自 ZIP、`.zip.sha256` 与包内 `release-manifest.json`，不要混用两版的前端、源码或清单：
+
+   ```powershell
+   npm run package -- --edition=user
+   node scripts/release.mjs --package-dir=release/user/DeepSeek-chan-win32-x64 --out-dir=release/distributables/0.24.0
+   npm run package -- --edition=developer
+   node scripts/release.mjs --package-dir=release/developer/DeepSeek-chan-win32-x64 --out-dir=release/distributables/0.24.0
+   ```
+
+   打包默认用户版。用户包只带日常指南与素材说明；开发包保留完整应用工程、测试及维护文档。两包都不包含个人数据目录、模型、账号或输出日志。
 2. 从最终 ZIP 在普通用户目录安装，验收首次配置、真实 DSH 对话和表演，以及只重启桌宠后的恢复。模拟测试通过不能替代这一步。
 3. 保留 Electron、Chromium、Live2D 与语音模块的随包许可证。模型由用户从授权来源自行准备，不随程序发包。
 4. 当前经典钢管音效来源页未标注独立的再发行许可，详见[音效来源](audio-sources.md)。公开发包前应确认其再发行授权，或替换为可分发音效；目前的本地候选包不能据此宣称已获授权。

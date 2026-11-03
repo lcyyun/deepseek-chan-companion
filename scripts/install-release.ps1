@@ -1,6 +1,6 @@
 param(
   [string]$Archive,
-  [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'Programs\DeepSeekChan'),
+  [string]$InstallRoot,
   [switch]$NoShortcuts
 )
 $ErrorActionPreference = 'Stop'
@@ -60,6 +60,13 @@ function Confirm-PackageDirectory([string]$Directory, $ManifestData) {
     } finally { $inputStream.Dispose() }
   }
 }
+function Confirm-PackageEdition([string]$Directory, $ManifestData) {
+  if ($null -eq $ManifestData.edition) { return } # Legacy user release.
+  $appInfo = Get-Content -LiteralPath (Join-Path $Directory 'resources/app/package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  $packageInfo = Get-Content -LiteralPath (Join-Path $Directory 'package-info.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  $rendererInfo = Get-Content -LiteralPath (Join-Path $Directory 'resources/app/dist/edition.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($appInfo.companionEdition -ne $ManifestData.edition -or $packageInfo.edition -ne $ManifestData.edition -or $rendererInfo.edition -ne $ManifestData.edition) { throw 'Package edition metadata does not match the renderer.' }
+}
 function Write-Shortcut([string]$ShortcutPath, [string]$Executable, [string]$WorkingDirectory) {
   # Windows Known Folders can be redirected through OneDrive/cloud reparse points.
   # Trust that system-selected parent location, but never follow a shortcut leaf link.
@@ -86,8 +93,7 @@ function Write-Shortcut([string]$ShortcutPath, [string]$Executable, [string]$Wor
 }
 
 $programsRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs'))
-$installBase = Assert-ChildPath $programsRoot $InstallRoot
-Assert-NoReparseAncestor $installBase
+$installBase = $null
 $target = $null
 $zip = $null
 $archiveStream = $null
@@ -117,6 +123,28 @@ try {
   }
   $metadata = $manifestText | ConvertFrom-Json
   if ($metadata.schemaVersion -ne 1 -or $metadata.package -ne 'deepseek-chan-companion' -or $metadata.platform -ne 'win32-x64' -or $metadata.version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$' -or $metadata.modelIncluded -ne $false -or $metadata.userDataIncluded -ne $false -or $metadata.files.Count -gt 50000 -or $metadata.files.Count -lt 3 -or $metadata.fileCount -ne $metadata.files.Count) { throw 'Unsupported release manifest.' }
+  # Older releases without an edition are user installations. New releases
+  # explicitly separate application folders, shortcuts and persistent profiles.
+  $edition = if ($null -eq $metadata.edition) { 'user' } else { [string]$metadata.edition }
+  if ($edition -notin @('user', 'developer')) { throw 'Unsupported release edition.' }
+  $defaultFolder = if ($edition -eq 'developer') { 'DeepSeekChanDeveloper' } else { 'DeepSeekChan' }
+  if (-not $InstallRoot) { $InstallRoot = Join-Path $programsRoot $defaultFolder }
+  $installBase = Assert-ChildPath $programsRoot $InstallRoot
+  Assert-NoReparseAncestor $installBase
+  if (Test-Path -LiteralPath $installBase -PathType Container) {
+    foreach ($old in Get-ChildItem -LiteralPath $installBase -Directory -Filter 'app-*' -Force) {
+      Assert-NoReparseAncestor $old.FullName
+      $oldManifestPath = Join-Path $old.FullName 'release-manifest.json'
+      if (Test-Path -LiteralPath $oldManifestPath -PathType Leaf) {
+        Assert-NoReparseAncestor $oldManifestPath
+        $oldRelease = Get-Content -LiteralPath $oldManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($oldRelease.package -eq 'deepseek-chan-companion') {
+          $oldEdition = if ($null -eq $oldRelease.edition) { 'user' } else { [string]$oldRelease.edition }
+          if ($oldEdition -ne $edition) { throw 'Install each edition in its own directory. The existing installation was preserved.' }
+        }
+      }
+    }
+  }
   $target = Assert-ChildPath $installBase (Join-Path $installBase ('app-' + $metadata.version))
   $expected = @{}
   [long]$total = 0
@@ -138,13 +166,14 @@ try {
       if (-not $expected.ContainsKey($entry.FullName) -or $entry.Length -ne $expected[$entry.FullName].bytes) { throw "Unexpected ZIP entry: $($entry.FullName)" }
     }
     if ($seen.Count -ne $expected.Count + 1) { throw 'ZIP file inventory does not match its manifest.' }
-  } else { Confirm-PackageDirectory $PSScriptRoot $metadata }
+  } else { Confirm-PackageDirectory $PSScriptRoot $metadata; Confirm-PackageEdition $PSScriptRoot $metadata }
 
   if (Test-Path -LiteralPath $target) {
     Assert-NoReparseAncestor $target
     $existingManifest = Join-Path $target 'release-manifest.json'
     if (-not (Test-Path -LiteralPath $existingManifest -PathType Leaf) -or (Get-Content -LiteralPath $existingManifest -Raw -Encoding UTF8) -cne $manifestText) { throw "A different installation of this version was preserved at $target. This installer never overwrites existing files. Keep DeepSeek-chan-data, and use a new release version or a new -InstallRoot under LocalAppData\Programs." }
     Confirm-PackageDirectory $target $metadata
+    Confirm-PackageEdition $target $metadata
     Write-Host 'The identical installed release passed all checks; no files were replaced.'
   } else {
     [IO.Directory]::CreateDirectory($installBase) | Out-Null
@@ -165,6 +194,7 @@ try {
     }
     [IO.File]::WriteAllText((Join-Path $staging 'release-manifest.json'), $manifestText, [Text.UTF8Encoding]::new($false))
     Confirm-PackageDirectory $staging $metadata
+    Confirm-PackageEdition $staging $metadata
     # Directory.Move refuses an existing destination. It never merges or overwrites.
     [IO.Directory]::Move($staging, $target)
     $staging = $null
@@ -178,7 +208,8 @@ try {
     $exe = Join-Path $target 'DeepSeek-chan.exe'
     # Keep this script ASCII so Windows PowerShell 5.1 reads it without a BOM.
     $displayName = -join @([char]0x5927, [char]0x80a5, [char]0x9c7c)
-    $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'DeepSeekChan'
+    if ($edition -eq 'developer') { $displayName += ' ' + [char]0x00b7 + ' ' + (-join @([char]0x5f00, [char]0x53d1, [char]0x7248)) }
+    $menu = Join-Path ([Environment]::GetFolderPath('Programs')) $defaultFolder
     Assert-NoReparseAncestor $menu
     [IO.Directory]::CreateDirectory($menu) | Out-Null
     Write-Shortcut (Join-Path $menu ($displayName + '.lnk')) $exe $target
@@ -186,7 +217,8 @@ try {
     Write-Shortcut (Join-Path $desktop ($displayName + '.lnk')) $exe $target
     Write-Host 'Desktop and Start menu shortcuts are ready. Start DeepSeek-chan when you are ready.'
   }
-  Write-Host "User data stays separate: $(Join-Path $installBase 'DeepSeek-chan-data')"
+  $profileFolder = if ($edition -eq 'developer') { 'DeepSeek-chan-developer-data' } else { 'DeepSeek-chan-data' }
+  Write-Host "User data stays separate: $(Join-Path $installBase $profileFolder)"
   Write-Host 'No model, account, token, or personal settings were installed. Configure your own model and agent in the app.'
 } finally {
   if ($zip) { $zip.Dispose() }

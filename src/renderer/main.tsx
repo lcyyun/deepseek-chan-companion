@@ -29,6 +29,9 @@ import './voice-settings.css';
 import './provider-setup.css';
 import './setup.css';
 import { DshConnectPanel, SetupWizard } from './setup-panel';
+import { APP_EDITION, IS_DEVELOPER } from './edition';
+import { DeveloperPerformanceSettings, DeveloperChestPreviews } from './developer-settings';
+import { attachDeveloperRenderDiagnostics } from './developer-render-diagnostics';
 
 const stateNames: Record<string,string>={idle:'在你身边',thinking:'正在想…',listening:'在听你说',speaking:'说给你听',error:'需要看一下设置'};
 const ACTIONS=[
@@ -70,7 +73,7 @@ function SmallFormToggle({onError}:{onError:(message:string)=>void}){
   const [enabled,setEnabled]=useState((credentials() as any).smallFormEnabled===true),[working,setWorking]=useState(false);
   useEffect(()=>{window.companion?.control('diagnostics').then((d:any)=>{if(typeof d?.smallFormEnabled==='boolean')setEnabled(d.smallFormEnabled);});return window.companion?.onEvent(e=>{if(e.type==='small-form')setEnabled(e.enabled===true);});},[]);
   async function toggle(){setWorking(true);try{await window.companion?.control('small-form-enabled',!enabled);setEnabled(!enabled);}catch(e:any){onError(e.message||String(e));}finally{setWorking(false);}}
-  return <button className="basin-toggle" aria-pressed={enabled} disabled={working} onClick={toggle}><span className="basin-icon" aria-hidden="true">🐟</span><span className="basin-label"><strong>{enabled?'小肥鱼形态':'切换小肥鱼形态'}</strong><small>{enabled?'表情和肢体动作仍可正常使用':'开启后换成作者的小体型'}</small></span><span className="basin-switch" aria-hidden="true"/></button>;
+  return <button className="basin-toggle" aria-pressed={enabled} disabled={working} onClick={toggle}><span className="basin-icon" aria-hidden="true">🐟</span><span className="basin-label"><strong>{enabled?'小肥鱼形态':'切换小肥鱼形态'}</strong><small>{enabled?'表情和肢体动作仍可正常使用':'切换成小巧的形态'}</small></span><span className="basin-switch" aria-hidden="true"/></button>;
 }
 
 function TuningPanel({onError}:{onError:(message:string)=>void}){
@@ -350,8 +353,8 @@ function Pet(){
     (async()=>{
       try{
         const manifest=await api('/api/model-manifest');
-        const quality=(credentials() as any).renderQuality||resolveRenderQuality();
-        const handle=await createLive2D(canvas.current!,{manifest,modelBaseUrl:credentials().url+'/model/',fetcher:(url:string)=>fetch(url,{headers:{Authorization:`Bearer ${credentials().token}`}}),...quality,getDiagnosticLabel:()=>{const intent=(behavior.current as any)?.action?.intent;return intent==='idea'?'idea':intent==='think'?'thinking':activeState.current;},onFrame:(dt:number,elapsed:number)=>{behavior.current?.setAudioLevel(speaker.current.level());behavior.current?.update(dt,elapsed);},onError:(e:any)=>setError(String(e?.message||e))} as any);
+        const quality=(credentials() as any).renderQuality||resolveRenderQuality(IS_DEVELOPER?'auto':'quality');
+        const handle=await createLive2D(canvas.current!,{manifest,modelBaseUrl:credentials().url+'/model/',fetcher:(url:string)=>fetch(url,{headers:{Authorization:`Bearer ${credentials().token}`}}),...quality,enableDiagnostics:IS_DEVELOPER,getDiagnosticLabel:()=>{const intent=(behavior.current as any)?.action?.intent;return intent==='idea'?'idea':intent==='think'?'thinking':activeState.current;},onFrame:(dt:number,elapsed:number)=>{behavior.current?.setAudioLevel(speaker.current.level());behavior.current?.update(dt,elapsed);},onError:(e:any)=>setError(String(e?.message||e))} as any);
         handle.setRenderActive(renderActive.current);
         if(disposed){handle.destroy();return;}runtime.current=handle;handle.setModelTuning(modelTuning.current,{replace:true});if(petPlacement.current)handle.setPlacement(petPlacement.current);else handle.setView(petView.current.scale,petView.current.offsetX,petView.current.offsetY);behavior.current=new BehaviorController(handle,{onEvent:(event:any)=>{if(event.type==='error')reportError('动作未能播放：'+(event.message||event.error||'未知原因'));}});behavior.current.setBasinEnabled(basinEnabled.current);behavior.current.setGlassesEnabled(glasses.current.enabled,glasses.current.style);behavior.current.setSmallFormEnabled(smallForm.current);behavior.current.setTuning(modelTuning.current,{replace:true});setReady(true);setState(activeState.current);if(pendingCommand.current){behavior.current.applyCommand(pendingCommand.current);pendingCommand.current=null;}if(pendingReply.current){const item=pendingReply.current;pendingReply.current=null;void presentReply(item);}
       }catch(e:any){setError(e.message||String(e));setStatus('模型加载失败');}
@@ -394,23 +397,14 @@ function Pet(){
       }
       if(e.type==='watch'&&!e.watch?.enabled){clearTimeout(autoWatch.current.timer);autoWatch.current.url='';autoWatch.current.lastAt=0;if(speakingPage.current)stop();}
     });
-    const offDesktop=window.companion?.onEvent(e=>{if(e.type==='render-active'){renderVisibilityRevision.current++;renderActive.current=e.active!==false;runtime.current?.setRenderActive(renderActive.current);}if(e.type==='pet-pointer-release')nativePointerRelease(e);if(e.type==='chest-preview')behavior.current?.previewChestReaction(e.stage);if(e.type==='model-tuning')applyModelTuning(e.tuning);if(e.type==='basin-enabled')applyBasin(e.enabled);if(e.type==='glasses')applyGlasses(e);if(e.type==='small-form')applySmallForm(e.enabled);if(e.type==='pet-scale')applyPetScale(e);if(e.type==='pointer-tracking')trackPointer(e);if(e.type==='mouse-input-unavailable')reportError('鼠标跟随暂不可用：'+e.message);if(e.type==='drag-mode'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);setDrag(e.enabled);}if(e.type==='input-mode'||e.type==='input-cancel'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}});
-    const offGpuTiming=window.companion?.onEvent(e=>{
-      if(e.type!=='start-gpu-timing'||e.renderGeneration!==(credentials().renderGeneration??0))return;
-      const status=runtime.current?.startGpuTiming(e.durationMs)||{supported:false,active:false,reason:'not-ready'};
-      window.companion?.control('gpu-timing-status',{...status,requestId:e.requestId,renderGeneration:e.renderGeneration}).catch(()=>{});
-    });
+    const offDesktop=window.companion?.onEvent(e=>{if(e.type==='render-active'){renderVisibilityRevision.current++;renderActive.current=e.active!==false;runtime.current?.setRenderActive(renderActive.current);}if(e.type==='pet-pointer-release')nativePointerRelease(e);if(IS_DEVELOPER&&e.type==='chest-preview')behavior.current?.previewChestReaction(e.stage);if(e.type==='model-tuning')applyModelTuning(e.tuning);if(e.type==='basin-enabled')applyBasin(e.enabled);if(e.type==='glasses')applyGlasses(e);if(e.type==='small-form')applySmallForm(e.enabled);if(e.type==='pet-scale')applyPetScale(e);if(e.type==='pointer-tracking')trackPointer(e);if(e.type==='mouse-input-unavailable')reportError('鼠标跟随暂不可用：'+e.message);if(e.type==='drag-mode'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);setDrag(e.enabled);}if(e.type==='input-mode'||e.type==='input-cancel'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}});
+    const stopDiagnostics=IS_DEVELOPER?attachDeveloperRenderDiagnostics({getRuntime:()=>runtime.current,getBootstrap:credentials,getState:()=>activeState.current,getIntent:()=>(behavior.current as any)?.action?.intent}):undefined;
     applyPetScale((credentials() as any).petScale);applyBasin((credentials() as any).basinEnabled);applyGlasses({enabled:(credentials() as any).glassesEnabled,style:(credentials() as any).glassesStyle});applySmallForm((credentials() as any).smallFormEnabled);applyModelTuning((credentials() as any).modelTuning);
     const visibilityRevision=renderVisibilityRevision.current;
     window.companion?.control('diagnostics').then((d:any)=>{if(renderVisibilityRevision.current===visibilityRevision&&typeof d?.renderActive==='boolean'){renderActive.current=d.renderActive;runtime.current?.setRenderActive(d.renderActive);}setDrag(!!d?.dragMode);applyPetScale(d?.petScale);if(d?.modelTuning)applyModelTuning(d.modelTuning);if(typeof d?.basinEnabled==='boolean')applyBasin(d.basinEnabled);if(d?.glassesEnabled!==undefined)applyGlasses({enabled:d.glassesEnabled,style:d.glassesStyle});if(typeof d?.smallFormEnabled==='boolean')applySmallForm(d.smallFormEnabled);});
     // The main process owns hide/held-button suppression. A renderer-only latch
     // here can race the release event and swallow the first press after showing.
     const cancel=()=>endPointer(true),visibility=()=>{if(!window.companion){renderActive.current=!document.hidden;runtime.current?.setRenderActive(renderActive.current);}if(document.hidden){cancel();clearGestureTimeline();behavior.current?.clearBodyAnimation();behavior.current?.clearExpressionPreview();behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}};window.addEventListener('blur',cancel);document.addEventListener('visibilitychange',visibility);
-    const renderSession=crypto.randomUUID();
-    const metricsTimer=setInterval(()=>{
-      const stats=runtime.current?.getPerformanceStats?.();if(!stats)return;
-      window.companion?.control('render-sample',{...stats,sampledAtMs:performance.now(),session:renderSession,renderGeneration:credentials().renderGeneration??0,renderQualityMode:credentials().renderQuality?.mode,renderQualityEffective:credentials().renderQuality?.effective,state:activeState.current,intent:(behavior.current as any)?.action?.intent,documentVisibility:document.visibilityState,focused:document.hasFocus()}).catch(()=>{});
-    },2000);
     let lastShape='';const regionsTimer=setInterval(()=>{
       if(!renderActive.current)return;
       const r=runtime.current?.getInteractionRegions(),rect=canvas.current?.getBoundingClientRect();if(!rect)return;
@@ -431,7 +425,7 @@ function Pet(){
       const key=JSON.stringify({revision,head:stableHead,body:stableBody,fullBody:stableFullBody,regions:stableRegions});
       if(key!==lastShape){lastShape=key;if(r)setModelRegion({body:stableBody||body,head:stableHead||head});setGuardRects(stableRegions);window.companion?.control('pet-hit-regions',{regions:stableRegions,body:stableBody,fullBody:stableFullBody,revision}).catch(()=>{});}
     },100);
-    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);dragMoves.current?.dispose();dragMoves.current=null;clearInterval(regionsTimer);clearInterval(metricsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();offGpuTiming?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
+    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);dragMoves.current?.dispose();dragMoves.current=null;clearInterval(regionsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();stopDiagnostics?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
   },[]);
   dragEnabled.current=drag;
   const anchor=modelRegion?.head||{x:(petPlacement.current?.centerX??innerWidth/2)-80,y:(petPlacement.current?.centerY??innerHeight/2)-250,width:160,height:160};
@@ -452,6 +446,7 @@ function Pet(){
 
 interface Message {id:string;role:'user'|'assistant'|'system';text:string;details?:string;sources?:any[];automatic?:boolean;}
 function Chat(){
+  const hotkeysEnabled=(credentials() as any).hotkeysEnabled!==false;
   const desktop=useDesktop(),[tab,setTab]=useState('chat'),[messages,setMessages]=useState<Message[]>([]),[input,setInput]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[settings,setSettings]=useState<any>(null),[watch,setWatch]=useState(false),[pinned,setPinned]=useState((credentials() as any).petPinned===true),[page,setPage]=useState<any>(null),[state,setState]=useState('idle'),[notice,setNotice]=useState(''),[setupRequired,setSetupRequired]=useState((credentials() as any).setupRequired===true);
   const inputRef=useRef<HTMLTextAreaElement>(null),bottom=useRef<HTMLDivElement>(null),seen=useRef(new Set<string>());
   const [connection,setConnection]=useState<any>(null),previousConnection=useRef<any>(null),effectiveRef=useRef('unconfigured'),autoDshNotified=useRef(false);
@@ -481,7 +476,7 @@ function Chat(){
   const provider=chatProviderLabel(providerEffective);
   return <div className="chat-shell">
     {setupRequired&&<SetupWizard onDone={()=>setSetupRequired(false)}/>}
-    <header className="window-header"><div className="brand-icon"><AvatarIcon size={26}/></div><div className="brand-title"><strong>大肥鱼</strong><span>DeepSeek-chan · 桌面伙伴</span></div><button className={'icon-button pin-button'+(pinned?' active':'')} title={pinned?'取消桌宠置顶':'让桌宠悬浮在其他窗口上方'} aria-label={pinned?'取消桌宠置顶':'置顶桌宠'} aria-pressed={pinned} onClick={togglePin}>📌</button><button className="icon-button" title="收起窗口" aria-label="收起窗口" onClick={()=>desktop?.control('hide-chat')}>−</button></header>
+    <header className="window-header"><div className="brand-icon"><AvatarIcon size={26}/></div><div className="brand-title"><strong>大肥鱼</strong><span>{IS_DEVELOPER?'DeepSeek-chan · 开发版':'DeepSeek-chan · 桌面伙伴'}</span></div><button className={'icon-button pin-button'+(pinned?' active':'')} title={pinned?'取消桌宠置顶':'让桌宠悬浮在其他窗口上方'} aria-label={pinned?'取消桌宠置顶':'置顶桌宠'} aria-pressed={pinned} onClick={togglePin}>📌</button><button className="icon-button" title="收起窗口" aria-label="收起窗口" onClick={()=>desktop?.control('hide-chat')}>−</button></header>
     <ConnectionStatus connection={connection}/>
     <nav className="tabs">{[['chat','聊一会'],['actions','肢体'],['expressions','小表情'],['tuning','调节'],['settings','设置']].map(([id,label])=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}>{label}</button>)}</nav>
     {tab==='chat'&&<>
@@ -497,7 +492,7 @@ function Chat(){
       {notice&&<button className="notice" onClick={()=>setNotice('')}>{notice} ×</button>}
       <footer className="composer"><textarea ref={inputRef} aria-label="发给大肥鱼的话" disabled={providerEffective==='dsh'&&!providerReady} placeholder={!providerReady?(providerEffective==='dsh'?connectionMessage(connection):'接入前，也可以先写下想说的话…'):providerEffective==='dsh'?'和 DeepSeek Harness 说点什么…':watch?'这页有什么想一起聊的？':`和 ${provider} 说点什么…`} value={input} onChange={e=>setInput(e.target.value)} rows={2} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();send();}}}/><div className="composer-bottom"><span>Enter 发送 · Shift+Enter 换行</span>{busy?<button className="send stop" onClick={()=>{api('/api/stop',{});setBusy(false);}}>停止</button>:<button className="send" disabled={!input.trim()||!providerReady} title={providerReady?'发送消息':connectionMessage(connection)} onClick={()=>send()}>发送 ↑</button>}</div></footer>
     </>}
-    {tab==='actions'&&<section className="panel-scroll"><BodyAnimationPreviews onError={setError}/><div className="section-intro"><h2>情境组合</h2><p>原有完整表演，包含相应表情与肢体动作。</p></div><BasinToggle onError={setError}/><GlassesToggle onError={setError}/><SmallFormToggle onError={setError}/><BasinSoundChoice onError={setError}/><div className="action-grid">{ACTIONS.map((a,i)=><button className="action-card" key={a.title} onClick={()=>api('/api/command',{type:'perform',intensity:.85,durationMs:6500,...a.command}).catch(e=>setError(e.message))}><span className="action-icon">{a.icon}</span><strong>{a.title}</strong><small>{a.sub}</small>{i<4&&<kbd>Ctrl Alt {i+1}</kbd>}</button>)}</div><h3 className="reaction-heading">点击反应预览</h3><div className="action-grid">{[{stage:1,title:"惊慌后害羞",sub:"吓一跳，再慢慢红了脸",icon:"😳"},{stage:2,title:"哼，不理你",sub:"红脸嗔怒，别过头去",icon:"😤"},{stage:3,title:"不许再闹啦",sub:"轻轻皱眉，认真责怪",icon:"😠"},{stage:4,title:"心动一下",sub:"被哄好啦，呼吸轻轻起伏",icon:"💕"}].map(item=><button className="action-card" key={item.stage} data-chest-preview={item.stage} onClick={()=>window.companion?.control("chest-reaction",item.stage).catch(e=>setError(e.message))}><span className="action-icon">{item.icon}</span><strong>{item.title}</strong><small>{item.sub}</small></button>)}</div><p className="hint">轻点胸前触发，播放中连点无效。三轮后先摸摸头，再点触发心动；结束后重置。一分钟不再点击也会重置。</p><div className="action-footer"><button onClick={()=>api('/api/stop',{})}>停止表演</button><button onClick={()=>api('/api/command',{type:'reset'})}>恢复默认</button></div><div className="shortcut-list"><div><span>打开 / 收起聊天</span><kbd>Ctrl Alt Space</kbd></div><div><span>打断说话与动作</span><kbd>Ctrl Alt Backspace</kbd></div><div><span>恢复默认</span><kbd>Ctrl Alt 0</kbd></div></div></section>}
+    {tab==='actions'&&<section className="panel-scroll"><BodyAnimationPreviews onError={setError}/><div className="section-intro"><h2>情境组合</h2><p>让表情和肢体一起表达心情。</p></div><BasinToggle onError={setError}/><GlassesToggle onError={setError}/><SmallFormToggle onError={setError}/><BasinSoundChoice onError={setError}/><div className="action-grid">{ACTIONS.map((a,i)=><button className="action-card" key={a.title} onClick={()=>api('/api/command',{type:'perform',intensity:.85,durationMs:6500,...a.command}).catch(e=>setError(e.message))}><span className="action-icon">{a.icon}</span><strong>{a.title}</strong><small>{a.sub}</small>{hotkeysEnabled&&i<4&&<kbd>Ctrl Alt {i+1}</kbd>}</button>)}</div>{IS_DEVELOPER&&<DeveloperChestPreviews onError={setError}/>}<p className="hint">轻点胸前触发，播放中连点无效。三轮后先摸摸头，再点触发心动；结束后重置。一分钟不再点击也会重置。</p><div className="action-footer"><button onClick={()=>api('/api/stop',{})}>停止表演</button><button onClick={()=>api('/api/command',{type:'reset'})}>恢复默认</button></div>{hotkeysEnabled&&<div className="shortcut-list"><div><span>打开 / 收起聊天</span><kbd>Ctrl Alt Space</kbd></div><div><span>打断说话与动作</span><kbd>Ctrl Alt Backspace</kbd></div><div><span>恢复默认</span><kbd>Ctrl Alt 0</kbd></div></div>}</section>}
     {tab!=='chat'&&error&&<div className="error-banner">{error}<button onClick={()=>setError('')}>关闭</button></div>}
     <ExpressionPanel hidden={tab!=='expressions'} onError={setError}/>
     {tab==='tuning'&&<TuningPanel onError={setError}/>}
@@ -508,10 +503,6 @@ function Chat(){
 
 function Settings({settings,connection,onSaved,onError}:{settings:any;connection:any;onSaved:()=>void;onError:(e:string)=>void}){
   const [form,setForm]=useState<any>({}),[saving,setSaving]=useState(false),[result,setResult]=useState(''),[diagnostics,setDiagnostics]=useState<any>(null);
-  const [qualityChanging,setQualityChanging]=useState(false);
-  const [gpuCapturing,setGpuCapturing]=useState(false),[gpuMessage,setGpuMessage]=useState('');
-  const gpuNoticeTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
-  useEffect(()=>()=>clearTimeout(gpuNoticeTimer.current),[]);
   useEffect(()=>{window.companion?.control('diagnostics').then(setDiagnostics);return window.companion?.onEvent(e=>{if(e.type==='pet-scale')setDiagnostics((d:any)=>({...d,petScale:e}));if(e.type==='render-quality')setDiagnostics((d:any)=>({...d,renderQuality:e.profile}));});},[]);
   useEffect(()=>{if(settings)setForm({...settings,apiKey:'',ttsKey:'',ttsBaseUrl:settings.tts?.baseUrl||'',ttsModel:settings.tts?.model||'',ttsVoice:settings.tts?.voice||'alloy'});},[settings]);
   const set=(key:string,value:any)=>setForm((f:any)=>({...f,[key]:value}));
@@ -520,16 +511,6 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
   const ttsProvider=form.tts?.provider||(form.tts?.enabled?'api':form.tts?.systemVoice?'system':'edge');
   const setTtsProvider=(provider:string)=>setForm((f:any)=>({...f,tts:{...f.tts,provider,enabled:provider==='api'}}));
   async function save(){setSaving(true);setResult('');try{const payload={...form};if(!payload.apiKey)delete payload.apiKey;if(!payload.ttsKey)delete payload.ttsKey;await api('/api/settings',payload,'PUT');onSaved();setResult('已保存，下次对话生效。');}catch(e:any){onError(e.message);setResult(e.message);}finally{setSaving(false);}}
-  async function chooseQuality(mode:string){setQualityChanging(true);try{const profile=await window.companion?.control('render-quality',mode);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('画质设置已保存，模型正在重新加载。');}catch(e:any){onError(e.message);}finally{setQualityChanging(false);}}
-  async function captureGpu(){
-    setGpuCapturing(true);setGpuMessage('正在确认 GPU 计时支持…');clearTimeout(gpuNoticeTimer.current);
-    try{
-      const status:any=await window.companion?.control('start-gpu-timing');
-      if(!status?.active){setGpuCapturing(false);setGpuMessage(status?.reason==='unsupported'?'当前驱动不支持 GPU 计时，仍可复制普通性能诊断。':'GPU 计时未能开始，请保持模型显示后重试。');return;}
-      setGpuMessage('已开始采集。请在 15 秒内播放卡顿的动作，保持模型显示。');
-      gpuNoticeTimer.current=setTimeout(()=>{setGpuCapturing(false);setGpuMessage('现在可以复制性能诊断，查看 GPU 用时和采集状态。');},20000);
-    }catch(e:any){setGpuCapturing(false);setGpuMessage(e.message||'采集未能开始。');}
-  }
   return <section className="panel-scroll settings-panel"><div className="section-intro"><h2>按你的节奏相处</h2><p>模型留在本机。随时选择你的智能体。</p></div>
     <SettingsSelect id="provider" label="对话来源" value={providerChoice} onChange={chooseProvider} options={[
       {value:'auto',label:'自动 · 优先 DeepSeek Harness',description:'聊天桥就绪后自动接入；未连接时保持等待'},
@@ -549,24 +530,7 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
       {value:'detailed',label:'详细解释 · 分段呈现'},
     ]}/>
     <label className="check-row"><input type="checkbox" checked={form.voiceEnabled!==false} onChange={e=>set('voiceEnabled',e.target.checked)}/>朗读简短回复</label>
-    <details className="settings-group"><summary>性能与画质</summary>
-      <SettingsSelect id="render-quality" label="渲染模式" value={diagnostics?.renderQuality?.mode||'auto'} onChange={chooseQuality} disabled={qualityChanging||!window.companion} options={[
-        {value:'auto',label:'自动（推荐）',description:'按本机内存选择均衡或高清'},
-        {value:'balanced',label:'均衡 · 流畅优先',description:'60 帧，适合 16GB 内存电脑'},
-        {value:'economy',label:'省资源',description:'30 帧，进一步降低画布与贴图占用'},
-        {value:'quality',label:'高清',description:'60 帧，更清晰的贴图与抗锯齿'},
-      ]}/>
-      <p className="hint">当前：{diagnostics?.renderQuality?.label||'均衡'}。隐藏桌宠时暂停渲染，显示后恢复。切换模式会重新加载模型并停止当前表演，选择后自动保存。</p>
-      <label className="check-row"><input type="checkbox" checked={diagnostics?.renderQuality?.cacheMeshBuffers===true} disabled={qualityChanging||!window.companion} onChange={async e=>{setQualityChanging(true);try{const profile=await window.companion?.control('render-buffer-cache',e.target.checked);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('绘制设置已保存，模型正在重新加载。');}catch(error:any){onError(error.message);}finally{setQualityChanging(false);}}}/>GPU 数据复用（实验）</label>
-      <p className="hint">减少重复上传，可能增加 CPU 和内存开销。默认关闭，可在卡顿场景对照；切换时重新加载模型。</p>
-      <label className="check-row"><input type="checkbox" checked={diagnostics?.renderQuality?.preserveGlState===true} disabled={qualityChanging||!window.companion} onChange={async e=>{setQualityChanging(true);try{const profile=await window.companion?.control('render-state-snapshots',e.target.checked);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('绘制状态设置已保存，模型正在重新加载。');}catch(error:any){onError(error.message);}finally{setQualityChanging(false);}}}/>保留 SDK 状态快照（兼容对照）</label>
-      <p className="hint">默认关闭，由桌宠直接管理画布状态，减少同步查询。如需对照旧路径可勾选；切换后请等模型重新加载。</p>
-      <div className="button-row"><button disabled={!window.companion} onClick={async()=>{try{const report:any=await window.companion?.control('copy-performance');setResult(report?.available?'性能诊断已复制，请把内容发给排查问题的智能体。':'尚未收到模型渲染数据；诊断已复制，请等模型显示后再试。');}catch(e:any){onError(e.message);}}}>复制性能诊断</button></div>
-      <p className="hint">复现卡顿后复制，可查看实际渲染设备和帧间隔。不包含聊天、密钥或模型路径。</p>
-      <button disabled={!window.companion||qualityChanging||gpuCapturing} onClick={captureGpu}>{gpuCapturing?'等待诊断结果…':'采集 GPU 用时（15 秒）'}</button>
-      <p className="hint">仅排查卡顿时使用。默认不采集；隐藏或重载模型会提前停止。结束后稍等几秒，再复制性能诊断。它测量模型绘制的 GPU 用时，不包含桌面合成与显示延迟。</p>
-      {gpuMessage&&<p className="hint" role="status" data-gpu-timing-status>{gpuMessage}</p>}
-    </details>
+    {IS_DEVELOPER&&<DeveloperPerformanceSettings diagnostics={diagnostics} setDiagnostics={setDiagnostics} setResult={setResult} onError={onError}/>}
     <details className="settings-group"><summary>声音与口型</summary>
       <p className="hint">选择大肥鱼说话的声音。口型和肢体节奏跟随实际播放的音频。</p>
       <fieldset className="voice-choices"><legend>朗读声音</legend>{[
@@ -577,7 +541,7 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
         <input type="radio" name="tts-provider" value={choice.id} checked={ttsProvider===choice.id} onChange={()=>setTtsProvider(choice.id)}/>
         <span><strong>{choice.title}</strong><small>{choice.description}</small></span>
       </label>)}</fieldset>
-      {ttsProvider==='edge'&&<p className="hint">与介绍视频临时试听版相同的晓伊音色，语速略快、音调略高。需要联网，会将待朗读文字发送给微软语音服务；无需填写 API Key。</p>}
+      {ttsProvider==='edge'&&<p className="hint">清亮自然的晓伊音色，语速略快、音调略高。需要联网，会将待朗读文字发送给微软语音服务；无需填写 API Key。</p>}
       {ttsProvider==='system'&&<p className="hint">在本机合成语音，无需联网。中文回复需要安装可用的 Windows 中文嗓音。</p>}
       {ttsProvider==='api'&&<><label>语音 API 地址<input value={form.ttsBaseUrl||''} placeholder="填写兼容语音服务的地址" onChange={e=>set('ttsBaseUrl',e.target.value)}/></label><label>语音 API Key<input type="password" autoComplete="off" placeholder={settings?.hasTtsKey?'已保存，留空保持':'语音服务的密钥'} value={form.ttsKey||''} onChange={e=>set('ttsKey',e.target.value)}/></label><div className="form-row"><label>语音模型<input value={form.ttsModel||''} onChange={e=>set('ttsModel',e.target.value)}/></label><label>音色<input value={form.ttsVoice||''} onChange={e=>set('ttsVoice',e.target.value)}/></label></div></>}
       <p className="hint">切换声音不会清除已保存的 API 配置。点击下方“保存设置”后生效。</p>
@@ -590,4 +554,4 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
   </section>;
 }
 
-initialize().then(({role})=>{document.body.dataset.view=role;createRoot(document.getElementById('root')!).render(role==='pet'?<Pet/>:role==='toggle'?<OrbitToggle/>:<Chat/>);}).catch(error=>{document.getElementById('root')!.textContent='无法启动界面：'+error.message;});
+initialize().then(({role})=>{document.body.dataset.view=role;document.body.dataset.edition=APP_EDITION;createRoot(document.getElementById('root')!).render(role==='pet'?<Pet/>:role==='toggle'?<OrbitToggle/>:<Chat/>);}).catch(error=>{document.getElementById('root')!.textContent='无法启动界面：'+error.message;});

@@ -7,10 +7,12 @@ import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import ts from 'typescript';
 import { unzipSync } from 'fflate';
+import { validateEdition } from './package-editions.mjs';
+import { writeEditionExtension } from './build-extension.mjs';
 
 export const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-function transpileTypescript() {
+function transpileTypescript(defines = {}) {
   return {
     name: 'in-process-typescript',
     transform(source, id) {
@@ -20,10 +22,21 @@ function transpileTypescript() {
       if (/\.[cm]?jsx?$/.test(id) && id.includes('node_modules')) {
         return { code: source.replace(/\bprocess\.env\.NODE_ENV\b/g, '"production"'), map: null };
       }
-      if (!/\.tsx?$/.test(id)) return null;
-      const result = ts.transpileModule(source, { fileName: id, reportDiagnostics: true, compilerOptions: {
+      const hasDefines = Object.keys(defines).some(name => source.includes(name));
+      if (!/\.tsx?$/.test(id) && !hasDefines) return null;
+      const replaceDefines = context => root => {
+        const visit = node => {
+          const parent = node.parent;
+          const declarationName = parent && (ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isPropertyAccessExpression(parent) || ts.isPropertyAssignment(parent)) && parent.name === node;
+          return ts.isIdentifier(node) && Object.hasOwn(defines, node.text) && !declarationName
+            ? ts.factory.createStringLiteral(defines[node.text]) : ts.visitEachChild(node, visit, context);
+        };
+        return ts.visitNode(root, visit);
+      };
+      const result = ts.transpileModule(source, { fileName: id, reportDiagnostics: true,
+        transformers: hasDefines ? { before: [replaceDefines] } : undefined, compilerOptions: {
         target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
-        jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true, sourceMap: true,
+        jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true, sourceMap: true, allowJs: true,
         inlineSources: true, removeComments: false,
       } });
       const errors = result.diagnostics?.filter(item => item.category === ts.DiagnosticCategory.Error) || [];
@@ -35,7 +48,7 @@ function transpileTypescript() {
   };
 }
 
-export async function bundleTypescript({ input, entrySource, outfile, css = false }) {
+export async function bundleTypescript({ input, entrySource, outfile, css = false, defines = {}, sourcemap = true }) {
   const virtualEntry = '\0in-process-entry';
   const styles = new Map();
   const bundle = await rollup({
@@ -65,7 +78,7 @@ export async function bundleTypescript({ input, entrySource, outfile, css = fals
         },
       },
       nodeResolve({ browser: true, preferBuiltins: false, extensions: ['.mjs', '.js', '.json', '.ts', '.tsx'] }),
-      transpileTypescript(),
+      transpileTypescript(defines),
       commonjs({ include: /node_modules/ }),
     ],
     onwarn(warning, warn) {
@@ -76,22 +89,26 @@ export async function bundleTypescript({ input, entrySource, outfile, css = fals
   });
   try {
     await mkdir(path.dirname(outfile), { recursive: true });
-    await bundle.write({ file: outfile, format: 'es', sourcemap: true, generatedCode: 'es2015' });
+    await bundle.write({ file: outfile, format: 'es', sourcemap, generatedCode: 'es2015' });
   } finally { await bundle.close(); }
 }
 
-export async function buildRenderer({ outDir = path.join(projectRoot, 'dist') } = {}) {
+export async function buildRenderer({ outDir = path.join(projectRoot, 'dist'), edition = process.env.COMPANION_EDITION } = {}) {
+  edition = validateEdition(edition);
   outDir = path.resolve(outDir);
   if ([projectRoot, path.join(projectRoot, 'public'), path.join(projectRoot, 'src'), path.join(projectRoot, 'scripts')].some(folder => outDir === folder || folder !== projectRoot && outDir.startsWith(folder + path.sep))) throw new Error('Build output must not overwrite application source directories.');
   const outfile = path.join(outDir, 'assets', 'index-restricted.js');
-  await bundleTypescript({ input: path.join(projectRoot, 'src', 'renderer', 'main.tsx'), outfile, css: true });
-  await cp(path.join(projectRoot, 'public'), outDir, { recursive: true });
+  await bundleTypescript({ input: path.join(projectRoot, 'src', 'renderer', 'main.tsx'), outfile, css: true,
+    defines: { __COMPANION_EDITION__: edition }, sourcemap: edition === 'developer' });
+  await cp(path.join(projectRoot, 'public'), outDir, { recursive: true, filter: file => edition === 'developer' || !file.endsWith('.map') });
+  await writeFile(path.join(outDir, 'edition.json'), JSON.stringify({ edition }));
+  await writeEditionExtension({ outDir, edition });
   const source = await readFile(path.join(projectRoot, 'index.html'), 'utf8');
   if (!source.includes('src="/src/renderer/main.tsx"')) throw new Error('Renderer HTML entry changed; update the restricted build entry.');
   const html = source.replace('href="/icons/', 'href="./icons/')
     .replace('<script type="module" src="/src/renderer/main.tsx"></script>', '<link rel="stylesheet" href="./assets/index-restricted.css"><script type="module" src="./assets/index-restricted.js"></script>');
   await writeFile(path.join(outDir, 'index.html'), html);
-  return { outDir, engine: 'rollup-typescript-in-process' };
+  return { outDir, edition, engine: 'rollup-typescript-in-process' };
 }
 
 /** Called only after the official SDK archive's SHA-256 has been verified. */

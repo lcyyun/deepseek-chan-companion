@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { IS_DEVELOPER } from './edition';
 import './connection-panel.css';
 
 type DshSession = { id: string; updatedAt?: number; cwd?: string };
@@ -87,7 +88,7 @@ export function DshConnectPanel({ compact = false }: { compact?: boolean }) {
   const message=status?.message||(legacy?'聊天已连接，首次升级需重新加载桥插件。':status?.connectionState==='occupied'?'发现尚未确认的实例，请先检查接入配置。':connected?'聊天桥已连接，正在确认角色工具。':'首次接入请完成一次配置；之后直接连接即可。');
 
   return <div className={'dsh-panel'+(compact?' compact':'')} data-connection-state={status?.connectionState||'loading'}>
-    <div className="dsh-heading"><strong>连接 DeepSeek Harness</strong><button className="text-button" data-dsh-action="diagnostics" disabled={busy} onClick={()=>{setDiagnosticsOpen(value=>!value);void refresh(true);}}>诊断</button></div>
+    <div className="dsh-heading"><strong>连接 DeepSeek Harness</strong>{IS_DEVELOPER&&<button className="text-button" data-dsh-action="diagnostics" disabled={busy} onClick={()=>{setDiagnosticsOpen(value=>!value);void refresh(true);}}>诊断</button>}</div>
     <p className="hint">已配置后可直接连接。桌宠重启会自动恢复，不需要每次重新发送接入提示词。</p>
     <div className="dsh-status-grid dsh-connection-status" aria-label="DSH 连接详情">
       <span>DSH 实例</span><b data-dsh-status="host">{status?hostText:'正在检查…'}</b>
@@ -103,14 +104,14 @@ export function DshConnectPanel({ compact = false }: { compact?: boolean }) {
       {connected&&<button data-dsh-action="open" disabled={busy} onClick={()=>control('dsh-open')?.catch((e:any)=>setError(e?.message||String(e)))}>打开 DSH</button>}
     </div>
     {status?.canStartConfigured&&<p className="hint">只启动已登记的实例，不会结束正在工作的 DSH。</p>}
-    {diagnosticsOpen&&<div className="dsh-diagnostics" data-dsh-diagnostics>
+    {IS_DEVELOPER&&diagnosticsOpen&&<div className="dsh-diagnostics" data-dsh-diagnostics>
       <div className="dsh-status-grid"><span>连接状态</span><b>{status?.connectionState||'检查中'}</b><span>DSH_HOME</span><b>{status?.home||'未检测到'}</b><span>端口</span><b>{status?.port||'未登记'}</b><span>配置登记</span><b>{status?.installationValid?'已验证':'待配置或需检查'}</b>{status?.occupiedPorts?.length?<><span>占用端口</span><b>{status.occupiedPorts.join('、')}</b></>:null}{status?.logPath?<><span>日志位置</span><b>{status.logPath}</b></>:null}</div>
       <button className="text-button" disabled={busy} onClick={()=>void refresh(true)}>重新检查状态</button>
     </div>}
     {setupOpen&&<div className="dsh-initial-setup" data-dsh-setup>
       <p className="hint">首次安装、改变 A/B 会话或升级桥插件时使用。普通重连不会改动这里的选择。</p>
       {!status?.cli&&<p className="hint warn">没有找到 DSH CLI。请先安装 DeepSeek Harness。</p>}
-      {status?.cli&&!status.homeExists&&<p className="hint warn">没有找到 DSH_HOME：{status.home}</p>}
+      {status?.cli&&!status.homeExists&&<p className="hint warn">{IS_DEVELOPER?`没有找到 DSH_HOME：${status.home}`:'未找到 DeepSeek Harness 的配置，请先打开它完成初始化。'}</p>}
       <div className="dsh-mode" role="radiogroup" aria-label="选择会话模式">
         <label className={mode==='existing'?'selected':''}><input type="radio" name={modeGroup} value="existing" disabled={busy} checked={mode==='existing'} onChange={()=>editMode('existing')}/><span className="dsh-mode-badge">A</span><span className="dsh-mode-copy"><strong>接到已有会话</strong><small>继承该会话的人格和上下文；需要选择具体会话。</small></span></label>
         <label className={mode==='new'?'selected':''}><input type="radio" name={modeGroup} value="new" disabled={busy} checked={mode==='new'} onChange={()=>editMode('new')}/><span className="dsh-mode-badge">B</span><span className="dsh-mode-copy"><strong>独立桌宠会话</strong><small>首次创建并保存，之后复用，不重复新建。</small></span></label>

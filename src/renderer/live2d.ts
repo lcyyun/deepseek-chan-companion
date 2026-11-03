@@ -5,6 +5,7 @@ import { createRenderClock, createRenderDiagnostics, readGraphicsInfo, pngDimens
 import { createMeshBufferCache } from './mesh-buffer-cache';
 import { createOwnedGlState } from './owned-gl-state';
 import { createGpuDrawTimer, type GpuTimingSnapshot } from './gpu-timing';
+import { IS_DEVELOPER } from './edition';
 export interface ParameterInfo { id: string; name: string; min: number; max: number; defaultValue: number; value: number }
 export interface InteractionRect { x: number; y: number; width: number; height: number }
 export interface ModelPlacement { scale: number; centerX: number; centerY: number; referenceWidth?: number; referenceHeight?: number; revision?: number }
@@ -64,6 +65,8 @@ export interface Live2DHandle {
   startGpuTiming(durationMs?: number): { supported: boolean; active: boolean; reason: string };
 }
 export interface Live2DOptions {
+  /** Developer builds only. Pure user builds never collect render diagnostics. */
+  enableDiagnostics?: boolean;
   modelBaseUrl?: string;
   manifest?: Live2DManifest;
   manifestUrl?: string;
@@ -122,6 +125,7 @@ async function loadSdk(options: Live2DOptions): Promise<Runtime> {
 }
 
 export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOptions = {}): Promise<Live2DHandle> {
+  const diagnosticsEnabled = IS_DEVELOPER && options.enableDiagnostics !== false;
   const fetcher = options.fetcher ?? ((url: string) => fetch(url));
   const fetchAsset = async (url: string) => {
     const response = await fetcher(url);
@@ -135,20 +139,21 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
   let requestId = 0, destroyed = false, gl: WebGLRenderingContext | null = null;
   let meshBufferCache: ReturnType<typeof createMeshBufferCache> | undefined;
   let ownedGlState: ReturnType<typeof createOwnedGlState> | undefined;
-  let gpuTimer: ReturnType<typeof createGpuDrawTimer>;
+  let gpuTimer: ReturnType<typeof createGpuDrawTimer> | undefined;
   let renderActive = true, textureBytes = 0, frames = 0, skippedFrames = 0, totalRenderMs = 0, maxRenderMs = 0;
   let totalBehaviorMs = 0, totalPhysicsMs = 0, totalModelUpdateMs = 0, totalHandOverlayMs = 0, totalDrawMs = 0;
   let totalGlStateSetupMs = 0;
   const drawStages = { totalStateSaveMs:0, totalSdkDrawMs:0, totalStateRestoreMs:0 };
   const drawStageCalls = { totalStateSaveCalls:0, totalSdkDrawCalls:0, totalStateRestoreCalls:0 };
   const observeDrawStages = (target:any) => {
+    if(!diagnosticsEnabled)return;
     for(const [method,key,count] of [['saveProfile','totalStateSaveMs','totalStateSaveCalls'],['doDrawModel','totalSdkDrawMs','totalSdkDrawCalls'],['restoreProfile','totalStateRestoreMs','totalStateRestoreCalls']] as const){
       const original=target[method];if(typeof original!=='function')continue;
       target[method]=function(...args:any[]){drawStageCalls[count]++;const start=performance.now();try{return original.apply(this,args);}finally{drawStages[key]+=performance.now()-start;}};
     }
   };
   const frameClock = createRenderClock(options.maxFps);
-  const frameDiagnostics = createRenderDiagnostics();
+  const frameDiagnostics = diagnosticsEnabled ? createRenderDiagnostics() : undefined;
   let graphicsInfo: GraphicsInfo | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let modelTuning = sanitizeModelTuning(DEFAULT_MODEL_TUNING);
@@ -235,7 +240,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     }
     gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: options.antialias ?? false, depth: false, stencil: false, preserveDrawingBuffer: false });
     if (!gl) throw new Error('此设备未提供 WebGL，无法显示 Live2D 模型。');
-    gpuTimer = createGpuDrawTimer(gl);
+    if(diagnosticsEnabled)gpuTimer = createGpuDrawTimer(gl);
     renderer = new sdk.CubismRenderer_WebGL();
     // One default mask atlas supports only 36 groups. This model exceeds that;
     // allocate enough atlases instead of silently drawing parts without masks.
@@ -248,11 +253,11 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     renderer.startUp(gl);
     renderer.setIsPremultipliedAlpha(true);
     observeDrawStages(renderer);
-    if (options.preserveGlState !== true) {
+    if (!IS_DEVELOPER || options.preserveGlState !== true) {
       ownedGlState=createOwnedGlState(gl);
       ownedGlState.attach(renderer);
     }
-    if (options.cacheMeshBuffers === true) {
+    if (IS_DEVELOPER && options.cacheMeshBuffers === true) {
       meshBufferCache = createMeshBufferCache(gl, model);
       meshBufferCache.attach(renderer);
     }
@@ -721,15 +726,17 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       setRenderActive(active) {
         const next = active !== false;
         if (destroyed || next === renderActive) return;
-        renderActive = next; cancelAnimationFrame(requestId); requestId = 0; frameClock.reset(); frameDiagnostics.resetTiming();
-        if (!next) gpuTimer.stop();
+        renderActive = next; cancelAnimationFrame(requestId); requestId = 0; frameClock.reset(); frameDiagnostics?.resetTiming();
+        if (!next) gpuTimer?.stop();
         if (next) requestId = requestAnimationFrame(frame);
       },
       startGpuTiming(durationMs) {
+        if(!gpuTimer)return {supported:false,active:false,reason:'disabled'};
         if (destroyed || !renderActive) return { supported:false, active:false, reason:destroyed?'disposed':'hidden' };
         return gpuTimer.start(durationMs);
       },
       getPerformanceStats() {
+        if(!frameDiagnostics || !gpuTimer)throw new Error('渲染诊断仅在智能体开发版启用。');
         graphicsInfo ??= readGraphicsInfo(gl);
         const buffers = meshBufferCache?.stats();
         const owned = ownedGlState?.stats();
@@ -755,10 +762,10 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     const frame = (time: number) => {
       requestId = 0;
       if (destroyed || !renderActive || !gl) return;
-      frameDiagnostics.observeRaf(time, performance.now());
+      if(frameDiagnostics)frameDiagnostics.observeRaf(time, performance.now());
       const step = frameClock.advance(time);
-      if (step === null) { skippedFrames++; requestId = requestAnimationFrame(frame); return; }
-      const renderStarted = performance.now();
+      if (step === null) { if(diagnosticsEnabled)skippedFrames++; requestId = requestAnimationFrame(frame); return; }
+      const renderStarted = diagnosticsEnabled ? performance.now() : 0;
       try {
         const dt = Math.min(0.05, step);
         elapsed += dt;
@@ -791,9 +798,9 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         }
         for (let i = 0; i < parameters.length; i++) upstreamValues[i] = model.getParameterValueByIndex(i);
         if (options.onFrame) {
-          const started = performance.now();
+          const started = diagnosticsEnabled ? performance.now() : 0;
           options.onFrame(dt, elapsed);
-          totalBehaviorMs += performance.now() - started;
+          if(diagnosticsEnabled)totalBehaviorMs += performance.now() - started;
         }
         if (gestureHands?.active) {
           gestureHands.weight += (1 - gestureHands.weight) * (1 - Math.exp(-dt * 16));
@@ -856,9 +863,9 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         }
         updateChestSprings(dt);
         if (physics) {
-          const started = performance.now();
+          const started = diagnosticsEnabled ? performance.now() : 0;
           physics.evaluate(model, dt);
-          totalPhysicsMs += performance.now() - started;
+          if(diagnosticsEnabled)totalPhysicsMs += performance.now() - started;
         }
         for (let side = 0; side < 2; side++) {
           if (!earImpulse[side]) continue;
@@ -868,13 +875,13 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
             model.setParameterValueByIndex(index, Math.max(p.min, Math.min(p.max, value)));
           }
         }
-        const modelUpdateStarted = performance.now();
+        const modelUpdateStarted = diagnosticsEnabled ? performance.now() : 0;
         model.update();
-        totalModelUpdateMs += performance.now() - modelUpdateStarted;
+        if(diagnosticsEnabled)totalModelUpdateMs += performance.now() - modelUpdateStarted;
         const restoreBasinShadow = adjustBasinShadow();
-        const handPreparationStarted = performance.now();
+        const handPreparationStarted = diagnosticsEnabled ? performance.now() : 0;
         const mirroredArm = prepareMirroredArm();
-        totalHandOverlayMs += performance.now() - handPreparationStarted;
+        if(diagnosticsEnabled)totalHandOverlayMs += performance.now() - handPreparationStarted;
         try {
         const aspect = canvas.width / canvas.height;
         const width = bounds.maxX - bounds.minX, height = bounds.maxY - bounds.minY;
@@ -889,8 +896,8 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           updateInteractionRegions(sx, sy, -centerX * sx + offsetX, -centerY * sy + offsetY);
           regionUpdatedAt = elapsed;
         }
-        gpuTimer.beginFrame(options.getDiagnosticLabel?.() || 'other');
-        const stateSetupStarted=performance.now();
+        gpuTimer?.beginFrame(options.getDiagnosticLabel?.() || 'other');
+        const stateSetupStarted=diagnosticsEnabled ? performance.now() : 0;
         ownedGlState?.beginFrame(canvas.width,canvas.height);
         gl.viewport(0, 0, canvas.width, canvas.height);
         // The SDK owns mask FBO/state changes. Clear the entire transparent
@@ -899,24 +906,22 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         gl.disable(gl.SCISSOR_TEST);
         gl.colorMask(true, true, true, true);
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
-        totalGlStateSetupMs+=performance.now()-stateSetupStarted;
+        if(diagnosticsEnabled)totalGlStateSetupMs+=performance.now()-stateSetupStarted;
         renderer.setMvpMatrix(matrix);
         renderer.setRenderState(null, [0, 0, canvas.width, canvas.height]);
-        const handOverlayStarted = performance.now();
+        const handOverlayStarted = diagnosticsEnabled ? performance.now() : 0;
         const restorePupils = scalePupils();
         const restoreHandOrder = raiseThinkingHand();
-        totalHandOverlayMs += performance.now() - handOverlayStarted;
-        const drawStarted = performance.now();
+        if(diagnosticsEnabled)totalHandOverlayMs += performance.now() - handOverlayStarted;
+        const drawStarted = diagnosticsEnabled ? performance.now() : 0;
         try { mirroredArm.drawModel(); } finally {
-          totalDrawMs += performance.now() - drawStarted;
+          if(diagnosticsEnabled)totalDrawMs += performance.now() - drawStarted;
           restoreHandOrder(); restorePupils();
         }
-        } finally { gpuTimer.endFrame(); mirroredArm.restore(); restoreBasinShadow(); }
-        const renderMs = performance.now() - renderStarted;
-        frames++; totalRenderMs += renderMs; maxRenderMs = Math.max(maxRenderMs, renderMs);
+        } finally { gpuTimer?.endFrame(); mirroredArm.restore(); restoreBasinShadow(); }
         // Measure the actual rendered interval before dt is capped for physics.
         // No IPC or statistics sorting runs in the animation loop.
-        frameDiagnostics.record(time, renderMs, dt);
+        if(frameDiagnostics){const renderMs=performance.now()-renderStarted;frames++;totalRenderMs+=renderMs;maxRenderMs=Math.max(maxRenderMs,renderMs);frameDiagnostics.record(time,renderMs,dt);}
         if (renderActive) requestId = requestAnimationFrame(frame);
       } catch (error) { cancelAnimationFrame(requestId); options.onError?.(error instanceof Error ? error : new Error(String(error))); }
     };

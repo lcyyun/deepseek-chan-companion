@@ -47,3 +47,18 @@ test('restricted CSS is included deterministically and unsupported CSS assets fa
   await writeFile(path.join(folder, 'first.css'), '.first { background: url(./unsupported.png); }');
   await assert.rejects(bundleTypescript({ input: entry, outfile: path.join(folder, 'bundle.js'), css: true }), /plain CSS only/);
 });
+
+test('restricted user build folds edition gates, preserves literal text, and omits source maps', async t => {
+  const folder = await fixture(t);
+  const input = path.join(folder, 'entry.ts'), outfile = path.join(folder, 'bundle.mjs');
+  await writeFile(input, `declare const __COMPANION_EDITION__: 'user' | 'developer';
+    const edition = typeof __COMPANION_EDITION__ === 'undefined' ? 'developer' : __COMPANION_EDITION__;
+    export const label = '__COMPANION_EDITION__';
+    export const feature = edition === 'developer' ? 'DEBUG_CONTROLS_ONLY' : 'USER_FEATURES';`);
+  await bundleTypescript({ input, outfile, defines: { __COMPANION_EDITION__: 'user' }, sourcemap: false });
+  const source = await readFile(outfile, 'utf8');
+  assert.doesNotMatch(source, /DEBUG_CONTROLS_ONLY|sourceMappingURL/);
+  const result = await import(pathToFileURL(outfile).href);
+  assert.equal(result.label, '__COMPANION_EDITION__'); assert.equal(result.feature, 'USER_FEATURES');
+  await assert.rejects(access(outfile + '.map'));
+});

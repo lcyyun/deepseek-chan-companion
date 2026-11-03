@@ -14,7 +14,7 @@ const plain=value=>JSON.parse(JSON.stringify(value));
 
 // Execute the production main functions with native windows replaced by counters.
 // No Electron, process, filesystem write, mouse input or private profile is used.
-function fixture() {
+function fixture(edition='developer') {
   const counts={toggleBounds:0,chatBounds:0,ignoreMouse:0,shape:0,moveTop:0,reloads:0};
   const handlers=new Map(),writes=[],commands=[],copied=[];
   let nextId=1,focused=null;
@@ -51,7 +51,7 @@ function fixture() {
   const electron={app:fakeApp,BrowserWindow:Window,ipcMain:{handle:(name,handler)=>handlers.set(name,handler)},clipboard:{writeText:value=>copied.push(value)},
     screen:{getAllDisplays:()=>[{workArea:area}],getDisplayMatching:()=>({workArea:area})}};
   const model={windows,area,profile:mode=>({mode,effective:mode==='auto'?'balanced':mode,label:mode,maxFps:45}),commands};
-  const context=vm.createContext({require:name=>name==='electron'?electron:name==='node:os'?{totalmem:()=>16*1024**3}:name==='node:fs'?{...fs,writeFileSync:(file,data)=>writes.push({file,data})}:require(name),
+  const context=vm.createContext({require:name=>name==='electron'?electron:name===path.resolve(path.dirname(filename),'../package.json')?{...require(name),companionEdition:edition}:name==='node:os'?{totalmem:()=>16*1024**3}:name==='node:fs'?{...fs,writeFileSync:(file,data)=>writes.push({file,data})}:require(name),
     __dirname:path.dirname(filename),process:{platform:'win32',env:{},execPath:process.execPath},URL,Buffer,console,setInterval,clearInterval,setTimeout,clearTimeout,model});
   vm.runInContext(source+`
     pet=model.windows.pet;toggle=model.windows.toggle;chat=model.windows.chat;petWorkArea=model.area;
@@ -66,7 +66,7 @@ function fixture() {
       setPassthrough:value=>{config.clickThrough=value;},
       setCapture:value=>{pointerLocked=value;},
       setFullBody:value=>{fullBodyRegion=value;inputRegions=[value];},
-      requested:()=>petVisibleRequested};
+      requested:()=>petVisibleRequested,setQualityConfig:value=>Object.assign(config,value)};
   `,context,{timeout:5000});
   return{...model,counts,writes,commands,copied,api:context.api,handlers,
     invoke:(role,action,data)=>handlers.get('window-control')({sender:windows[role].webContents},action,data),
@@ -161,6 +161,20 @@ test('only chat may change render quality; saved mode is exposed before a contro
   assert.ok(f.windows.chat.events.some(e=>e.type==='render-quality'&&e.profile.mode==='balanced'));
   const diagnostics=await f.invoke('chat','diagnostics');assert.equal(diagnostics.renderActive,false);assert.equal(diagnostics.renderQuality.mode,'balanced');
   await f.invoke('chat','render-quality','balanced');assert.equal(f.counts.reloads,1,'saving the same explicit mode is idempotent');
+});
+
+test('user edition ignores legacy low quality and experiment settings and rejects hidden developer IPC',async()=>{
+  const f=fixture('user');f.api.setQualityConfig({renderQuality:'economy',cacheMeshBuffers:true,preserveGlState:true});
+  const boot=f.bootstrap('pet');
+  assert.equal(boot.edition,'user');assert.equal(boot.developerTools,false);assert.equal(boot.hotkeysEnabled,true);
+  assert.equal(boot.renderQuality.mode,'quality');assert.equal(boot.renderQuality.cacheMeshBuffers,false);assert.equal(boot.renderQuality.preserveGlState,false);
+  for(const action of ['render-quality','render-buffer-cache','render-state-snapshots','render-sample','copy-performance','start-gpu-timing','gpu-timing-status','chest-reaction'])
+    await assert.rejects(f.invoke('chat',action,true),/仅在智能体开发版/);
+  const state=await f.invoke('chat','diagnostics');assert.equal(state.pointerSession,undefined);assert.equal(state.dataDir,undefined);
+  assert.equal(state.dragMode,false);assert.ok(state.petScale);assert.equal(f.counts.reloads,0);assert.equal(f.writes.length,0);assert.equal(f.copied.length,0);
+  assert.equal(f.api.makeWindow('pet',{transparent:true}).options.webPreferences.devTools,false);
+  const developer=fixture('developer');assert.equal(developer.bootstrap('pet').hotkeysEnabled,false);
+  assert.equal(developer.api.makeWindow('pet',{transparent:true}).options.webPreferences.devTools,true);
 });
 
 test('performance samples are pet-only and copied diagnostics exclude pairing and private profile fields',async()=>{
