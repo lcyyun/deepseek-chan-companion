@@ -292,3 +292,9 @@ API 密钥由 Electron 使用当前 Windows 用户的系统加密能力保存。
 开发版与源码校验：`npm test`；`npx tsc --noEmit`；`npm run build`。真实渲染和语音仍需在目标 Windows 设备上验收。
 
 发行目录保留 Electron 的 `LICENSE`、`LICENSES.chromium.html`，`resources/app/dist/vendor` 下的 Live2D Core/Framework 许可和可再分发说明，以及 `resources/app/server/licenses` 下的 Edge 语音协议模块许可。请勿删除这些文件。
+
+## 贡献者与致谢
+
+- [lcyyun](https://github.com/lcyyun)：项目维护。
+- [wyfx-233](https://github.com/wyfx-233)：协作创作者。
+- [Codex（OpenAI）](https://github.com/codex)：AI 协作开发。
