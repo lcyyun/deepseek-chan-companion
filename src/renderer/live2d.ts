@@ -2,6 +2,7 @@
 import { buildAssetLookup, resolveAssetFile } from '../shared/model-assets.mjs';
 import { DEFAULT_MODEL_TUNING, sanitizeModelTuning, type ModelTuning } from '../shared/model-tuning.mjs';
 import { createRenderClock, createRenderDiagnostics, readGraphicsInfo, pngDimensions, renderCanvasSize, textureDecodeSize, type GraphicsInfo, type RenderDiagnosticsSnapshot } from '../shared/render-performance.mjs';
+import { createMeshBufferCache } from './mesh-buffer-cache';
 export interface ParameterInfo { id: string; name: string; min: number; max: number; defaultValue: number; value: number }
 export interface InteractionRect { x: number; y: number; width: number; height: number }
 export interface ModelPlacement { scale: number; centerX: number; centerY: number; referenceWidth?: number; referenceHeight?: number; revision?: number }
@@ -12,8 +13,12 @@ export interface RenderPerformanceStats extends GraphicsInfo, RenderDiagnosticsS
   frames: number; skippedFrames: number; totalRenderMs: number; averageRenderMs: number; maxRenderMs: number;
   /** Renderer-thread elapsed time. Draw measures CPU submission, not GPU completion. */
   totalBehaviorMs: number; totalPhysicsMs: number; totalModelUpdateMs: number; totalHandOverlayMs: number; totalDrawMs: number;
+  /** SDK sub-stages inside totalDrawMs; these are not additional independent costs. */
+  totalStateSaveMs: number; totalSdkDrawMs: number; totalStateRestoreMs: number;
   canvasWidth: number; canvasHeight: number; canvasPixels: number;
   textureBytes: number; textureCount: number; maxFps: number; renderActive: boolean;
+  meshBufferCacheEnabled: boolean; meshBufferUploads: number; meshBufferUploadSkips: number;
+  meshBufferUploadBytes: number; meshBufferCount: number; meshBufferLegacyCalls: number;
   contextAttributes: WebGLContextAttributes | null;
 }
 export interface Live2DHandle {
@@ -59,6 +64,8 @@ export interface Live2DOptions {
   maxPixelRatio?: number;
   maxCanvasPixels?: number;
   antialias?: boolean;
+  /** Opt in to per-mesh GPU reuse. Default retains the pinned SDK upload path. */
+  cacheMeshBuffers?: boolean;
   /** Mild local tuning of the two authored chest spring groups. */
   softenChestPhysics?: boolean;
   /** Author's effect loop runs beneath gestures; false disables it for calibration. */
@@ -114,8 +121,16 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
   const textures: WebGLTexture[] = [];
   let sdk: Runtime, moc: any, model: any, renderer: any, mirrorRenderer: any, physics: any, motionManager: any, idleMotionManager: any;
   let requestId = 0, destroyed = false, gl: WebGLRenderingContext | null = null;
+  let meshBufferCache: ReturnType<typeof createMeshBufferCache> | undefined;
   let renderActive = true, textureBytes = 0, frames = 0, skippedFrames = 0, totalRenderMs = 0, maxRenderMs = 0;
   let totalBehaviorMs = 0, totalPhysicsMs = 0, totalModelUpdateMs = 0, totalHandOverlayMs = 0, totalDrawMs = 0;
+  const drawStages = { totalStateSaveMs:0, totalSdkDrawMs:0, totalStateRestoreMs:0 };
+  const observeDrawStages = (target:any) => {
+    for(const [method,key] of [['saveProfile','totalStateSaveMs'],['doDrawModel','totalSdkDrawMs'],['restoreProfile','totalStateRestoreMs']] as const){
+      const original=target[method];if(typeof original!=='function')continue;
+      target[method]=function(...args:any[]){const start=performance.now();try{return original.apply(this,args);}finally{drawStages[key]+=performance.now()-start;}};
+    }
+  };
   const frameClock = createRenderClock(options.maxFps);
   const frameDiagnostics = createRenderDiagnostics();
   let graphicsInfo: GraphicsInfo | undefined;
@@ -146,6 +161,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     resizeObserver?.disconnect();
     motionManager?.release();
     idleMotionManager?.release();
+    meshBufferCache?.dispose();
     renderer?.release();
     mirrorRenderer?.release();
     physics?.release();
@@ -212,6 +228,11 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     renderer.setClippingMaskBufferSize(1024);
     renderer.startUp(gl);
     renderer.setIsPremultipliedAlpha(true);
+    observeDrawStages(renderer);
+    if (options.cacheMeshBuffers === true) {
+      meshBufferCache = createMeshBufferCache(gl, model);
+      meshBufferCache.attach(renderer);
+    }
     const textureLimit = Math.min(options.maxTextureSize ?? 4096, gl.getParameter(gl.MAX_TEXTURE_SIZE));
     // Sequential upload limits peak memory while decoding the model's 8192px atlases.
     for (let index = 0; index < references.Textures.length; index++) {
@@ -443,6 +464,8 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
             mirrorRenderer.initialize(model, Math.max(1, Math.ceil(uniqueMasks.size / 32)));
             mirrorRenderer.setClippingMaskBufferSize(1024); mirrorRenderer.startUp(gl); mirrorRenderer.setIsPremultipliedAlpha(true);
             textures.forEach((texture, index) => mirrorRenderer.bindTexture(index, texture));
+            observeDrawStages(mirrorRenderer);
+            meshBufferCache?.attach(mirrorRenderer);
           }
           mirrorRenderer.setMvpMatrix(matrix); mirrorRenderer.setRenderState(null, [0, 0, canvas.width, canvas.height]);
           const drawMirror = mirrorRenderer.drawMeshWebGL;
@@ -679,10 +702,14 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       },
       getPerformanceStats() {
         graphicsInfo ??= readGraphicsInfo(gl);
+        const buffers = meshBufferCache?.stats();
         return { frames, skippedFrames, totalRenderMs, averageRenderMs: frames ? totalRenderMs / frames : 0, maxRenderMs,
           totalBehaviorMs, totalPhysicsMs, totalModelUpdateMs, totalHandOverlayMs, totalDrawMs,
+          ...drawStages,
           canvasWidth: canvas.width, canvasHeight: canvas.height, canvasPixels: canvas.width * canvas.height,
           textureBytes, textureCount: textures.length, maxFps: frameClock.maxFps, renderActive: renderActive && !destroyed,
+          meshBufferCacheEnabled:!!buffers?.rendererCount,meshBufferUploads:buffers?.uploads??0,meshBufferUploadSkips:buffers?.skips??0,
+          meshBufferUploadBytes:buffers?.bytes??0,meshBufferCount:buffers?.bufferCount??0,meshBufferLegacyCalls:buffers?.legacyCalls??0,
           contextAttributes: gl?.getContextAttributes() ?? null, ...graphicsInfo, ...frameDiagnostics.snapshot() };
       },
     };
@@ -702,6 +729,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
       try {
         const dt = Math.min(0.05, step);
         elapsed += dt;
+        meshBufferCache?.beginFrame();
         // Each frame starts at authored defaults; transient expression/physics values never accumulate.
         for (let i = 0; i < parameters.length; i++) model.setParameterValueByIndex(i, parameters[i].defaultValue);
         idleMotionManager.updateMotion(model, dt);

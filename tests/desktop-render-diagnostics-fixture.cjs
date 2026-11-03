@@ -95,6 +95,13 @@ async function verify(url, token) {
   }
   assert.doesNotMatch(copies[0], /"(?:apiKey|ttsKey|modelRoot|dataDir|token|session)"\s*:/);
   result.clipboardCopies = copies.length; result.privateDataAbsent = true;
+  assert.equal(copied.sample.meshBufferCacheEnabled,false,'experimental GPU buffer reuse is opt-in');
+  const beforeSwitch=copied.sample.receivedAt;
+  await js('chat', `Array.from(document.querySelectorAll('label')).find(node=>node.textContent.includes('GPU 数据复用')).querySelector('input').click()`);
+  const cached=await until(async()=>{const value=await(await request('/api/performance')).json();return value.quality?.cacheMeshBuffers===true&&value.sample?.meshBufferCacheEnabled===true&&value.sample?.meshBufferUploads>0&&value.sample?.meshBufferUploadSkips>0&&value.sample?.receivedAt>beforeSwitch?value:null;},'GPU reuse after the real UI switch',10000);
+  await js('chat', `Array.from(document.querySelectorAll('label')).find(node=>node.textContent.includes('GPU 数据复用')).querySelector('input').click()`);
+  await until(async()=>{const value=await(await request('/api/performance')).json();return value.quality?.cacheMeshBuffers===false&&value.sample?.meshBufferCacheEnabled===false&&value.sample?.receivedAt>cached.sample.receivedAt;},'legacy rendering restored after reload',10000);
+  result.bufferCacheSwitchVerified=true;
   result.windowsHidden = [...windows.values()].every(win => !win.__nativeIsVisible());
   assert.equal(result.windowsHidden, true);
   assert.equal(observedOrigins.size, 1);

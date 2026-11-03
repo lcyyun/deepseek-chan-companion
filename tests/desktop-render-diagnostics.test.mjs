@@ -37,6 +37,7 @@ test('real production model diagnostics reach authenticated API and the settings
   const report = JSON.parse(await readFile(join(directory, 'render-diagnostics-result.json'), 'utf8'));
   assert.equal(report.ok, true); assert.equal(report.windowsHidden, true); assert.equal(report.privateDataAbsent, true);
   assert.equal(report.clipboardCopies, 1); assert.ok(report.thinkingSampleCount >= 1);
+  assert.equal(report.bufferCacheSwitchVerified,true);
   assert.ok(report.gpuRenderer); assert.ok(report.textureBytes > 0);
   assert.deepEqual(report.errors, []);
   t.diagnostic(JSON.stringify(report));

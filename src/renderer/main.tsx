@@ -540,6 +540,8 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
         {value:'quality',label:'高清',description:'60 帧，更清晰的贴图与抗锯齿'},
       ]}/>
       <p className="hint">当前：{diagnostics?.renderQuality?.label||'均衡'}。隐藏桌宠时暂停渲染，显示后恢复。切换模式会重新加载模型并停止当前表演，选择后自动保存。</p>
+      <label className="check-row"><input type="checkbox" checked={diagnostics?.renderQuality?.cacheMeshBuffers===true} disabled={qualityChanging||!window.companion} onChange={async e=>{setQualityChanging(true);try{const profile=await window.companion?.control('render-buffer-cache',e.target.checked);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('绘制设置已保存，模型正在重新加载。');}catch(error:any){onError(error.message);}finally{setQualityChanging(false);}}}/>GPU 数据复用（实验）</label>
+      <p className="hint">减少重复上传，可能增加 CPU 和内存开销。默认关闭，可在卡顿场景对照；切换时重新加载模型。</p>
       <div className="button-row"><button disabled={!window.companion} onClick={async()=>{try{const report:any=await window.companion?.control('copy-performance');setResult(report?.available?'性能诊断已复制，请把内容发给排查问题的智能体。':'尚未收到模型渲染数据；诊断已复制，请等模型显示后再试。');}catch(e:any){onError(e.message);}}}>复制性能诊断</button></div>
       <p className="hint">复现卡顿后复制，可查看实际渲染设备和帧间隔。不包含聊天、密钥或模型路径。</p>
     </details>

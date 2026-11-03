@@ -143,3 +143,16 @@ test('performance samples are pet-only and copied diagnostics exclude pairing an
   assert.doesNotMatch(f.copied[0],/do-not-copy|private-model|fixture-token|modelRoot|dataDir/);
   assert.equal(JSON.parse(f.copied[0]).samples.length,1);assert.equal(f.writes.length,0);
 });
+
+test('GPU buffer reuse can be compared with legacy rendering without changing quality or hidden intent',async()=>{
+  const f=fixture();assert.equal(f.bootstrap('pet').renderQuality.cacheMeshBuffers,false);
+  await assert.rejects(f.invoke('pet','render-buffer-cache',false),/仅聊天/);
+  await assert.rejects(f.invoke('chat','render-buffer-cache','false'),/无效/);
+  f.api.hidePet();const old=await f.invoke('chat','render-buffer-cache',true);
+  assert.equal(old.cacheMeshBuffers,true);assert.equal(f.counts.reloads,1);
+  assert.equal(f.windows.pet.visible,false);assert.equal(f.api.requested(),false);
+  await f.invoke('chat','render-buffer-cache',true);assert.equal(f.counts.reloads,1);
+  const quality=await f.invoke('chat','render-quality','quality');assert.equal(quality.cacheMeshBuffers,true);
+  const next=await f.invoke('chat','render-buffer-cache',false);assert.equal(next.mode,'quality');assert.equal(next.cacheMeshBuffers,false);
+  assert.equal(f.counts.reloads,3);assert.equal(JSON.parse(f.writes.at(-1).data).cacheMeshBuffers,false);
+});

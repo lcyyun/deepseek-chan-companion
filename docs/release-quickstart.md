@@ -1,6 +1,6 @@
 # 发行版快速开始
 
-适用版本：0.22.1；更新日期：2026-11-03。[返回文档导航](README.md)
+适用版本：0.22.2；更新日期：2026-11-03。[返回文档导航](README.md)
 
 ## 准备
 
@@ -12,7 +12,7 @@
 
 ## 安装与第一次打开
 
-1. 将正式 ZIP **完整解压**到普通用户目录，在解压目录中运行随包的 `Install.ps1`。0.22.1 安装到 `%LOCALAPPDATA%\Programs\DeepSeekChan\app-0.22.1` 并创建快捷方式；以后每个版本有自己的 `app-<版本号>` 目录。不想安装快捷方式，也可以将完整解压目录作为便携版直接使用。不要在 ZIP 预览中运行，也不要只复制 exe。
+1. 将正式 ZIP **完整解压**到普通用户目录，在解压目录中运行随包的 `Install.ps1`。0.22.2 安装到 `%LOCALAPPDATA%\Programs\DeepSeekChan\app-0.22.2` 并创建快捷方式；以后每个版本有自己的 `app-<版本号>` 目录。不想安装快捷方式，也可以将完整解压目录作为便携版直接使用。不要在 ZIP 预览中运行，也不要只复制 exe。
 2. 双击“大肥鱼”快捷方式或 `DeepSeek-chan.exe`，以当前 Windows 用户正常运行，不需要管理员权限或 `--no-sandbox` 参数。
 3. 在首次向导中选择包含 `.model3.json` 的模型文件夹，保留原有贴图、动作和物理文件结构。
 4. 等角色显示后，点击悬浮球打开聊天窗口。先在“小表情”和“肢体”中各预览一个动作，确认模型加载正常。
@@ -28,7 +28,7 @@ powershell -NoProfile -File .\Install.ps1
 发布 ZIP 旁的 `.zip.sha256` 文件记录归档校验值；ZIP 内 `release-manifest.json` 记录逐文件校验值。也可以让脚本校验旁边的 ZIP 校验文件并从 ZIP 安装：
 
 ```powershell
-powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.22.1-win32-x64.zip
+powershell -NoProfile -File .\Install.ps1 -Archive .\DeepSeek-chan-0.22.2-win32-x64.zip
 ```
 
 校验值不能代替确认下载来源。当前包未做代码签名。安装脚本只写当前用户目录，不更改安全标签或申请管理员权限。不同版本安装到各自目录，并把快捷方式指向新版本；同版本只有内容完全一致时才允许重复安装，不擅自覆盖异常文件。
