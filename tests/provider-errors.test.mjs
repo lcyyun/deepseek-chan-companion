@@ -121,6 +121,7 @@ test('production DSH plugin advertises Session Controller availability and propa
     if (message.type === 'chat-result') resolveResult(message);
   }));
   attachChatBridge({ on() {}, effect: fn => disposers.push(fn()), tools: { definitions: () => [], guard() {} },
+    systemPrompt: { section() {} },
     sessionController: { create: async () => ({ sessionId: 'owned' }), prompt: async () => { throw Object.assign(new Error('api_key=secret-fixture-key'), { code: 'MISSING_CREDENTIAL' }); }, cancel: async () => {} } },
   { baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'fixture-token', chatCwd: home });
   const reply = await finished;

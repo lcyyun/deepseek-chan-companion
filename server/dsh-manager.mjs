@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { makeMessages, normalizeReply } from './protocol.mjs';
+import { makeMessages, normalizeReply, responseBudget } from './protocol.mjs';
+import { CHAT_PROTOCOL } from '../integrations/dsh/chat-prompt.mjs';
 
 export function createDshManager(onChange = () => {}, { instanceId = randomUUID() } = {}) {
   let connection = null, info = null, everConnected = false;
@@ -34,6 +35,7 @@ export function createDshManager(onChange = () => {}, { instanceId = randomUUID(
     const connected = Boolean(connection && connection.readyState === 1);
     const supported = info?.recoveryProtocol === 1;
     return { connected, chatAvailable: connected && info?.chatAvailable === true,
+      promptProtocol: info?.promptProtocol || 0,
       everConnected, reconnecting: everConnected && !connected,
       recoveryProtocol: supported ? 1 : 0, recoverySupported: supported,
       recoveryStatus: !connected ? 'disconnected' : !supported ? 'upgrade-required' : info.recoveryStatus,
@@ -51,6 +53,7 @@ export function createDshManager(onChange = () => {}, { instanceId = randomUUID(
     // registering chat:true, so omission remains compatible. Explicit false
     // never advertises chat availability.
     info = { chatAvailable: metadata.chat === true && metadata.sessionControllerAvailable !== false,
+      promptProtocol: metadata.promptProtocol === CHAT_PROTOCOL ? CHAT_PROTOCOL : 0, nativeMode: metadata.nativeMode === true,
       recoveryProtocol: metadata.recoveryProtocol === 1 ? 1 : 0, recoveryStatus: 'checking',
       mcpReachable: false, nativeToolsReady: null, host: cleanHost(metadata.host),
       sessionId: String(metadata.sessionId || ''), searchAvailable: metadata.searchAvailable === true };
@@ -102,7 +105,7 @@ export function createDshManager(onChange = () => {}, { instanceId = randomUUID(
         ? { segments: [{ text: String(message.reply || '……'), intent: 'neutral', emotion: 'neutral', gesture: 'none', bodyAnimation: 'none', combination: 'none' }], details: '', sources: [], nativePerformed: message.nativePerformed === true }
         : message.reply);
       const searchUsed = message.searchUsed === true;
-      entry.finish(null, { ...reply, sources: searchUsed ? reply.sources : [], provider: 'dsh', searchAvailable: info?.searchAvailable === true, searchAttempted: message.searchAttempted === true, searchUsed });
+      entry.finish(null, { ...reply, nativeMode: message.nativeMode === true, sources: searchUsed ? reply.sources : [], provider: 'dsh', searchAvailable: info?.searchAvailable === true, searchAttempted: message.searchAttempted === true, searchUsed });
     } catch { entry.finish(remoteFailure({ code: 'DSH_INVALID_REPLY' })); }
   }
   function recoveryResult() {
@@ -130,11 +133,19 @@ export function createDshManager(onChange = () => {}, { instanceId = randomUUID(
     connection.send(JSON.stringify({ type: 'bridge-recovery-request', requestId, instanceId, recoveryProtocol: 1 }));
     return promise;
   }
-  function chat({ settings, request, history, signal, onProgress }) {
+  function chat({ settings, request, signal, onProgress }) {
     if (!state().chatAvailable) throw fail(everConnected ? 'DSH已断线，正在等待聊天桥重连。' : 'DSH聊天桥未启用。请在DeepSeek Harness插件中启用chat: true并确认Session Controller可用。', everConnected ? 'DSH_BRIDGE_DISCONNECTED' : 'DSH_CHAT_NOT_CONNECTED');
-    const { messages } = makeMessages({ ...request, verbosity: request.verbosity || settings.verbosity, history });
+    const verbosity = request.verbosity || settings.verbosity;
+    const input = { text: request.text, mode: request.mode || 'chat', verbosity,
+      budget: responseBudget(request.text, verbosity), ...(request.context ? { context: request.context } : {}) };
+    // DSH owns a persistent conversation. Never send the companion's mirrored
+    // history, even to an older bridge. New native bridges use their tool schema
+    // and a short hidden section instead of the full structured-output catalog.
+    const messages = info?.nativeMode && info?.promptProtocol === CHAT_PROTOCOL
+      ? [{ role: 'user', content: request.text }]
+      : makeMessages({ ...request, verbosity, history: [], ...(info?.promptProtocol === CHAT_PROTOCOL ? { context: undefined } : {}) }).messages;
     const searchAllowed = info?.searchAvailable === true && settings.webSearch;
-    messages[0].content += searchAllowed ? '\n只允许使用桥接插件已授权的网页检索工具。不允许执行Shell、读写本地文件或调用角色工具。' : '\n当前没有授权网页检索工具。不要声称已经搜索，sources必须为空数组。禁止调用其他工具。';
+    if (messages[0].role === 'system') messages[0].content += searchAllowed ? '\n只允许使用桥接插件已授权的网页检索工具。不允许执行Shell、读写本地文件或调用角色工具。' : '\n当前没有授权网页检索工具。不要声称已经搜索，sources必须为空数组。禁止调用其他工具。';
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       if (signal?.aborted) return reject(fail('DSH回合已取消。', 'DSH_TURN_CANCELLED', 499));
@@ -143,7 +154,7 @@ export function createDshManager(onChange = () => {}, { instanceId = randomUUID(
       const finish = (err, reply) => { if (!pending.has(requestId)) return; pending.delete(requestId); signal?.removeEventListener('abort', abort); err ? reject(err) : resolve(reply); };
       pending.set(requestId, { finish, onProgress });
       signal?.addEventListener('abort', abort, { once: true });
-      socket.send(JSON.stringify({ type: 'chat-request', requestId, messages, searchAllowed }));
+      socket.send(JSON.stringify({ type: 'chat-request', requestId, input, messages, searchAllowed, promptProtocol: CHAT_PROTOCOL }));
     });
   }
   return { register, disconnected, result, chat, state, requestRecovery };

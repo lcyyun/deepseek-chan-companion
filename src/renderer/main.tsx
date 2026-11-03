@@ -351,7 +351,7 @@ function Pet(){
       try{
         const manifest=await api('/api/model-manifest');
         const quality=(credentials() as any).renderQuality||resolveRenderQuality();
-        const handle=await createLive2D(canvas.current!,{manifest,modelBaseUrl:credentials().url+'/model/',fetcher:(url:string)=>fetch(url,{headers:{Authorization:`Bearer ${credentials().token}`}}),...quality,onFrame:(dt:number,elapsed:number)=>{behavior.current?.setAudioLevel(speaker.current.level());behavior.current?.update(dt,elapsed);},onError:(e:any)=>setError(String(e?.message||e))} as any);
+        const handle=await createLive2D(canvas.current!,{manifest,modelBaseUrl:credentials().url+'/model/',fetcher:(url:string)=>fetch(url,{headers:{Authorization:`Bearer ${credentials().token}`}}),...quality,getDiagnosticLabel:()=>{const intent=(behavior.current as any)?.action?.intent;return intent==='idea'?'idea':intent==='think'?'thinking':activeState.current;},onFrame:(dt:number,elapsed:number)=>{behavior.current?.setAudioLevel(speaker.current.level());behavior.current?.update(dt,elapsed);},onError:(e:any)=>setError(String(e?.message||e))} as any);
         handle.setRenderActive(renderActive.current);
         if(disposed){handle.destroy();return;}runtime.current=handle;handle.setModelTuning(modelTuning.current,{replace:true});if(petPlacement.current)handle.setPlacement(petPlacement.current);else handle.setView(petView.current.scale,petView.current.offsetX,petView.current.offsetY);behavior.current=new BehaviorController(handle,{onEvent:(event:any)=>{if(event.type==='error')reportError('动作未能播放：'+(event.message||event.error||'未知原因'));}});behavior.current.setBasinEnabled(basinEnabled.current);behavior.current.setGlassesEnabled(glasses.current.enabled,glasses.current.style);behavior.current.setSmallFormEnabled(smallForm.current);behavior.current.setTuning(modelTuning.current,{replace:true});setReady(true);setState(activeState.current);if(pendingCommand.current){behavior.current.applyCommand(pendingCommand.current);pendingCommand.current=null;}if(pendingReply.current){const item=pendingReply.current;pendingReply.current=null;void presentReply(item);}
       }catch(e:any){setError(e.message||String(e));setStatus('模型加载失败');}
@@ -395,6 +395,11 @@ function Pet(){
       if(e.type==='watch'&&!e.watch?.enabled){clearTimeout(autoWatch.current.timer);autoWatch.current.url='';autoWatch.current.lastAt=0;if(speakingPage.current)stop();}
     });
     const offDesktop=window.companion?.onEvent(e=>{if(e.type==='render-active'){renderVisibilityRevision.current++;renderActive.current=e.active!==false;runtime.current?.setRenderActive(renderActive.current);}if(e.type==='pet-pointer-release')nativePointerRelease(e);if(e.type==='chest-preview')behavior.current?.previewChestReaction(e.stage);if(e.type==='model-tuning')applyModelTuning(e.tuning);if(e.type==='basin-enabled')applyBasin(e.enabled);if(e.type==='glasses')applyGlasses(e);if(e.type==='small-form')applySmallForm(e.enabled);if(e.type==='pet-scale')applyPetScale(e);if(e.type==='pointer-tracking')trackPointer(e);if(e.type==='mouse-input-unavailable')reportError('鼠标跟随暂不可用：'+e.message);if(e.type==='drag-mode'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);setDrag(e.enabled);}if(e.type==='input-mode'||e.type==='input-cancel'){endPointer(true);behavior.current?.cancelChestReaction();behavior.current?.cancelBasinKnock();basinSound.current.stop();behavior.current?.setPointerTracking(false);}});
+    const offGpuTiming=window.companion?.onEvent(e=>{
+      if(e.type!=='start-gpu-timing'||e.renderGeneration!==(credentials().renderGeneration??0))return;
+      const status=runtime.current?.startGpuTiming(e.durationMs)||{supported:false,active:false,reason:'not-ready'};
+      window.companion?.control('gpu-timing-status',{...status,requestId:e.requestId,renderGeneration:e.renderGeneration}).catch(()=>{});
+    });
     applyPetScale((credentials() as any).petScale);applyBasin((credentials() as any).basinEnabled);applyGlasses({enabled:(credentials() as any).glassesEnabled,style:(credentials() as any).glassesStyle});applySmallForm((credentials() as any).smallFormEnabled);applyModelTuning((credentials() as any).modelTuning);
     const visibilityRevision=renderVisibilityRevision.current;
     window.companion?.control('diagnostics').then((d:any)=>{if(renderVisibilityRevision.current===visibilityRevision&&typeof d?.renderActive==='boolean'){renderActive.current=d.renderActive;runtime.current?.setRenderActive(d.renderActive);}setDrag(!!d?.dragMode);applyPetScale(d?.petScale);if(d?.modelTuning)applyModelTuning(d.modelTuning);if(typeof d?.basinEnabled==='boolean')applyBasin(d.basinEnabled);if(d?.glassesEnabled!==undefined)applyGlasses({enabled:d.glassesEnabled,style:d.glassesStyle});if(typeof d?.smallFormEnabled==='boolean')applySmallForm(d.smallFormEnabled);});
@@ -426,7 +431,7 @@ function Pet(){
       const key=JSON.stringify({revision,head:stableHead,body:stableBody,fullBody:stableFullBody,regions:stableRegions});
       if(key!==lastShape){lastShape=key;if(r)setModelRegion({body:stableBody||body,head:stableHead||head});setGuardRects(stableRegions);window.companion?.control('pet-hit-regions',{regions:stableRegions,body:stableBody,fullBody:stableFullBody,revision}).catch(()=>{});}
     },100);
-    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);dragMoves.current?.dispose();dragMoves.current=null;clearInterval(regionsTimer);clearInterval(metricsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
+    return()=>{disposed=true;clearFaceTimeline();clearGestureTimeline();setIdea(false);wheelTarget?.removeEventListener('wheel',wheel);sequence.current++;cancelPresentationWait();pendingReply.current=null;endPointer(true);dragMoves.current?.dispose();dragMoves.current=null;clearInterval(regionsTimer);clearInterval(metricsTimer);window.removeEventListener('blur',cancel);document.removeEventListener('visibilitychange',visibility);off();offDesktop?.();offGpuTiming?.();clearTimeout(autoWatch.current.timer);speaker.current.destroy();basinSound.current.destroy();behavior.current?.destroy();runtime.current?.destroy();};
   },[]);
   dragEnabled.current=drag;
   const anchor=modelRegion?.head||{x:(petPlacement.current?.centerX??innerWidth/2)-80,y:(petPlacement.current?.centerY??innerHeight/2)-250,width:160,height:160};
@@ -504,6 +509,9 @@ function Chat(){
 function Settings({settings,connection,onSaved,onError}:{settings:any;connection:any;onSaved:()=>void;onError:(e:string)=>void}){
   const [form,setForm]=useState<any>({}),[saving,setSaving]=useState(false),[result,setResult]=useState(''),[diagnostics,setDiagnostics]=useState<any>(null);
   const [qualityChanging,setQualityChanging]=useState(false);
+  const [gpuCapturing,setGpuCapturing]=useState(false),[gpuMessage,setGpuMessage]=useState('');
+  const gpuNoticeTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
+  useEffect(()=>()=>clearTimeout(gpuNoticeTimer.current),[]);
   useEffect(()=>{window.companion?.control('diagnostics').then(setDiagnostics);return window.companion?.onEvent(e=>{if(e.type==='pet-scale')setDiagnostics((d:any)=>({...d,petScale:e}));if(e.type==='render-quality')setDiagnostics((d:any)=>({...d,renderQuality:e.profile}));});},[]);
   useEffect(()=>{if(settings)setForm({...settings,apiKey:'',ttsKey:'',ttsBaseUrl:settings.tts?.baseUrl||'',ttsModel:settings.tts?.model||'',ttsVoice:settings.tts?.voice||'alloy'});},[settings]);
   const set=(key:string,value:any)=>setForm((f:any)=>({...f,[key]:value}));
@@ -513,6 +521,15 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
   const setTtsProvider=(provider:string)=>setForm((f:any)=>({...f,tts:{...f.tts,provider,enabled:provider==='api'}}));
   async function save(){setSaving(true);setResult('');try{const payload={...form};if(!payload.apiKey)delete payload.apiKey;if(!payload.ttsKey)delete payload.ttsKey;await api('/api/settings',payload,'PUT');onSaved();setResult('已保存，下次对话生效。');}catch(e:any){onError(e.message);setResult(e.message);}finally{setSaving(false);}}
   async function chooseQuality(mode:string){setQualityChanging(true);try{const profile=await window.companion?.control('render-quality',mode);setDiagnostics((d:any)=>({...d,renderQuality:profile}));setResult('画质设置已保存，模型正在重新加载。');}catch(e:any){onError(e.message);}finally{setQualityChanging(false);}}
+  async function captureGpu(){
+    setGpuCapturing(true);setGpuMessage('正在确认 GPU 计时支持…');clearTimeout(gpuNoticeTimer.current);
+    try{
+      const status:any=await window.companion?.control('start-gpu-timing');
+      if(!status?.active){setGpuCapturing(false);setGpuMessage(status?.reason==='unsupported'?'当前驱动不支持 GPU 计时，仍可复制普通性能诊断。':'GPU 计时未能开始，请保持模型显示后重试。');return;}
+      setGpuMessage('已开始采集。请在 15 秒内播放卡顿的动作，保持模型显示。');
+      gpuNoticeTimer.current=setTimeout(()=>{setGpuCapturing(false);setGpuMessage('现在可以复制性能诊断，查看 GPU 用时和采集状态。');},20000);
+    }catch(e:any){setGpuCapturing(false);setGpuMessage(e.message||'采集未能开始。');}
+  }
   return <section className="panel-scroll settings-panel"><div className="section-intro"><h2>按你的节奏相处</h2><p>模型留在本机。随时选择你的智能体。</p></div>
     <SettingsSelect id="provider" label="对话来源" value={providerChoice} onChange={chooseProvider} options={[
       {value:'auto',label:'自动 · 优先 DeepSeek Harness',description:'聊天桥就绪后自动接入；未连接时保持等待'},
@@ -546,6 +563,9 @@ function Settings({settings,connection,onSaved,onError}:{settings:any;connection
       <p className="hint">默认关闭，由桌宠直接管理画布状态，减少同步查询。如需对照旧路径可勾选；切换后请等模型重新加载。</p>
       <div className="button-row"><button disabled={!window.companion} onClick={async()=>{try{const report:any=await window.companion?.control('copy-performance');setResult(report?.available?'性能诊断已复制，请把内容发给排查问题的智能体。':'尚未收到模型渲染数据；诊断已复制，请等模型显示后再试。');}catch(e:any){onError(e.message);}}}>复制性能诊断</button></div>
       <p className="hint">复现卡顿后复制，可查看实际渲染设备和帧间隔。不包含聊天、密钥或模型路径。</p>
+      <button disabled={!window.companion||qualityChanging||gpuCapturing} onClick={captureGpu}>{gpuCapturing?'等待诊断结果…':'采集 GPU 用时（15 秒）'}</button>
+      <p className="hint">仅排查卡顿时使用。默认不采集；隐藏或重载模型会提前停止。结束后稍等几秒，再复制性能诊断。它测量模型绘制的 GPU 用时，不包含桌面合成与显示延迟。</p>
+      {gpuMessage&&<p className="hint" role="status" data-gpu-timing-status>{gpuMessage}</p>}
     </details>
     <details className="settings-group"><summary>声音与口型</summary>
       <p className="hint">选择大肥鱼说话的声音。口型和肢体节奏跟随实际播放的音频。</p>

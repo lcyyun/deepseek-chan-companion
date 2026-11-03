@@ -1,8 +1,8 @@
 # DSH 干净 profile 接入与受限环境验收
 
-最近校对：2026-11-02，按应用 0.20.0 核对。返回[文档目录](README.md)；完整命令契约见[DSH 操作手册](dsh-agent-guide.md)。
+最近校对：2026-11-03，按应用 0.23.0 核对。返回[文档目录](README.md)；完整命令契约见[DSH 操作手册](dsh-agent-guide.md)。
 
-适用于大肥鱼 0.20.0。安装前先按[DSH 安装模式](dsh-install-modes.md)询问用户选择“接到已有会话”还是“新建独立桌宠会话”；不要默认。用户此前已反馈在 **DeepSeek Harness 0.2.1-rc.2 的全新 profile** 中完成真实端到端验证：MCP 十一个工具、状态桥、双向聊天和真实模型渲染均正常。该记录来自用户实机验收；0.19 原生工具模式和 0.18 的来源解析、断线重连与错误分流使用隔离测试宿主验收，不将自动测试称作真实 DSH 账号验证。
+适用于大肥鱼 0.23.0。安装前先按[DSH 安装模式](dsh-install-modes.md)询问用户选择“接到已有会话”还是“新建独立桌宠会话”；不要默认。用户此前已反馈在 **DeepSeek Harness 0.2.1-rc.2 的全新 profile** 中完成真实端到端验证：MCP 十一个工具、状态桥、双向聊天和真实模型渲染均正常。这是此前版本的用户实机记录；0.23.0 新协议另按实际宿主源码契约与隔离测试验证，不能由旧结果推导当前账号已完成端到端验收。
 
 ## 1. 先选择运行环境
 
@@ -95,7 +95,7 @@ dsh web --patch $dshPatch
 
 | 检查 | 通过条件 |
 |---|---|
-| MCP 发现 | 能发现操作手册中的十个 `avatar_*` 工具 |
+| MCP 发现 | 能发现操作手册中的十一个 `avatar_*` 工具，包含 `avatar_reply` |
 | 状态与模型 | `avatar_state` 的模型 ready；现场能看见真实模型渲染 |
 | 表情／动作 | 分别调用 `avatar_expression`、`avatar_body`、`avatar_perform`，角色确实表现，预览结束后恢复 |
 | 状态桥 | 普通 DSH 回合开始后显示思考，结束后恢复；自身角色工具不递归触发 |
@@ -105,6 +105,10 @@ dsh web --patch $dshPatch
 | 手动来源 | 显式 API／Codex 不被 DSH 接入覆盖；显式 DSH 重启后保持。Codex 不自动选择 |
 | 隔离 | 专用会话 cwd 位于本次 home，常用 home 下没有因此新建 `live2d-companion` |
 | 停止 | 生成／朗读中停止后取消对应回合，不补播旧回复 |
+| 新桥协议 | `/api/state.dsh.promptProtocol` 为 `2`；旧值不代表断线，但需要更新并正常重载桥一次 |
+| 可见正文 | 连续聊两轮，DSH 每条用户消息只有本次输入，无旧助手回复、角色标签或规则前缀；历史仍由原 DSH 会话保留 |
+| 原生表演 | `native:true` 时一次 `avatar_reply` 完成朗读与动作，普通助手回复不重复播放，不额外生成改写回合 |
+| A 回合隔离 | 原会话正在工作时，桌宠消息先排队；取消该消息不停止原工作，也不把桌宠规则带入原工作 |
 
 网页搜索单独验收：只有配置了已安装工具的精确 `searchTools` 名称，且真实工具成功返回，才记录“搜索通过”。空列表下搜索能力关闭，不属于基础连接故障。
 
@@ -114,11 +118,14 @@ dsh web --patch $dshPatch
 $bridgeHeaders = @{ Authorization = "Bearer $env:L2D_BRIDGE_TOKEN" }
 Invoke-RestMethod 'http://127.0.0.1:39181/api/state' -Headers $bridgeHeaders |
   Select-Object providerEffective, providerSource, chatAvailable, chatStatus, chatMessage,
-    @{Name='mcpRecent';Expression={$_.performance.connected}},
-    @{Name='dshChatReady';Expression={$_.dsh.chatAvailable}}
+    @{Name='mcpConnected';Expression={$_.performance.connected}},
+    @{Name='dshChatReady';Expression={$_.dsh.chatAvailable}},
+    @{Name='promptProtocol';Expression={$_.dsh.promptProtocol}}
 ```
 
-`mcpRecent` 基于最近 65 秒的已认证 MCP 活动，空闲超时不代表配置已丢失；重新调用 `avatar_state` 可续期。`dshChatReady` 表示桥在线并声明宿主接口可用，模型凭据、配额及语音合成还需分别验收。默认晓伊需要联网，语音失败与 DSH 模型失败不是同一个问题。
+MCP 注册与最近活动分别记录，65 秒没有调用只表示空闲，不应显示成配置丢失。`dshChatReady` 表示桥在线并声明宿主接口可用，`promptProtocol:2` 表示新提示通道；模型凭据、配额及语音合成仍需分别验收。默认晓伊需要联网，语音失败与 DSH 模型失败不是同一个问题。
+
+从旧版升级时，保留会话 ID、session 文件和配对信息，正常更新完整集成目录并重新加载对应桥。新版不会清理之前已经写入的历史，也不应为得到干净截图删除用户会话。规约进入匹配回合的隐藏 `systemPrompt.section`；网页资料标为不可信引用，不能授权工具。宿主若缺少该 API，桥会明确报错，而不是退回把规则塞进用户消息。
 
 ## 6. 已知作业环境错误
 

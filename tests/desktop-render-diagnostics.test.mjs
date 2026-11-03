@@ -11,7 +11,7 @@ const run = promisify(execFile), require = createRequire(import.meta.url);
 
 test('real production model diagnostics reach authenticated API and the settings copy button', {
   skip: process.platform !== 'win32' || !process.env.L2D_MODEL_ROOT,
-  timeout: 65000,
+  timeout: 90000,
 }, async t => {
   try { await access(resolve('dist/index.html')); }
   catch { t.skip('Build the production UI first'); return; }
@@ -28,7 +28,7 @@ test('real production model diagnostics reach authenticated API and the settings
   const env = { ...process.env, COMPANION_PORT: String(port) }; delete env.ELECTRON_RUN_AS_NODE;
   try {
     await run(require('electron'), [resolve('tests/desktop-render-diagnostics-fixture.cjs'), directory], {
-      cwd: resolve('.'), env, windowsHide: true, timeout: 60000, maxBuffer: 1024 * 1024,
+      cwd: resolve('.'), env, windowsHide: true, timeout: 85000, maxBuffer: 1024 * 1024,
     });
   } catch (error) {
     const report = JSON.parse(await readFile(join(directory, 'render-diagnostics-result.json'), 'utf8').catch(() => '{}'));
@@ -39,6 +39,9 @@ test('real production model diagnostics reach authenticated API and the settings
   assert.equal(report.clipboardCopies, 1); assert.ok(report.thinkingSampleCount >= 1);
   assert.equal(report.bufferCacheSwitchVerified,true);
   assert.equal(report.ownedStateSwitchVerified,true);
+  assert.equal(report.gpuTimingIpcVerified,true);assert.equal(report.gpuTimingUiVerified,true);
+  assert.equal(typeof report.gpuTimingSummary.supported,'boolean');
+  assert.ok(['completed','unsupported','observer-overhead','timer-error'].includes(report.gpuTimingSummary.reason));
   assert.ok(report.gpuRenderer); assert.ok(report.textureBytes > 0);
   assert.deepEqual(report.errors, []);
   t.diagnostic(JSON.stringify(report));

@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRenderClock, createRenderDiagnostics, readGraphicsInfo, pngDimensions, renderCanvasSize, textureDecodeSize } from '../src/shared/render-performance.mjs';
 
-test('60-fps pacing remains near 60 on 60/75/120/144/240-Hz displays', () => {
-  for (const refreshRate of [60, 75, 120, 144, 240]) {
+test('60-fps pacing remains near 60 on 60/75/120/144/165/240-Hz displays', () => {
+  for (const refreshRate of [60, 75, 120, 144, 165, 240]) {
     const clock = createRenderClock(60), steps = [];
     for (let frame = 0; frame <= refreshRate * 10; frame++) {
       const dt = clock.advance(frame * 1000 / refreshRate);
@@ -13,6 +13,51 @@ test('60-fps pacing remains near 60 on 60/75/120/144/240-Hz displays', () => {
     assert.ok(Math.abs(steps.slice(1).reduce((sum, dt) => sum + dt, 0) - 10) < 1e-8);
     assert.ok(Math.max(...steps) <= 1 / 60 + 1 / refreshRate + 1e-8);
   }
+});
+
+test('quantized and jittered display ticks retain the requested cadence and actual elapsed time', () => {
+  for (const fps of [30,60]) for (const refreshRate of [60,75,120,144,165,240]) {
+    for (const quantum of [.1,1]) for (const jitter of [0,.3]) {
+      const clock=createRenderClock(fps), rendered=[], steps=[];
+      for(let frame=0;frame<=refreshRate*10;frame++) {
+        const noise=jitter*Math.sin(frame*1.73);
+        const time=Math.max(0,Math.floor((frame*1000/refreshRate+noise)/quantum)*quantum);
+        const dt=clock.advance(time);
+        if(dt!==null){rendered.push(time);steps.push(dt);}
+      }
+      const label=`target=${fps}, refresh=${refreshRate}, quantum=${quantum}, jitter=${jitter}`;
+      assert.ok(Math.abs(rendered.length-(fps*10+1))<=1,label+`: frames=${rendered.length}`);
+      const sum=steps.slice(1).reduce((a,b)=>a+b,0);
+      assert.ok(Math.abs(sum-(rendered.at(-1)-rendered[0])/1000)<1e-8,label+': actual dt');
+      const intervals=rendered.slice(1).map((time,index)=>time-rendered[index]);
+      assert.ok(Math.min(...intervals)>=500/fps-1e-7,label+': no catch-up burst');
+      assert.ok(Math.max(...intervals)<=1000/fps+1000/refreshRate+2,label+': no extra missed display tick');
+    }
+  }
+});
+
+test('slightly early or late frames cannot trigger an immediate second catch-up frame', () => {
+  const clock=createRenderClock(60);
+  assert.equal(clock.advance(0),1/60);
+  assert.ok(Math.abs(clock.advance(32.3)-.0323)<1e-10);
+  assert.equal(clock.advance(33.4),null);
+  assert.equal(clock.advance(34),null);
+  assert.ok(Math.abs(clock.advance(50)-.0177)<1e-10);
+  assert.equal(clock.advance(50),null);
+  assert.equal(clock.advance(NaN),null);assert.equal(clock.advance(Infinity),null);
+  assert.ok(Math.abs(clock.advance(1000)-.95)<1e-10);
+  assert.equal(clock.advance(1001),null);
+  assert.ok(Math.abs(clock.advance(1016.6)-.0166)<1e-10);
+});
+
+test('clock rollback after a skipped callback and reset both establish a fresh baseline', () => {
+  const clock=createRenderClock(60);
+  clock.advance(100);assert.equal(clock.advance(108),null);
+  assert.equal(clock.advance(105),1/60,'rollback is observed even if the last callback was skipped');
+  assert.equal(clock.advance(106),null);
+  clock.reset();assert.equal(clock.advance(50000),1/60);
+  assert.equal(clock.advance(50000.1),null);
+  assert.ok(Math.abs(clock.advance(50016.6)-.0166)<1e-10);
 });
 
 test('render clock skips missed deadlines without a burst or cumulative drift', () => {

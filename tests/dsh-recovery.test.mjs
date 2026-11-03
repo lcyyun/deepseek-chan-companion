@@ -15,6 +15,7 @@ const toolNames = ['mcp__live2d__avatar_capabilities', 'mcp__live2d__avatar_repl
 function host(definitions = () => toolNames.map(name => ({ name }))) {
   const cleanup = [], calls = [];
   const ctx = { tools: { schemas: definitions, guard() {} }, on() {}, effect(fn) { cleanup.push(fn()); },
+    systemPrompt: { section() {} },
     sessionController: { create() { calls.push('create'); throw Error('Recovery must not create sessions'); }, prompt() { calls.push('prompt'); }, cancel() { calls.push('cancel'); } } };
   return { ctx, calls, dispose: () => cleanup.forEach(fn => fn?.()) };
 }

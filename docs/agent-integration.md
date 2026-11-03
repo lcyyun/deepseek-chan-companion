@@ -2,7 +2,7 @@
 
 **0.21.0 连接恢复补充：** 日常使用改为固定的“连接／重新连接”；首次配置保存安装身份、A/B 选择和固定启动入口。新桥在桌宠重启后自动认证并重新发现 MCP 工具，单独核对 DSH 工具注册。旧桥聊天继续可用，但首次升级需要重载插件一次；详细状态字段和边界见[连接与自动恢复](dsh-reconnect.md)。原有角色工具与对话协议继续沿用下文。
 
-最近校对：2026-11-02，按应用 0.20.0 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
+最近校对：2026-11-03，按应用 0.23.0 的代码与接口核对。返回[文档目录](README.md)。本文说明当前接入行为；版本沿革不作为安装步骤。
 
 给 DeepSeek Harness 智能体直接阅读的完整操作说明见 [DSH 智能体操作手册](dsh-agent-guide.md)，包括十一个 MCP 工具、25 种表情、12 组独立肢体、12 个开场组合、朗读节奏、双向聊天桥和诊断流程。已有连接时可直接提供[模型控制快速指南](model-control-quickstart.md)。本文对应 0.20.0；DSH 新环境请从[干净 profile 接入指南](dsh-clean-profile.md)开始。
 
@@ -72,26 +72,30 @@ HTTP、MCP和聊天结构化回复共用能力表：`intent`支持`neutral/greet
 
 DeepSeek Harness 的示例在 `integrations/dsh/cordis.patch.example.yml`。校正其中绝对插件路径后，将它作为 `dsh web --patch <绝对路径>` 的覆盖层。MCP 客户端负责显式表演，附带的 Cordis 插件负责将回合开始、非角色工具调用和回合结束映射成角色状态。状态观察部分只发送会话ID和状态，不上传会话正文；下述双向聊天桥会把桌宠问题及已授权页面内容交给DSH，并回传该回合的回答。多会话时可用 `sessionId` 限定状态观察来源。桌宠关闭不会阻断DSH。
 
-加载完整项目或便携包中的集成目录，保留 `live2d-bridge.mjs` 相邻的 `home-paths.mjs`、`chat-errors.mjs`，并确保能解析项目依赖 `ws`。更新文件后需重新加载 DSH 插件／重启对应测试 profile，已运行的旧模块不会因 Git 更新自动替换。
+加载完整项目或便携包中的集成目录，保留 `live2d-bridge.mjs` 相邻的 `home-paths.mjs`、`chat-errors.mjs`、`chat-prompt.mjs`、`recovery-tools.mjs`，并确保能解析项目依赖 `ws`。更新文件后需重新加载 DSH 插件／正常重启对应 profile，已运行的旧模块不会因 Git 更新自动替换。
 
 DSH接入依据官方 [MCP客户端](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md)、[插件加载](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md) 和 [事件接口](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/framework/events.md)。DSH仍在快速迭代，首次接入需使用你安装的版本验证。
 
 安装前先按[DSH 安装模式](dsh-install-modes.md)询问用户选 A“接到已有会话”还是 B“新建独立桌宠会话”；不要默认。A 还要让用户选择具体会话。两种模式都推荐 `native: true`，由智能体在正常聊天中按需调用一次 `avatar_reply`，不再把长 JSON 表演规范作为每轮用户消息注入会话。
 
-应用内「连接 DeepSeek Harness」会检测 CLI/`DSH_HOME`、生成 patch 和 A/B 两套接入提示词；用户把提示词交给 DSH 智能体完成桥接，应用不自动启动或结束 DSH。手工配置时可用 `tokenFile` 代替环境变量；B 模式可用 `sessionFile` 保存新建的会话 ID，A 模式使用 `chatSessionId`。
+应用内「连接 DeepSeek Harness」会检测 CLI/`DSH_HOME`、生成 patch 和 A/B 两套接入提示词；用户把提示词交给 DSH 智能体完成首次配置。之后自动恢复已有连接，仅明确点击“启动已配置的 DSH”时尝试启动登记实例，不结束现有 DSH。手工配置时可用 `tokenFile` 代替环境变量；B 模式可用 `sessionFile` 保存新建的会话 ID，A 模式使用 `chatSessionId`。
 
 插件支持 `tokenFile`（本地 token 文件）作为 `L2D_BRIDGE_TOKEN` 的替代；B 模式支持 `sessionFile`，首次创建后写入会话 ID，重启复用。应用内连接默认使用这两项。
 
-插件的`chat:true`开启双向聊天桥（当前插件默认启用，`chat:false`关闭）。它调用官方`ctx.sessionController.create/prompt/cancel`，在 DSH home 下的 `live2d-companion` 创建独立桌宠会话。目录优先级为显式 `chatCwd` → `dshHome/live2d-companion` → `$DSH_HOME/live2d-companion` → `~/.dsh/live2d-companion`；支持 `~` 展开，桥加载时固定路径，自定义 home 不会写入默认 home。也可配置`chatSessionId`复用专门会话，此时不创建目录。`sessionId`仅过滤状态观察来源，不能代替`chatSessionId`。服务通过认证WebSocket发送问题，插件以内部`requestId`关联用户消息及同一回合的最终助手回复，返回真实结果；停止会取消该回合。桥未连接时明确报错，不伪造回复。契约依据[官方Session Controller](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/api/session-controller/src/index.ts)及[DSH home-paths](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md)。
+插件的`chat:true`开启双向聊天桥（当前插件默认启用，`chat:false`关闭）。它调用官方`ctx.sessionController.create/prompt/cancel`，在 DSH home 下的 `live2d-companion` 创建独立桌宠会话。目录优先级为显式 `chatCwd` → `dshHome/live2d-companion` → `$DSH_HOME/live2d-companion` → `~/.dsh/live2d-companion`；支持 `~` 展开，桥加载时固定路径，自定义 home 不会写入默认 home。也可配置`chatSessionId`复用专门会话，此时不创建目录。`sessionId`仅过滤状态观察来源，不能代替`chatSessionId`。服务通过认证WebSocket发送问题，新桥在收件箱领取时按内部`requestId`关联确切回合，回传该回合的最终助手回复；停止已领取的桌宠回合才调用取消，排队项仅删除自身。桥未连接时明确报错，不伪造回复。契约依据[官方Session Controller](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/api/session-controller/src/index.ts)及[DSH home-paths](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/home-paths/README.md)。
 
-桌宠会话的工具守卫默认禁止执行命令、访问文件和调用角色工具。`native: true`时额外允许 `avatar_reply` 这一个原子表演工具：它一次接收最多三段完整计划，负责朗读和动作，普通助手文本只用于聊天窗展示，不会重复朗读；`avatar_speak` 等低层工具不会在聊天桥里开放。需要联网时，在`searchTools`里填写已安装的可信只读网页检索工具**精确名称**；插件会检查工具存在。默认空列表表示没有网页搜索，界面不会显示伪造来源。DSH使用程序化工具模式时，通用`run_code`仍被禁止，建议该专用会话使用原生工具模式。守卫仅影响桌宠会话，不影响其他DSH会话。用户已在 DSH `0.2.1-rc.2` 全新 profile 中完成 MCP 十一个工具、状态桥、双向聊天和真实模型渲染的端到端验证；自动测试另行覆盖契约及真实 WebSocket 传输，其他版本与插件配置仍需连接后验证。
+桌宠会话的工具守卫默认禁止执行命令、访问文件和调用角色工具。`native: true`时额外允许 `avatar_reply` 这一个原子表演工具：它一次接收最多三段完整计划，负责朗读和动作，普通助手文本只用于聊天窗展示，不会重复朗读；`avatar_speak` 等低层工具不会在聊天桥里开放。需要联网时，在`searchTools`里填写已安装的可信只读网页检索工具**精确名称**；插件会检查工具存在。默认空列表表示没有网页搜索，界面不会显示伪造来源。DSH使用程序化工具模式时，通用`run_code`仍被禁止，建议该专用会话使用原生工具模式。A 模式的守卫仅影响已领取的桌宠回合，B 模式保持专用会话保护。用户此前已在 DSH `0.2.1-rc.2` 全新 profile 中完成 MCP 十一个工具、状态桥、双向聊天和真实模型渲染的端到端验证；这条历史实机记录不代表 0.23.0 新提示协议已在该账号验收；自动测试另行覆盖契约及真实 WebSocket 传输，升级后仍需检查新协议与实际表演。
 
 ## 桌宠内聊天
+
+0.23.0 的 `promptProtocol:2` 只把当前用户正文传给 `sessionController.prompt`；不会把 `USER/ASSISTANT` 转录、旧助手回复或表演规约再写进 DSH 用户消息。`chat-prompt.mjs` 生成简短规则和不可信网页引用，桥通过两个 `systemPrompt.section` 在 `agent/inbox/claimed` 关联的确切回合提供它们；使用 `interpolate:false`，不执行网页中的占位符或指令。既有 DSH 历史保留，隐藏材料仍占本轮模型输入额度。
+
+A 会话的桌宠请求排队期间不限制正在执行的其他任务；取消排队消息使用持久收件箱删除，仅已领取的对应回合才调用 Session Controller cancel。新桥需要 `systemPrompt.section`，不支持时明确报错。旧桥可继续使用，但要正常更新并重载一次才能获得纯正文；读取 `dsh.promptProtocol:2` 确认，不删除会话或旧记录。
 
 - **DeepSeek Harness：** 自动模式优先使用已就绪的聊天桥；手动固定为 DSH 后也不会因断线切到其他来源。MCP 表演与状态心跳不能替代聊天桥；不可用时禁用发送并显示对应原因。
 - **Codex：** 仅手动选择后使用项目附带的官方Codex原生可执行文件和本机登录，便携包不要求另装Node；仅沿用用户配置中的模型名，其余工具及项目配置不继承。每次调用通过独立应用数据目录、只读沙箱、结构化JSON输出运行；禁用Shell、Apps、多智能体、Hooks和远程插件，可开启实时网页搜索。提示词通过标准输入传递，不拼接Shell命令。取消会结束子进程树。此调用不是你正在使用的Codex聊天，不继承该聊天上下文。
 - **兼容API：** 填入Base URL、模型名和API Key，调用`/chat/completions`的JSON模式。需模型支持JSON输出。普通兼容API通路没有默认网页搜索工具；不会假称已经联网。
-- 默认简短回复，通常一两句。最多三段依次朗读，详细说明放`details`供点击展开，不自动朗读详情。提供`brief`、`balanced`、`detailed`三档预算。回答超出朗读预算时最多做一次语义改写，完整原文转入详情，不机械截断句子。
+- 默认简短回复，通常一两句。最多三段依次朗读，详细说明放`details`供点击展开，不自动朗读详情。提供`brief`、`balanced`、`detailed`三档预算。Codex/API 超出预算时最多做一次语义改写；DSH 不再额外发改写回合，按隐藏规约一次组织回答并保留原生表演去重。不会机械截断句子。
 
 API密钥仅在服务端使用。有Electron系统加密回调时加密保存；独立调用服务且没有加密回调时只保留在进程内，不写明文密钥。也可用`L2D_API_KEY`、`L2D_TTS_API_KEY`环境变量。
 

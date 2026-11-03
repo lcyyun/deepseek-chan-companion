@@ -35,22 +35,32 @@ export function pngDimensions(header) {
 /** Deadline-based pacing avoids turning a 60-fps cap into 48 fps on 144-Hz screens. */
 export function createRenderClock(maxFps = 60) {
   const fps = Math.min(240, positive(maxFps, 60)), interval = 1000 / fps;
-  const epsilon = 0.0001;
-  let previous = null, deadline = null;
+  // rAF timestamps may be rounded down to 0.1–1ms. Treat that small early
+  // arrival as the same display tick; otherwise a 60Hz screen can fall to
+  // 40fps simply because 16.6 is less than 16.666.... Keep the fixed deadline
+  // grid, rather than scheduling from the last (possibly late) callback.
+  const tolerance = Math.min(1, interval * .1), minSpacing = interval / 2;
+  let previous = null, observed = null, origin = 0, nextTick = 0;
   return {
     maxFps: fps,
     advance(time) {
       if (!Number.isFinite(time)) return null;
-      if (previous === null || time < previous) {
-        previous = time; deadline = time + interval; return 1 / fps;
+      const backwards = observed !== null && time < observed;
+      observed = time;
+      if (previous === null || backwards) {
+        previous = time; origin = time; nextTick = 1; return 1 / fps;
       }
-      if (time + epsilon < deadline) return null;
+      const deadline=origin+nextTick*interval;
+      const numericSlack=Math.max(1e-7,Math.abs(time)*Number.EPSILON*4);
+      // A late callback close to the following deadline must not be followed
+      // by a near-zero-step catch-up frame (e.g. 32.3ms then 33.4ms).
+      if (time + tolerance + numericSlack < deadline || time - previous + numericSlack < minSpacing) return null;
       const dt = (time - previous) / 1000;
       previous = time;
-      deadline += Math.max(1, Math.floor((time - deadline + epsilon) / interval) + 1) * interval;
+      nextTick=Math.max(nextTick+1,Math.floor((time-origin+tolerance+numericSlack)/interval)+1);
       return dt;
     },
-    reset() { previous = null; deadline = null; },
+    reset() { previous = null; observed = null; origin = 0; nextTick = 0; },
   };
 }
 

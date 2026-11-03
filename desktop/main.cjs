@@ -11,7 +11,7 @@ const { startMouseInput } = require('./mouse-input.cjs');
 const { createToggleDragSession } = require('./toggle-drag.cjs');
 const { createPetPointerSession } = require('./pet-pointer-session.cjs');
 const dshConnect = require('./dsh-connect.cjs');
-const { createRenderDiagnostics } = require('./render-diagnostics.cjs');
+const { createRenderDiagnostics, sanitizeGpuTimingStatus } = require('./render-diagnostics.cjs');
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_MODEL = process.env.L2D_MODEL_ROOT || path.join(ROOT, 'models', 'DeepSeek');
 app.setName('大肥鱼 · DeepSeek-chan');
@@ -34,6 +34,36 @@ let sanitizeModelTuning, normalizeRenderMode, resolveRenderQuality;
 function currentRenderQuality() { return {...resolveRenderQuality(config.renderQuality,totalmem()),cacheMeshBuffers:config.cacheMeshBuffers===true,preserveGlState:config.preserveGlState===true}; }
 const renderDiagnostics = createRenderDiagnostics();
 const renderRunId=randomUUID();let renderGeneration=0;
+let gpuTimingRequest=null;
+function cancelGpuTimingRequest(message) {
+  if(!gpuTimingRequest)return;
+  const request=gpuTimingRequest;gpuTimingRequest=null;clearTimeout(request.timer);
+  request.reject(new Error(message));
+}
+function startGpuTiming() {
+  if(!pet||pet.isDestroyed()||!pet.isVisible())throw new Error('请先显示桌宠，再开始 GPU 计时。');
+  const sample=renderDiagnostics.snapshot().sample;
+  if(pet.webContents.isLoading()||!sample||sample.frames<1||sample.renderGeneration!==renderGeneration)
+    throw new Error('模型尚未准备好，请等模型显示后再开始 GPU 计时。');
+  if(gpuTimingRequest)return gpuTimingRequest.promise;
+  const requestId=randomUUID(),generation=renderGeneration;
+  let resolve,reject;
+  const promise=new Promise((done,fail)=>{resolve=done;reject=fail;});
+  const timer=setTimeout(()=>cancelGpuTimingRequest('GPU 计时启动超时，请稍后重试。'),5000);timer.unref?.();
+  gpuTimingRequest={requestId,renderGeneration:generation,senderId:pet.webContents.id,promise,resolve,reject,timer};
+  try{pet.webContents.send('desktop-event',{type:'start-gpu-timing',requestId,durationMs:15000,renderGeneration:generation});}
+  catch{cancelGpuTimingRequest('桌宠渲染窗口不可用，请重新显示后再试。');}
+  return promise;
+}
+function acknowledgeGpuTiming(sender,data) {
+  const request=gpuTimingRequest;
+  if(!request||!pet||pet.isDestroyed()||sender!==pet.webContents||sender.id!==request.senderId
+    ||data?.requestId!==request.requestId||data?.renderGeneration!==renderGeneration||data.renderGeneration!==request.renderGeneration)return false;
+  const status=sanitizeGpuTimingStatus(data,{allowStartFailure:true});if(!status)return false;
+  gpuTimingRequest=null;clearTimeout(request.timer);
+  request.resolve({requestId:request.requestId,renderGeneration:request.renderGeneration,...status});
+  return true;
+}
 const nativeRenderStats = { shapeChanges:0, shapeTotalMs:0, shapeMaxMs:0 };
 let performanceHostCache, performanceHostAt=0;
 function renderingDiagnostics(options={}) {
@@ -340,6 +370,7 @@ function hidePet() {
   shapeKey = ''; ignoredMouseState=undefined;
 }
 function onPetHide() {
+  cancelGpuTimingRequest('桌宠已隐藏，GPU 计时启动已取消。');
   petVisibleRequested=false;ignoredMouseState=undefined;suppressTracking();petPointer.clear();pointerLocked=false;updateInputShape();
   pet.webContents.send('desktop-event',{type:'input-cancel'});
   pet.webContents.send('desktop-event',{type:'render-active',active:false});
@@ -479,8 +510,9 @@ else {
     toggle=makeWindow('toggle',{width:58,height:58,transparent:true,alwaysOnTop:true,skipTaskbar:true,resizable:false,focusable:false});
     chat=makeWindow('chat',{width:420,height:560,transparent:false,backgroundColor:'#f7f9fc',alwaysOnTop:true,skipTaskbar:true,resizable:false});
     updateInputShape();
-    pet.webContents.on('did-start-loading',()=>{renderGeneration++;renderDiagnostics.reset();suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
-    pet.webContents.on('render-process-gone',()=>{petPointer.clear();pointerLocked=false;updateInputShape();});
+    pet.webContents.on('did-start-loading',()=>{cancelGpuTimingRequest('模型正在重新加载，GPU 计时启动已取消。');renderGeneration++;renderDiagnostics.reset();suppressTracking();petPointer.clear();inputRegions=[];bodyRegion=null;fullBodyRegion=null;toolAnchor.clear();geometrySeen=false;pointerLocked=false;updateInputShape();});
+    pet.webContents.on('render-process-gone',()=>{cancelGpuTimingRequest('桌宠渲染窗口已停止，GPU 计时启动已取消。');petPointer.clear();pointerLocked=false;updateInputShape();});
+    pet.on('closed',()=>cancelGpuTimingRequest('桌宠窗口已关闭，GPU 计时启动已取消。'));
     pet.on('resize',()=>{shapeKey='';if(!resizingPet)layoutTools();});
     pet.on('hide',onPetHide);
     pet.once('ready-to-show',()=>{showPet();layoutTools();broadcastScale();});
@@ -544,6 +576,8 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'pet-runtime-error':if(roles.get(event.sender.id)==='pet')chat.webContents.send('desktop-event',{type:'runtime-error',message:String(data).slice(0,600)});break;
     case 'mouse-tracking':config.mouseTracking=data!==false;saveConfig();suppressTracking();return config.mouseTracking;
     case 'render-sample':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以提交渲染计数');if(data?.renderGeneration!==renderGeneration)return false;return renderDiagnostics.update(data);
+    case 'start-gpu-timing':if(roles.get(event.sender.id)!=='chat')throw new Error('仅聊天设置可以开始 GPU 计时');return startGpuTiming();
+    case 'gpu-timing-status':if(roles.get(event.sender.id)!=='pet')throw new Error('仅桌宠可以提交 GPU 计时状态');return acknowledgeGpuTiming(event.sender,data);
     case 'render-state-snapshots':{
       if(roles.get(event.sender.id)!=='chat')throw new Error('仅聊天设置可以切换绘制状态');
       if(typeof data!=='boolean')throw new Error('绘制状态选项无效');
@@ -600,7 +634,7 @@ ipcMain.handle('window-control',async(event,action,data)=>{
     case 'copy-pairing':clipboard.writeText(service.token);return true;
     case 'copy-text':clipboard.writeText(String(data||''));return true;
     case 'setup-complete':config.setupCompleted=true;config.firstRun=false;setupRequired=false;saveConfig();return true;
-    case 'dsh-status':{const status=await connectionFlow().status();return{...status,sessions:dshConnect.listSessions(status.home)};}
+    case 'dsh-status':{const status=await connectionFlow().status();return{...status,promptProtocol:service.getState().dsh?.promptProtocol||0,sessions:dshConnect.listSessions(status.home)};}
     case 'dsh-sessions':{const info=await dshConnect.detectDsh(config);return dshConnect.listSessions(info.home);}
     case 'dsh-prompt':return bridgePrompt(data||{});
     case 'dsh-connect':return await connectDsh(data||{});
@@ -613,5 +647,5 @@ ipcMain.handle('window-control',async(event,action,data)=>{
   }
   return true;
 });
-app.on('before-quit',()=>{quitting=true;petPointer.clear();toggleGesture?.session.stop('quit');toggleGesture=null;clearTimeout(toggleShapeTimer);clearTimeout(scaleSaveTimer);clearTimeout(chatSaveTimer);clearInterval(trackingTimer);mouseInput?.stop();try{saveConfig();}catch{};globalShortcut.unregisterAll();service?.close();});
+app.on('before-quit',()=>{quitting=true;cancelGpuTimingRequest('应用已退出，GPU 计时启动已取消。');petPointer.clear();toggleGesture?.session.stop('quit');toggleGesture=null;clearTimeout(toggleShapeTimer);clearTimeout(scaleSaveTimer);clearTimeout(chatSaveTimer);clearInterval(trackingTimer);mouseInput?.stop();try{saveConfig();}catch{};globalShortcut.unregisterAll();service?.close();});
 app.on('window-all-closed',()=>{if(quitting)app.quit();});

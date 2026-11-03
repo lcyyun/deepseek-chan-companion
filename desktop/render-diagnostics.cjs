@@ -6,7 +6,31 @@ const FIELDS = ['frames','skippedFrames','totalRenderMs','averageRenderMs','maxR
   'longFrames','wallElapsedMs','logicElapsedSeconds','meshBufferUploads','meshBufferUploadSkips','meshBufferUploadBytes','meshBufferCount','meshBufferLegacyCalls',
   'stateSnapshotBypasses','stateRestoreBypasses','renderGeneration',...Object.values(STAGES),...Object.values(CALLS)];
 const STATES = new Set(['idle','thinking','listening','speaking','error']);
+const GPU_PHASES = new Set(['idle','thinking','idea','speaking','other']);
+const GPU_REASONS = new Set(['not-started','capturing','draining','completed','stopped','unsupported','observer-overhead','timer-error','disposed']);
 const text = value => typeof value === 'string' ? value.replace(/[\r\n\x00-\x1f]/g,' ').slice(0,240) : '';
+const bounded = (value, maximum, integer=false) => Number.isFinite(value)&&value>=0&&value<=maximum&&(!integer||Number.isSafeInteger(value))?value:0;
+function sanitizeGpuTimingStatus(value,{allowStartFailure=false}={}) {
+  if(!value||typeof value!=='object'||typeof value.supported!=='boolean'||typeof value.active!=='boolean'
+    ||!(GPU_REASONS.has(value.reason)||allowStartFailure&&['not-ready','hidden'].includes(value.reason))||value.active&&!value.supported)return null;
+  return {supported:value.supported,active:value.active,reason:value.reason};
+}
+function sanitizeGpuTiming(value) {
+  const status=sanitizeGpuTimingStatus(value);if(!status)return null;
+  const timing={...status,samples:bounded(value.samples,1000000,true),pending:bounded(value.pending,64,true),
+    disjointCount:bounded(value.disjointCount,1000000,true),timeoutCount:bounded(value.timeoutCount,1000000,true),
+    pollCpuMaxMs:bounded(value.pollCpuMaxMs,60000),phases:[]};
+  for(const key of ['gpuMeanMs','gpuP95Ms','gpuMaxMs'])timing[key]=bounded(value[key],60000);
+  const seen=new Set();
+  for(const phase of (Array.isArray(value.phases)?value.phases:[]).slice(0,32)){
+    if(!phase||!GPU_PHASES.has(phase.label)||seen.has(phase.label))continue;
+    seen.add(phase.label);
+    const clean={label:phase.label,samples:bounded(phase.samples,1000000,true)};
+    for(const key of ['gpuMeanMs','gpuP95Ms','gpuMaxMs'])clean[key]=bounded(phase[key],60000);
+    timing.phases.push(clean);
+  }
+  return timing;
+}
 function sanitizeRenderSample(value) {
   if(!value || typeof value!=='object' || !Number.isFinite(value.sampledAtMs) || value.sampledAtMs<0 || !Number.isSafeInteger(value.frames) || value.frames<0)return null;
   const sample={};
@@ -22,6 +46,7 @@ function sanitizeRenderSample(value) {
   sample.focused=value.focused===true;
   sample.gpuRenderer=text(value.gpuRenderer);sample.gpuVendor=text(value.gpuVendor);
   sample.gpuInfoSource=['unmasked','standard','unavailable'].includes(value.gpuInfoSource)?value.gpuInfoSource:'unavailable';
+  const timing=sanitizeGpuTiming(value.gpuTiming);if(timing)sample.gpuTiming=timing;
   sample.contextAttributes={};
   for(const key of ['alpha','antialias','depth','stencil','premultipliedAlpha','preserveDrawingBuffer'])
     if(typeof value.contextAttributes?.[key]==='boolean')sample.contextAttributes[key]=value.contextAttributes[key];
@@ -55,4 +80,4 @@ function createRenderDiagnostics({now=Date.now,limit=20}={}) {
     },
   };
 }
-module.exports={createRenderDiagnostics,sanitizeRenderSample};
+module.exports={createRenderDiagnostics,sanitizeRenderSample,sanitizeGpuTiming,sanitizeGpuTimingStatus};

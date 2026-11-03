@@ -1,6 +1,6 @@
 # DSH 连接与自动恢复
 
-适用版本：0.21.1；更新日期：2026-11-03。[文档导航](README.md) · [发行版快速开始](release-quickstart.md)
+适用版本：0.23.0；更新日期：2026-11-03。[文档导航](README.md) · [发行版快速开始](release-quickstart.md)
 
 ## 日常怎么用
 
@@ -40,6 +40,14 @@
 新桥增加相邻文件 `integrations/dsh/recovery-tools.mjs`。升级应保留整个集成目录和生产依赖，不单独复制主桥文件。同一程序路径中只更新模型、界面或渲染而不改桥／配置时，不需要重启 DSH；跨版本安装目录变化则需要重新确认桥路径，桥代码变化且宿主无法热重载时，也需在用户完成工作后重新加载一次。
 
 `dsh` 状态增加 `recoveryProtocol/recoverySupported/recoveryStatus`、`mcpReachable`、`nativeToolsReady`、`toolsReady`、`toolsCheckedAt`、`host` 和 `instanceId`。`chatAvailable` 与 `toolsReady` 分开使用，旧桥的未知工具状态不是聊天故障。
+
+## 0.23.0 的提示通道升级
+
+新桥另声明 `dsh.promptProtocol:2`，它与 `recoveryProtocol` 用途不同：前者表示可见消息与隐藏规约分开，后者用于恢复 MCP 和工具注册。正常升级完整集成目录并重载桥一次后，用户正文原样进入 DSH，短规则与本轮网页引用只进入匹配回合的系统 section，历史由 DSH 自己持有。新增相邻文件 `chat-prompt.mjs` 也必须保留。
+
+旧桥仍可聊天，更新主程序后不会继续重传本地镜像历史；但旧模块可能仍添加规则前缀。只重启大肥鱼或点击“重新连接”不能替换 DSH 进程中已加载的插件。等现有工作结束后，正常更新／重载对应桥，确认 `promptProtocol` 为 `2`，再做两轮聊天验收。无需删除旧会话、重置配置或清空历史；原有历史污染不会被自动改写。
+
+取消与断线也不会重放旧输入。尚在排队的桌宠请求会按收件箱消息 ID 删除；只有它已经领取并成为当前桌宠回合时才取消该回合，因此 A 模式中正在工作的其他任务可以继续。
 
 ## 验收
 

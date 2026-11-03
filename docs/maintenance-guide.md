@@ -2,15 +2,15 @@
 
 **0.21.0 增补：** `desktop/dsh-connect.cjs` 的固定连接流程与安装登记负责复用、身份核验和显式启动；`integrations/dsh/recovery-tools.mjs` 做只读 MCP 发现及真实工具目录查询；`server/dsh-manager.mjs` 以每次启动的实例 ID 关联恢复结果。普通状态刷新不改配置、不调用模型。新版界面区分首次配置、日常连接和诊断，保留旧桥聊天能力。详情与验证入口见[连接与自动恢复](dsh-reconnect.md)，对应 `dsh-connection-flow`、`dsh-recovery` 和 `desktop-dsh-connection` 测试。
 
-核对版本：**0.20.0** · 最近核对：**2026-11-02** · [文档目录](README.md)
+核对版本：**0.23.0** · 最近核对：**2026-11-03** · [文档目录](README.md)
 
-本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.20.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
+本文面向接手开发、排查问题和发布版本的维护者。它解释代码之间的关系；安装、使用和配对说明见 [README](../README.md)，外部接口细节见 [代理接入说明](agent-integration.md)。当前 0.23.0 桌面实现以 Windows x64 和这份 DeepSeek-chan 模型为目标；DSH 作业与无桌面 CI 的准备见[环境指南](dsh-clean-profile.md)，模型动作版本差异见第 15–18 节。
 
 第 1–14 节按当前实现阅读；第 15 节是历史方案，第 16–18 节说明仍在使用的模型适配机制，标题中的版本号表示引入时间。维护时以当前源码和接口返回为准，不把历史段落中的旧目录或字段当作现行契约。
 
 0.18 由 `server/provider-resolution.mjs` 统一解析有效来源，首次配置为 `provider:unconfigured, providerSource:auto`。自动模式仅接 DSH；显式选择始终优先。`autoProvider:dsh` 独立记录用过的自动桥，断线／重启保持 DSH，不混淆“默认”和“用户选择”。服务在进入思考／取消旧请求／追加历史前检查 `chatAvailable`；请求绑定启动时的有效提供方，显式切换取消旧请求。
 
-`/api/state` 和 `/api/settings` 返回相同连接字段：`providerEffective/providerSource/providerReason/chatAvailable/chatStatus/chatMessage/performance/dsh`。MCP 使用无会话 Streamable HTTP，表演状态依据最近 65 秒已认证活动续租；状态插件心跳单独记录。相同来源范围存在多个无法区分的客户端时只续租通用 MCP 状态，不猜客户端身份。桥就绪由 `chat:true` 和 Session Controller 可用声明判断，不能从 MCP 或心跳推导聊天可用。
+`/api/state` 和 `/api/settings` 返回相同连接字段：`providerEffective/providerSource/providerReason/chatAvailable/chatStatus/chatMessage/performance/dsh`。MCP 使用无会话 Streamable HTTP，注册状态与最近 65 秒活动分别记录，空闲不等于断线；状态插件心跳单独记录。客户端身份不足时不猜来源。桥就绪由 `chat:true` 和 Session Controller 可用声明判断，不能从 MCP 或心跳推导聊天可用。新提示协议另由 `dsh.promptProtocol:2` 标识，不能和恢复协议或模型凭据可用性混为一谈。
 
 前端将连接状态与持久设置分开保存：`state` 广播只更新双通道状态、禁用发送与来源文案，不重置设置页未保存表单；`settings` 广播才刷新保存值。`SettingsSelect` 将两处下拉渲染到 body 的 DOM 弹层，按可用空间上下展开、滚动及键盘选项导航，避免透明 Electron 窗口原生弹出面板的焦点／裁切问题。
 
@@ -130,7 +130,7 @@ node scripts/setup-mouse-input.mjs
 ### 4.1 一次聊天经过哪些位置
 
 1. `Chat.send()` 仅在服务返回 `chatAvailable:true` 时调用 `/api/chat`。服务再次解析有效来源并校验可用性，然后才创建带 `id` 的 `AbortController`、广播含 `requestId` 的 thinking 状态；不能靠禁用按钮代替服务端校验。
-2. `protocol.mjs` 准备受限回复格式，adapter 请求配置的聊天后端。后端输出归一化为 `segments`、`details`、`sources`。
+2. API/Codex 由 `protocol.mjs` 准备受限回复格式和应用内历史；DSH 将本次正文交给持久会话，不重复镜像历史。原生 DSH 用一次 `avatar_reply` 表演，普通助手文本不重复朗读；非原生兼容回复仍归一化为 `segments`、`details`、`sources`。
 3. 服务只接受当前、未取消的请求结果；旧请求的进度、完成和 finally 不得覆盖新请求状态。
 4. `Pet` 通过 WS 接收结果，使用回复 ID 去重、请求 ID 识别所属请求、`sequence` 使旧异步播放失效。
 5. 先为首段选择开场组合。只有成功结束 thinking **且未选中组合**时，才先执行约 1.8 秒“想到了”过渡；选中组合则交给首段音频开头播放。直接 `speak` 不额外插入 thinking 完成过渡，失败和 stop 也不插入。实际音频太短而跳过组合时，不回头补播“想到了”。
@@ -158,7 +158,23 @@ node scripts/setup-mouse-input.mjs
 
 `SpeechPlayer` 用 `AudioContext.currentTime` 和解码后的 `AudioBuffer.duration` 回报进度；等待 TTS 时不推进表情。关闭语音或语音失败后的阅读模式用本段阅读时间推进。运行时间轴额外限制相邻表情至少 750ms，尾部不足 400ms 不再切换，短句保留首个表情。结束和取消调用 `clearExpressionCue()`，脸部通过行为层渐退。
 
+### 4.4 DSH 0.23.0：持久会话与隐藏规则
+
+`server/service.mjs` 在 DSH 路径不再传入／追加应用内镜像历史，也不调用额外的语义修复请求；API/Codex 保持原有历史与一次修复机制。`server/dsh-manager.mjs` 无论桥版本都只发送当前请求，不信任调用方带来的历史。支持 `promptProtocol:2` 的原生桥收到精简 `input` 和用户消息；旧桥保留兼容 envelope，但不再收到旧助手回复。
+
+`integrations/dsh/chat-prompt.mjs` 负责提取本次正文、生成短规约及网页引用。新协议直接保留 `input.text`；兼容旧协议仅取最后一个 user，并只解包本项目已知的页面 envelope，不把任意用户 JSON 当控制字段。页面只保留标题、地址、选区和正文，标为不可信资料。隐藏并不免除 token 消耗；本轮需要的规约与资料仍会进入模型输入。
+
+`live2d-bridge.mjs` 一次注册两条 `systemPrompt.section`，`interpolate:false`，不使用可见 user-role runtime context。DSH 的实际顺序是 `turn/start → agent/inbox/claimed → systemPrompt assemble → agent/pre-step → user/message`；因此必须在 `claimed` 按 `source.rpcId` 绑定操作，不能等用户消息提交后才附加规则。section 同时校验 Agent、scope 和当前回合，完成／取消后解除绑定；不每轮增加 section 注册。A 会话的排队请求不影响其他正在进行的回合，B 的会话与工作目录仍保持专用边界。
+
+取消排队请求用已捕获的 `Agent.inbox.remove(messageId)` 持久删除，迟到 admission 也按请求 ID 删除；`agent/pre-step` 仅作领取竞态兜底，保留同批无关输入。只有已经拥有当前回合的桌宠请求才调用 `sessionController.cancel`。原生模式保留 `avatar_reply` 单次表演与 `nativePerformed` 去重；不把网络重连变成重新执行用户问题。
+
+维护入口：`tests/dsh-chat-hygiene.test.mjs` 覆盖真实传输上的模拟宿主时序、A/B 复用、取消、提示词隔离与旧桥兼容。更新集成目录后须正常重载一次桥，确认 `dsh.promptProtocol:2`；旧历史不会被清理。这些契约回归不是实际账号端到端验证。
+
 ## 5. 行为与每帧渲染
+
+0.23.0 的 `createRenderClock` 保持固定截止时间网格，并为 rAF 时间戳量化留不超过 1ms 的容差；同时避免相邻绘制过近。不要退回“当前时间小于理论间隔就丢帧”或每次从迟到时间重新安排下一帧的算法，前者会把正常 60Hz 误判为未到期，后者会漂移。回归位于 `tests/render-performance.test.mjs`；真实动作时间不靠帧数累计，隐藏恢复继续 reset。
+
+可选 GPU 诊断位于 `src/renderer/gpu-timing.ts`，回归位于 `tests/gpu-timing.test.mjs`。默认不探测扩展、不创建 query；用户点“采集 GPU 用时（15 秒）”后才开始，以异步计时包住本帧绘制状态设置、清屏与 SDK 完整绘制。查询轮询有间隔、并发上限、排空期限及开销熔断，不得通过 `finish/flush`、像素回读或忙等让结果提前就绪。现有性能诊断以 `sample.gpuTiming` 同步结果，不新增远程采样入口。使用与字段解释见[性能说明](render-performance.md)，CPU 提交、GPU 执行和 DWM 最终呈现不能混为同一计时；也不能用帧间隔 P95 减去 CPU 均值来推导等待时间。
 
 ### 5.1 行为控制器的责任
 

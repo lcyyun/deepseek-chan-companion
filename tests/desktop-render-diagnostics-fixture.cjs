@@ -62,6 +62,43 @@ async function verify(url, token) {
   assert.equal(report.quality.mode, 'balanced'); assert.equal(report.quality.effective, 'balanced');
   assert.equal(report.sample.maxFps, 60); assert.ok(report.sample.textureCount > 0);
   assert.ok(report.sample.canvasPixels > 0); assert.equal(report.sample.contextAttributes.antialias, false);
+  assert.equal(report.sample.gpuTiming?.reason,'not-started','GPU queries stay off until explicitly requested');
+  assert.equal(report.sample.gpuTiming?.samples,0);
+  await assert.rejects(control('pet','start-gpu-timing'),/仅聊天/);
+  await assert.rejects(control('chat','gpu-timing-status',{supported:false,active:false,reason:'unsupported'}),/仅桌宠/);
+  // Delay only this diagnostic event to exercise the production main/preload
+  // acknowledgement contract without depending on GPU extension support.
+  async function holdGpuStart(){
+    const web=windows.get('pet').webContents,original=web.send;
+    let event;
+    web.send=function(channel,payload,...rest){
+      if(channel==='desktop-event'&&payload?.type==='start-gpu-timing'){event=payload;return;}
+      return original.call(this,channel,payload,...rest);
+    };
+    const promise=control('chat','start-gpu-timing').then(value=>({value}),error=>({error:String(error.message)}));
+    try{await until(()=>event,'GPU timing IPC request',3000);}finally{web.send=original;}
+    return {event,promise};
+  }
+  const held=await holdGpuStart();
+  assert.equal(held.event.durationMs,15000);assert.equal(held.event.renderGeneration,report.renderGeneration);
+  const ack={requestId:held.event.requestId,renderGeneration:held.event.renderGeneration,supported:false,active:false,reason:'unsupported'};
+  assert.equal(await control('pet','gpu-timing-status',{...ack,requestId:'stale'}),false);
+  assert.equal(await control('pet','gpu-timing-status',{...ack,renderGeneration:ack.renderGeneration-1}),false);
+  assert.equal(await control('pet','gpu-timing-status',{...ack,reason:'untrusted-reason'}),false);
+  assert.equal(await control('pet','gpu-timing-status',{...ack,private:'secret'}),true);
+  assert.deepEqual((await held.promise).value,ack);
+  assert.equal(await control('pet','gpu-timing-status',ack),false,'completed requests cannot be replayed');
+  const timed=await holdGpuStart(),startedAt=Date.now();
+  assert.match((await timed.promise).error,/超时/);assert.ok(Date.now()-startedAt<6000);
+  const hidden=await holdGpuStart();await control('chat','hide-pet');
+  assert.match((await hidden.promise).error,/隐藏/);
+  await assert.rejects(control('chat','start-gpu-timing'),/显示桌宠/);
+  await control('chat','show-pet');
+  const reloading=await holdGpuStart();windows.get('pet').webContents.reload();
+  assert.match((await reloading.promise).error,/重新加载/);
+  await until(async()=>{const value=await(await request('/api/performance')).json();return value.sample?.frames>0&&value.sample?.renderGeneration===value.renderGeneration&&value.renderGeneration>report.renderGeneration;},'new model generation after cancelled GPU start',10000);
+  assert.equal(await control('pet','gpu-timing-status',{...ack,requestId:reloading.event.requestId}),false);
+  result.gpuTimingIpcVerified=true;
   result.realFramesObserved = report.sample.frames > 0;
   result.gpuRenderer = report.sample.gpuRenderer;
   result.sampleFps = report.sample.sampleFps;
@@ -82,10 +119,26 @@ async function verify(url, token) {
   await assert.rejects(control('chat', 'render-sample', { frames: 1, sampledAtMs: 1 }), /仅桌宠/);
   await js('chat', `Array.from(document.querySelectorAll('.tabs button')).find(button=>button.textContent==='设置').click()`);
   await until(() => js('chat', `!!Array.from(document.querySelectorAll('button')).find(button=>button.textContent==='复制性能诊断')`), 'production diagnostics button');
-  await js('chat', `(()=>{const details=Array.from(document.querySelectorAll('details')).find(node=>node.querySelector('summary')?.textContent==='性能与画质');details.open=true;Array.from(details.querySelectorAll('button')).find(button=>button.textContent==='复制性能诊断').click();})()`);
+  await js('chat', `(()=>{const details=Array.from(document.querySelectorAll('details')).find(node=>node.querySelector('summary')?.textContent==='性能与画质');details.open=true;Array.from(details.querySelectorAll('button')).find(button=>button.textContent==='采集 GPU 用时（15 秒）').click();})()`);
+  await until(()=>js('chat',`(()=>{const value=document.querySelector('[data-gpu-timing-status]')?.textContent||'';return value&&!value.includes('正在确认')?value:null;})()`),'GPU capture UI receives real renderer acknowledgement',6000);
+  const gpuReport=await until(async()=>{
+    const value=await(await request('/api/performance')).json(),timing=value.sample?.gpuTiming;
+    return timing&&timing.reason!=='not-started'&&!timing.active?value:null;
+  },'GPU capture completes or explicitly reports unsupported/protected state',23000);
+  const timing=gpuReport.sample.gpuTiming;
+  assert.ok(['completed','unsupported','observer-overhead','timer-error'].includes(timing.reason),timing.reason);
+  assert.equal(typeof timing.supported,'boolean');assert.equal(timing.active,false);
+  assert.ok(timing.phases.every(phase=>['idle','thinking','idea','speaking','other'].includes(phase.label)));
+  for(const field of ['samples','gpuMeanMs','gpuP95Ms','gpuMaxMs','pollCpuMaxMs','disjointCount','timeoutCount','pending'])assert.ok(Number.isFinite(timing[field])&&timing[field]>=0,field);
+  assert.equal(Object.hasOwn(timing,'rawSamples'),false);
+  if(!timing.supported){assert.equal(timing.samples,0);assert.ok(['unsupported','timer-error'].includes(timing.reason));}
+  result.gpuTimingSummary={supported:timing.supported,reason:timing.reason,samples:timing.samples,phases:timing.phases.map(phase=>phase.label)};
+  result.gpuTimingUiVerified=true;
+  await js('chat', `Array.from(document.querySelectorAll('button')).find(button=>button.textContent==='复制性能诊断').click()`);
   await until(() => copies.length === 1, 'mock clipboard receives the production button result', 5000);
   const copied = JSON.parse(copies[0]);
   assert.equal(copied.available, true); assert.ok(copied.sample.gpuRenderer); assert.ok(copied.samples.length > 0);
+  assert.ok(copied.sample.gpuTiming);assert.equal(copied.sample.gpuTiming.active,false);
   const strings = [];
   function visit(value) { if (typeof value === 'string') strings.push(value); else if (value && typeof value === 'object') Object.values(value).forEach(visit); }
   visit(copied);
@@ -120,5 +173,5 @@ async function verify(url, token) {
   fs.writeFileSync(output, JSON.stringify(result, null, 2));
   clearTimeout(timer); app.quit();
 }
-timer = setTimeout(() => fail(Error('Production rendering diagnostics fixture timed out')), 55000);
+timer = setTimeout(() => fail(Error('Production rendering diagnostics fixture timed out')), 80000);
 require('../desktop/main.cjs');

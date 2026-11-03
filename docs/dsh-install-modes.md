@@ -80,6 +80,10 @@ B. 新建独立的桌宠会话
 
 ## 原生模式要求
 
+0.23.0 新桥要求宿主提供 `systemPrompt.section`（已对照 DSH `0.2.1-rc.2` 契约）。桥登记 `promptProtocol:2` 后，每轮只提交本次用户正文，简短表演规则和本轮网页资料使用匹配回合的隐藏系统 section；历史由 DSH 保留。A 模式的其他工作回合不受这些规则影响，取消排队消息也不会取消原工作。B 继续复用同一个 session 文件。
+
+旧桥进程不会随主程序更新而自动换代码。保留完整集成目录、A/B 选择及 session 文件，在正常工作结束后重新加载桥一次；不删除旧历史，也不通过新建会话掩盖升级问题。
+
 - DSH 已安装并能调用 MCP 的 `avatar_reply` 工具
 - 字段必须使用 `avatar_capabilities` 里的真实 ID；不要写 `hand_on_chest`、`wave` 等自造名字
 - **抚胸**使用 `combination: reassure`（或 `gesture: chest`）；只写 `combination: shy` 只会换脸
@@ -92,7 +96,7 @@ B. 新建独立的桌宠会话
 
 ## JSON 桥还保留吗
 
-保留，但只作为兼容旧 DSH 或外部客户端的 fallback。正常 DSH 安装优先使用 `native: true`，不要同时启用两套表演路径。
+保留非原生 JSON 回复协议供兼容和对照，格式规则也由隐藏 section 提供；这不意味着能绕过新版桥对宿主 API 的要求。正常 DSH 安装优先使用 `native: true`，不要同时启用两套表演路径。
 
 ## 安全提醒
 

@@ -371,12 +371,14 @@ test('DSH plugin uses native session API and returns the correlated turn through
     on(name, callback) { bus.on(name, callback); return () => bus.off(name, callback); },
     effect(callback) { cleanup.push(callback()); },
     tools: { definitions: () => [], guard(callback) { guard = callback; } },
+    systemPrompt: { section() {} },
     sessionController: {
       async create() { return { sessionId: 'companion-session' }; },
       async prompt(input, signal) {
         assert.equal(signal.aborted, false); promptReceived = input;
         const session = { id: input.sessionId };
         bus.emit('session/event', session, { type: 'turn/start', data: { turn: 1 } });
+        bus.emit('agent/inbox/claimed', { agent: session, turn: 1, message: { source: { rpcId: input.requestId } } });
         bus.emit('session/event', session, { type: 'user/message', data: { source: { kind: 'user', rpcId: input.requestId } } });
         bus.emit('session/event', session, { type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: JSON.stringify({ segments: [{ text: '你好，我在这里。', intent: 'greet', emotion: 'happy', gesture: 'none' }], details: '', sources: [] }) }] } } });
         bus.emit('session/event', session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } });

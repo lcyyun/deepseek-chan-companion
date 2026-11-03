@@ -6,6 +6,7 @@ type DshStatus = {
   cli?: string; home?: string; port?: number; open?: number[]; occupiedPorts?: number[];
   running?: boolean; homeExists?: boolean; hostVerified?: boolean;
   bridgeConnected?: boolean; chatAvailable?: boolean;
+  promptProtocol?: number;
   toolsReady?: boolean | null; nativeToolsReady?: boolean | null; mcpReachable?: boolean;
   recoverySupported?: boolean; recoveryStatus?: string;
   connectionState?: 'configure_needed'|'reconnecting'|'ready'|'occupied'|'start_available'|'start_failed'|'upgrade_required';
@@ -94,6 +95,7 @@ export function DshConnectPanel({ compact = false }: { compact?: boolean }) {
       <span>角色工具</span><b data-dsh-status="tools">{toolsText}</b>
     </div>
     <p className={`hint dsh-connection-message${status?.connectionState==='ready'?' ok':''}`} role="status">{message}</p>
+    {connected&&(status?.promptProtocol??0)<2&&<p className="hint warn" data-dsh-prompt-upgrade>当前桥仍使用旧版消息格式。请在“接入配置”中更新桥插件并正常重载一次；之后聊天窗口只显示本轮输入，控制规则会放进独立指令通道。已有会话会保留。</p>}
     <div className="button-row dsh-main-actions">
       <button className="primary" data-dsh-action="connect" disabled={busy||!status?.canReconnect} onClick={()=>connect(false)}>{busy?'处理中…':connected?'重新连接':'连接'}</button>
       {status?.canStartConfigured&&<button data-dsh-action="start" disabled={busy} onClick={()=>connect(true)}>启动已配置的 DSH</button>}

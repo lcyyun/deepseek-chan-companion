@@ -50,12 +50,14 @@ async function bridgeFixture(t, config, envHome) {
     on: (name, callback) => events.on(name, callback),
     effect: callback => disposers.push(callback()),
     tools: { definitions: () => [], guard() {} },
+    systemPrompt: { section() {} },
     sessionController: {
       create: async input => { created.push(input); return { sessionId: 'isolated-chat' }; },
       prompt: async input => {
         prompts.push(input);
         const session = { id: input.sessionId };
         events.emit('session/event', session, { type: 'turn/start', data: { turn: 1 } });
+        events.emit('agent/inbox/claimed', { agent: session, turn: 1, message: { source: { rpcId: input.requestId } } });
         events.emit('session/event', session, { type: 'user/message', data: { source: { rpcId: input.requestId } } });
         events.emit('session/event', session, { type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: '隔离 profile 回复' }] } } });
         events.emit('session/event', session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } });

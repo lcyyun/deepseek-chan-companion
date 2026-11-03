@@ -6,9 +6,10 @@ import { WebSocket } from 'ws';
 import { resolveCompanionChatCwd } from './home-paths.mjs';
 import { dshWireFailure } from './chat-errors.mjs';
 import { bridgeHost, probeCompanionMcp, registeredAvatarTools, RECOVERY_PROTOCOL } from './recovery-tools.mjs';
+import { CHAT_PROTOCOL, readChatInput, chatRules, chatPageContext } from './chat-prompt.mjs';
 
 export const name = 'deepseek-chan-bridge';
-export const inject = ['sessionController', 'tools'];
+export const inject = ['sessionController', 'tools', 'systemPrompt'];
 
 export function apply(ctx, config = {}) {
   const baseUrl = String(config.baseUrl || process.env.L2D_BRIDGE_URL || 'http://127.0.0.1:39181').replace(/\/$/, '');
@@ -66,13 +67,14 @@ export function apply(ctx, config = {}) {
   if (config.chat !== false) attachChatBridge(ctx, { ...config, baseUrl, token });
 }
 
-/** Host API contract: sessionController.create/prompt/cancel plus committed session/event. */
+/** DSH 0.2.1-rc.2: Session Controller, systemPrompt.section and agent inbox admission. */
 export function attachChatBridge(ctx, config) {
   if (!ctx.sessionController?.create || !ctx.sessionController?.prompt || !ctx.sessionController?.cancel || !ctx.tools?.guard) throw new Error('This DSH version lacks the required Session Controller or tool guard API. Update DSH or set chat:false.');
+  if (!ctx.systemPrompt?.section) throw new Error('This DSH version lacks systemPrompt.section. Update DSH to enable hidden companion instructions, or set chat:false.');
   // Bind this bridge to its launch profile before an asynchronous chat arrives.
   // Reusing a session never creates a companion workspace.
   const chatCwd = config.chatSessionId ? undefined : resolveCompanionChatCwd(config);
-  const pending = new Map(), turns = new Map(), ownedSessions = new Set();
+  const pending = new Map(), turns = new Map(), ownedSessions = new Set(), activeTurns = new Map(), cancelledInputs = new Map();
   let ws, reconnect, disposed = false, sessionPromise;
   const availableTools = new Set((ctx.tools.definitions?.() || []).map(t => t.name || t.schema?.name).filter(Boolean));
   const searchNames = new Set((config.searchTools || []).filter(name => typeof name === 'string' && availableTools.has(name) && !/run_code|shell|exec|write|delete/i.test(name)));
@@ -81,7 +83,55 @@ export function attachChatBridge(ctx, config) {
   if (!knownSessionId && config.sessionFile) {
     try { const saved = readFileSync(String(config.sessionFile), 'utf8').trim(); if (/^session-[A-Za-z0-9-]+$/.test(saved)) knownSessionId = saved; } catch {}
   }
-  const matching = id => [...pending.values()].find(p => p.sessionId === id);
+  const matching = id => {
+    const operation = activeTurns.get(id);
+    return operation && pending.get(operation.requestId) === operation && !operation.controller.signal.aborted && operation.turn === turns.get(id) ? operation : undefined;
+  };
+  // Register once. The host assembles sections before committing user/message;
+  // inbox/claimed is its supported admission event at that earlier boundary.
+  // A pending queue entry must never modify another turn in the user's session.
+  ctx.on('agent/inbox/inserted', ({ agent, message }) => {
+    const requestId = message?.source?.rpcId, id = String(agent?.id || '');
+    const operation = pending.get(requestId);
+    if (operation?.sessionId === id) { operation.queuedAgent = agent; operation.queuedMessageId = message.id; }
+    // Admission can finish after cancellation. Remove exactly that queued item
+    // durably, so a later host restart cannot accidentally execute it.
+    if (cancelledInputs.get(requestId) === id) {
+      try { agent.inbox.remove(message.id); } catch { /* Claim/pre-step race is handled below. */ }
+    }
+  });
+  ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
+    const operation = pending.get(message?.source?.rpcId);
+    const id = String(agent?.id || '');
+    if (!operation || operation.sessionId !== id || operation.controller.signal.aborted) return;
+    operation.turn = turn;
+    activeTurns.set(id, operation);
+  });
+  ctx.on('agent/inbox/discarded', ({ agent, message }) => {
+    const requestId = message?.source?.rpcId;
+    if (cancelledInputs.get(requestId) === String(agent?.id || '')) cancelledInputs.delete(requestId);
+  });
+  ctx.on('agent/pre-step', async ({ agent, messages }, next) => {
+    const decision = await next();
+    if (decision.kind === 'reject') return decision;
+    const cancelled = message => cancelledInputs.get(message?.source?.rpcId) === String(agent?.id || '');
+    const offered = messages.filter(cancelled);
+    if (!offered.length) return decision;
+    const filtered = decision.messages.filter(message => !cancelled(message));
+    for (const message of offered) cancelledInputs.delete(message.source.rpcId);
+    // Do not wake a model with only runtime context after its sole user request
+    // was cancelled while queued. Unrelated admitted user input stays intact.
+    if (offered.length === messages.length) return { kind: 'reject' };
+    return { ...decision, messages: filtered };
+  });
+  const scoped = context => {
+    if (!context.agent || context.scope !== context.agent || context.signal?.aborted) return;
+    return matching(String(context.agent.id));
+  };
+  ctx.systemPrompt.section({ name: 'live2d:chat-rules', order: 11000, interpolate: false,
+    text: context => scoped(context)?.rules || '' });
+  ctx.systemPrompt.section({ name: 'live2d:page-context', order: 11001, interpolate: false,
+    text: context => scoped(context)?.pageContext || '' });
   // The companion session can only use the exact, explicitly configured web tools.
   // This protects page analysis independently of the model following a prompt.
   ctx.tools.guard(exec => {
@@ -116,32 +166,39 @@ export function attachChatBridge(ctx, config) {
     return sessionPromise;
   }
   function finish(operation, problem) {
-    if (!pending.has(operation.requestId)) return;
+    if (pending.get(operation.requestId) !== operation) return;
     pending.delete(operation.requestId); clearTimeout(operation.timer);
+    if (activeTurns.get(operation.sessionId) === operation) activeTurns.delete(operation.sessionId);
     send({ type: 'chat-result', requestId: operation.requestId, ...(problem ? dshWireFailure(problem) : { reply: operation.text, nativeMode: config.native === true, nativePerformed: operation.nativeTool === true, searchAttempted: operation.searchAttempted, searchUsed: operation.searchUsed }) }, operation.socket);
   }
   async function cancel(operation, code = 'DSH_TURN_CANCELLED') {
+    const ownsTurn = matching(operation.sessionId) === operation;
+    if (operation.submitted && operation.turn == null) cancelledInputs.set(operation.requestId, operation.sessionId);
     operation.failureCode = code;
     operation.controller.abort();
-    try { if (operation.sessionId) await ctx.sessionController.cancel({ sessionId: operation.sessionId }); } catch {}
+    if (operation.turn == null && operation.queuedAgent) {
+      try { operation.queuedAgent.inbox.remove(operation.queuedMessageId); } catch { /* Already claimed: admission filter removes it. */ }
+    }
+    try { if (ownsTurn) await ctx.sessionController.cancel({ sessionId: operation.sessionId }); } catch {}
     finish(operation, { code });
   }
   async function receive(message) {
     if (message.type === 'chat-cancel') { const operation = pending.get(message.requestId); if (operation) await cancel(operation); return; }
     if (message.type !== 'chat-request') return;
-    const operation = { requestId: message.requestId, socket: ws, controller: new AbortController(), sessionId: '', turn: null, text: '', nativeTool: false, searchAllowed: message.searchAllowed === true, searchAttempted: false, searchUsed: false, searchCalls: new Set() };
+    if (typeof message.requestId !== 'string' || pending.has(message.requestId) || cancelledInputs.has(message.requestId)) return;
+    const input = readChatInput(message);
+    const operation = { requestId: message.requestId, socket: ws, controller: new AbortController(), sessionId: '', turn: null, text: '', nativeTool: false, searchAllowed: message.searchAllowed === true, searchAttempted: false, searchUsed: false, searchCalls: new Set(), submitted: false };
+    operation.rules = chatRules(input, { native: config.native === true, searchAllowed: operation.searchAllowed,
+      system: message.messages?.find(m => m.role === 'system')?.content });
+    operation.pageContext = chatPageContext(input);
     pending.set(operation.requestId, operation);
     operation.timer = setTimeout(() => void cancel(operation, 'DSH_TURN_TIMEOUT'), 175000); operation.timer.unref?.();
     try {
       operation.sessionId = await session();
       if (operation.controller.signal.aborted) return;
-      const native = config.native === true;
-      const transcript = message.messages.filter(m => !native || m.role !== 'system').map(m => `${String(m.role).toUpperCase()}:\n${m.content}`).join('\n\n');
-      const prompt = native
-        ? `NATIVE PET MODE: reply normally. When you want the character to speak or perform, call avatar_reply once with the complete segments plan; do not repeat that performance in your text. Each segment may carry one combination preset; for repeated actions repeat the same preset on consecutive segments (three nods = three segments with combination:"agree"). For a lingering shy/blush/embarrassed/surprised mood, write a longer line (about 30+ characters) and use expressionCues at 0, ~0.45, ~0.85 with decreasing intensity (about .8→.7→.58), max 4 cues; prefer a longer line over adding segments. Heart-eyes love is confession-level: only for explicit romantic affection or when asked, at most once per reply; use happy/joyful/gentle for ordinary thanks or good news. Playful rabbit teeth are a rare teasing accent: at most once and not on consecutive turns; ordinary positive uses happy/joyful/gentle. Do not run code or access files.\n\n${transcript}`
-        : transcript;
       // Register pending state before prompt: events can arrive before its acknowledgement.
-      await ctx.sessionController.prompt({ requestId: operation.requestId, sessionId: operation.sessionId, mode: 'queue', content: [{ type: 'text', text: prompt }], clientTimeZone: config.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone }, operation.controller.signal);
+      operation.submitted = true;
+      await ctx.sessionController.prompt({ requestId: operation.requestId, sessionId: operation.sessionId, mode: 'queue', content: [{ type: 'text', text: input.text }], clientTimeZone: config.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone }, operation.controller.signal);
     } catch (error) { finish(operation, operation.controller.signal.aborted ? { code: operation.failureCode || 'DSH_TURN_CANCELLED' } : error); }
   }
   ctx.on('session/event', (sessionValue, event) => {
@@ -149,7 +206,6 @@ export function attachChatBridge(ctx, config) {
     if (event.type === 'turn/start') turns.set(id, event.data.turn);
     const operation = matching(id);
     if (!operation) return;
-    if (event.type === 'user/message' && event.data?.source?.rpcId === operation.requestId) operation.turn = turns.get(id);
     if (operation.turn == null || event.data?.turn !== operation.turn) return;
     if (event.type === 'assistant/message' && !event.data.interrupted) {
       const content = event.data.message?.content || [];
@@ -211,6 +267,7 @@ export function attachChatBridge(ctx, config) {
         if (message.type === 'auth' && message.ok) {
           instanceId = String(message.instanceId || '');
           send({ type: 'bridge-register', name: 'dsh', chat: true, sessionControllerAvailable: true,
+            promptProtocol: CHAT_PROTOCOL, nativeMode: config.native === true,
             sessionId: knownSessionId, searchAvailable: searchNames.size > 0, recoveryProtocol: RECOVERY_PROTOCOL, host }, socket);
         } else if (message.type === 'bridge-ready') {
           clearTimeout(handshakeTimer); backoff = 500;
@@ -232,7 +289,7 @@ export function attachChatBridge(ctx, config) {
       socket.on('close', () => {
         signal.aborted || lifecycle.abort(); clearTimeout(handshakeTimer); clearInterval(healthTimer);
         if (ws === socket) ws = null;
-        for (const operation of [...pending.values()]) void cancel(operation);
+        for (const operation of [...pending.values()]) if (operation.socket === socket) void cancel(operation);
         if (!disposed) { reconnect = setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 5000); reconnect.unref?.(); }
       });
     }

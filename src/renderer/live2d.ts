@@ -4,6 +4,7 @@ import { DEFAULT_MODEL_TUNING, sanitizeModelTuning, type ModelTuning } from '../
 import { createRenderClock, createRenderDiagnostics, readGraphicsInfo, pngDimensions, renderCanvasSize, textureDecodeSize, type GraphicsInfo, type RenderDiagnosticsSnapshot } from '../shared/render-performance.mjs';
 import { createMeshBufferCache } from './mesh-buffer-cache';
 import { createOwnedGlState } from './owned-gl-state';
+import { createGpuDrawTimer, type GpuTimingSnapshot } from './gpu-timing';
 export interface ParameterInfo { id: string; name: string; min: number; max: number; defaultValue: number; value: number }
 export interface InteractionRect { x: number; y: number; width: number; height: number }
 export interface ModelPlacement { scale: number; centerX: number; centerY: number; referenceWidth?: number; referenceHeight?: number; revision?: number }
@@ -24,6 +25,7 @@ export interface RenderPerformanceStats extends GraphicsInfo, RenderDiagnosticsS
   meshBufferCacheEnabled: boolean; meshBufferUploads: number; meshBufferUploadSkips: number;
   meshBufferUploadBytes: number; meshBufferCount: number; meshBufferLegacyCalls: number;
   contextAttributes: WebGLContextAttributes | null;
+  gpuTiming: GpuTimingSnapshot;
 }
 export interface Live2DHandle {
   setParameters(values: Record<string, number>): void;
@@ -58,6 +60,8 @@ export interface Live2DHandle {
   setRenderActive(active: boolean): void;
   /** Local counters only. Texture bytes estimate RGBA upload size, not process memory. */
   getPerformanceStats(): RenderPerformanceStats;
+  /** Explicit, short diagnostic only; never waits for GPU completion. */
+  startGpuTiming(durationMs?: number): { supported: boolean; active: boolean; reason: string };
 }
 export interface Live2DOptions {
   modelBaseUrl?: string;
@@ -72,6 +76,8 @@ export interface Live2DOptions {
   cacheMeshBuffers?: boolean;
   /** Keep SDK external-state snapshots for compatibility. The app owns this canvas by default. */
   preserveGlState?: boolean;
+  /** Low-cardinality scene label for an explicitly requested GPU capture. */
+  getDiagnosticLabel?: () => string;
   /** Mild local tuning of the two authored chest spring groups. */
   softenChestPhysics?: boolean;
   /** Author's effect loop runs beneath gestures; false disables it for calibration. */
@@ -129,6 +135,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
   let requestId = 0, destroyed = false, gl: WebGLRenderingContext | null = null;
   let meshBufferCache: ReturnType<typeof createMeshBufferCache> | undefined;
   let ownedGlState: ReturnType<typeof createOwnedGlState> | undefined;
+  let gpuTimer: ReturnType<typeof createGpuDrawTimer>;
   let renderActive = true, textureBytes = 0, frames = 0, skippedFrames = 0, totalRenderMs = 0, maxRenderMs = 0;
   let totalBehaviorMs = 0, totalPhysicsMs = 0, totalModelUpdateMs = 0, totalHandOverlayMs = 0, totalDrawMs = 0;
   let totalGlStateSetupMs = 0;
@@ -168,6 +175,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     renderActive = false;
     cancelAnimationFrame(requestId);
     resizeObserver?.disconnect();
+    gpuTimer?.dispose();
     motionManager?.release();
     idleMotionManager?.release();
     meshBufferCache?.dispose();
@@ -227,6 +235,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
     }
     gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: options.antialias ?? false, depth: false, stencil: false, preserveDrawingBuffer: false });
     if (!gl) throw new Error('此设备未提供 WebGL，无法显示 Live2D 模型。');
+    gpuTimer = createGpuDrawTimer(gl);
     renderer = new sdk.CubismRenderer_WebGL();
     // One default mask atlas supports only 36 groups. This model exceeds that;
     // allocate enough atlases instead of silently drawing parts without masks.
@@ -713,7 +722,12 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
         const next = active !== false;
         if (destroyed || next === renderActive) return;
         renderActive = next; cancelAnimationFrame(requestId); requestId = 0; frameClock.reset(); frameDiagnostics.resetTiming();
+        if (!next) gpuTimer.stop();
         if (next) requestId = requestAnimationFrame(frame);
+      },
+      startGpuTiming(durationMs) {
+        if (destroyed || !renderActive) return { supported:false, active:false, reason:destroyed?'disposed':'hidden' };
+        return gpuTimer.start(durationMs);
       },
       getPerformanceStats() {
         graphicsInfo ??= readGraphicsInfo(gl);
@@ -728,7 +742,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           textureBytes, textureCount: textures.length, maxFps: frameClock.maxFps, renderActive: renderActive && !destroyed,
           meshBufferCacheEnabled:!!buffers?.rendererCount,meshBufferUploads:buffers?.uploads??0,meshBufferUploadSkips:buffers?.skips??0,
           meshBufferUploadBytes:buffers?.bytes??0,meshBufferCount:buffers?.bufferCount??0,meshBufferLegacyCalls:buffers?.legacyCalls??0,
-          contextAttributes: gl?.getContextAttributes() ?? null, ...graphicsInfo, ...frameDiagnostics.snapshot() };
+          gpuTiming: gpuTimer.snapshot(), contextAttributes: gl?.getContextAttributes() ?? null, ...graphicsInfo, ...frameDiagnostics.snapshot() };
       },
     };
     const resize = () => {
@@ -874,6 +888,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           updateInteractionRegions(sx, sy, -centerX * sx + offsetX, -centerY * sy + offsetY);
           regionUpdatedAt = elapsed;
         }
+        gpuTimer.beginFrame(options.getDiagnosticLabel?.() || 'other');
         const stateSetupStarted=performance.now();
         ownedGlState?.beginFrame(canvas.width,canvas.height);
         gl.viewport(0, 0, canvas.width, canvas.height);
@@ -895,7 +910,7 @@ export async function createLive2D(canvas: HTMLCanvasElement, options: Live2DOpt
           totalDrawMs += performance.now() - drawStarted;
           restoreHandOrder(); restorePupils();
         }
-        } finally { mirroredArm.restore(); restoreBasinShadow(); }
+        } finally { gpuTimer.endFrame(); mirroredArm.restore(); restoreBasinShadow(); }
         const renderMs = performance.now() - renderStarted;
         frames++; totalRenderMs += renderMs; maxRenderMs = Math.max(maxRenderMs, renderMs);
         // Measure the actual rendered interval before dt is capped for physics.

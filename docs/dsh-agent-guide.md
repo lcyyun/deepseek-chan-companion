@@ -1,21 +1,23 @@
 # DSH 智能体操作手册：控制大肥鱼 · DeepSeek-chan 桌宠
 
-最近校对：2026-11-02，按应用 0.20.0 的实现核对。返回[文档目录](README.md)。这是现行操作手册；文中的旧版兼容说明不改变当前默认行为。
+最近校对：2026-11-03，按应用 0.23.0 的实现核对。返回[文档目录](README.md)。这是现行操作手册；文中的旧版兼容说明不改变当前默认行为。
 
-适用于本仓库当前 0.20.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
+适用于本仓库当前 0.23.0 接口。本文可以直接交给 DeepSeek Harness（DSH）智能体作为操作说明。运行时先读取 `avatar_capabilities`，以已连接服务返回的能力为准。已有连接时可先读更短的[模型控制快速指南](model-control-quickstart.md)。
 
 ## 1. 先确定你使用哪条通路
 
 | 通路 | 谁生成回答 | 你应做什么 | 不应做什么 |
 | --- | --- | --- | --- |
 | **外部 DSH 智能体 → MCP → 桌宠** | 你正在使用的 DSH 会话 | 调用 `avatar_*` 工具表达意图、展示状态或朗读短句 | 不把桌宠当成任意参数写入器，不反复覆盖正在播放的回复 |
-| **桌宠聊天窗口 → DSH 聊天桥 → 专用 DSH 会话** | 插件创建或指定的桌宠专用会话 | 按请求返回结构化 JSON；插件回传后，由桌宠播放 | 不在这个专用会话里再调用 `avatar_speak`、终端、文件工具或角色工具，否则会重复输出或形成循环 |
+| **桌宠聊天窗口 → DSH 聊天桥 → A/B 会话** | 用户指定的已有会话或独立桌宠会话 | 原生模式正常回复，需要表演时用一次 `avatar_reply` 提交完整计划；非原生兼容模式才返回 JSON | 不另调 `avatar_speak` 重复朗读；不调用终端、文件工具或未授权工具 |
 
 这两条通路可以连接同一个桌宠进程，但职责不同。MCP 连接成功不代表 DSH 聊天桥已经连接；`bridges` 中出现 DSH 心跳，也不代表 `dsh.connected` 为真。
 
 首次安装使用 `providerSource:"auto"`；聊天桥就绪后有效来源自动为 DSH，输入框显示“和 DeepSeek Harness 说点什么…”。只连 MCP 时明确提示聊天桥未启用并禁用发送；没有 DSH 时保持未连接。Codex 只手动选择，DSH 断线后保持来源并等待重连。外部 DSH 会话通过 MCP 操控角色无需聊天桥。`provider` 是保存值，实际显示与发送应读取 `providerEffective` 和 `chatAvailable`。升级保留旧保存来源，旧 Codex 用户可在设置中切换一次自动模式。
 
 **验证范围：** 用户已在 **DSH `0.2.1-rc.2` 全新 profile** 中完成真实端到端验证：MCP 十一个工具、状态桥、双向聊天和真实模型渲染均已打通。这是用户反馈的实机结果；仓库自动测试另外覆盖 MCP 握手、WebSocket 传输、Session Controller 契约与会话目录隔离，不将模拟宿主当作实机验证。其他版本、账号、搜索插件仍需相应验收。准备步骤与已知作业环境边界见[干净 profile 接入指南](dsh-clean-profile.md)。
+
+上述实机记录不等于 0.23.0 新上下文协议已经在该账号验收。新协议已按本机 DSH `0.2.1-rc.2` 的 `systemPrompt.section` 与收件箱事件契约实现，实际部署按第 8 节检查 `dsh.promptProtocol: 2`，再验证可见正文和表演。
 
 ## 2. 可直接给外部智能体的工作约定
 
@@ -30,7 +32,7 @@
 9. 没有实际检索时不说“已搜索／已核实最新资料”，不伪造来源。`avatar_watch_context` 是读已分享页面，不是搜索工具。
 10. 配对码、API Key 和认证头不进入回复、日志、截图、补丁或仓库；故障报告只保留错误码和脱敏信息。
 
-如果你是**桌宠聊天桥内部的专用 DSH 会话**，采用第 8 节的 JSON 输出约定，替代上述主动调用角色工具的流程。
+如果你是**桌宠聊天桥内部的 DSH 会话**，原生模式按第 8 节使用一次 `avatar_reply`；仅非原生兼容模式采用第 8.3 节的 JSON 输出约定。不要重复发送普通文本朗读和原子表演。
 
 ### 2.1 用标签选择，不把标签当命令
 
@@ -86,6 +88,7 @@ DSH 必须从继承这些环境变量的进程启动。不要运行 `Get-ChildIt
       config:
         baseUrl: http://127.0.0.1:39181
         chat: true
+        native: true
         searchTools: []
 ```
 
@@ -93,7 +96,7 @@ DSH 必须从继承这些环境变量的进程启动。不要运行 `Get-ChildIt
 dsh web --patch 'C:/path/to/deepseek-chan-companion/integrations/dsh/cordis.patch.example.yml'
 ```
 
-这里只展示本项目提供的接入配置，不替代 Harness 自身的安装、模型配置和登录步骤。插件需要相邻的 `home-paths.mjs`、`chat-errors.mjs`，以及可从其文件位置解析的生产依赖 `ws`；请使用完整仓库或便携包的集成目录，不单独复制桥文件。Git 更新后重新加载该插件／重启对应 DSH profile，旧进程中已加载的模块不会自动替换。
+这里只展示本项目提供的接入配置，不替代 Harness 自身的安装、模型配置和登录步骤。请使用完整仓库或便携包的集成目录，保留 `home-paths.mjs`、`chat-errors.mjs`、`chat-prompt.mjs`、`recovery-tools.mjs` 及生产依赖 `ws`，不单独复制桥文件。Git 更新后重新加载该插件／正常重启对应 DSH profile，旧进程中已加载的模块不会自动替换。推荐由应用生成使用 `tokenFile` 的配置；上面的环境变量示例仍兼容。
 
 `L2D_BRIDGE_URL` 是插件在未配置 `baseUrl` 时的回退地址。示例已经显式填写 `baseUrl`，MCP `url` 也独立配置；改端口时应同步修改两处，不能只改环境变量。
 
@@ -337,9 +340,12 @@ MCP 返回的 `content` 中包含 JSON 文本。动作类接受结果示例：
 | 配置 | 默认／作用 |
 | --- | --- |
 | `baseUrl` | 配置值优先，否则 `L2D_BRIDGE_URL`，否则 `http://127.0.0.1:39181`；仅接受 localhost／127.0.0.1 的 HTTP |
-| `token` | 配置值优先，否则 `L2D_BRIDGE_TOKEN`；推荐只用环境变量 |
+| `tokenFile` | 推荐使用应用生成的本地配对文件，重连时重新读取；不要输出文件内容 |
+| `token` | 配置值或 `L2D_BRIDGE_TOKEN`，供手工兼容接入；不写入公开配置 |
+| `sessionFile` | B 模式持久保存创建的会话 ID，重启复用，不为排错删除 |
 | `sessionId` | 可选，仅过滤**状态观察**来源，不等于聊天目标会话 |
 | `chat` | 默认启用；`false` 关闭双向聊天桥，只保留状态观察部分 |
+| `native` | 推荐 `true`：正常回复并用一次 `avatar_reply` 表演；未开启时使用隐藏 schema 的 JSON 兼容模式 |
 | `chatSessionId` | 可选，指定桌宠聊天专用的既有会话 |
 | `chatCwd` | 显式指定会话目录，优先于其他 home 设置；支持 `~` 展开 |
 | `dshHome` | 可选的 DSH home 覆盖；未指定时读 `DSH_HOME`，再回退 `~/.dsh`。默认会话目录为该 home 下的 `live2d-companion` |
@@ -386,19 +392,21 @@ Content-Type: application/json
 
 ### 8.2 实际调用链
 
-1. 插件先检查 `sessionController.create/prompt/cancel` 和 `tools.guard`，连接 `/events`，发送 `{type:"auth",token}`；收到认证确认后发送 `bridge-register`，声明 `name:"dsh"`、`chat:true`、`sessionControllerAvailable:true` 及搜索能力。省略可用性字段的旧桥按旧版已预检查宿主接口的契约兼容，显式 `false` 则不可聊天。
-2. 服务收到 `/api/chat` 后生成请求、切到 thinking，通过该 WebSocket 发 `chat-request`，包含内部桥请求 ID、messages 和 `searchAllowed`。
-3. 插件调用 `ctx.sessionController.create({cwd,agentPreset?})` 创建专用会话，或使用 `chatSessionId`。
-4. 插件将 messages 按角色标签拼成 prompt 文本，调用 `ctx.sessionController.prompt({requestId,sessionId,mode:"queue",content:[{type:"text",text}],clientTimeZone}, signal)`。这些角色标签是 prompt 内容；工具限制由守卫实际执行，不靠页面内的字样获得权限。
-5. 用 `user/message.data.source.rpcId` 关联请求，用 `turn/start` 和回合编号筛选同一回合的最终、未中断 `assistant/message`；成功 `turn/end` 后发送 `chat-result`。
-6. 服务验证 JSON、规范化表情和短答预算，通过 HTTP 和 `chat` 事件返回回复；只有桌宠窗口顺序朗读，聊天窗口展示详情。
-7. 取消时服务发 `chat-cancel`，插件调用 `ctx.sessionController.cancel({sessionId})`。插件单请求上限约 175 秒，服务总请求上限约 185 秒；断线会取消挂起请求并每 3 秒尝试重连。
+1. 插件检查 `sessionController.create/prompt/cancel`、`tools.guard` 和 `systemPrompt.section`，认证 `/events`，登记 `promptProtocol:2`、`nativeMode` 与搜索能力。缺少隐藏提示接口时明确报错，不把规则退回可见用户消息。
+2. 服务为 `/api/chat` 发出 `chat-request`，其中 `input` 包含本次 `text`、模式、回复预算及本轮已授权网页材料；不发送本地镜像历史。DSH 已经保管所选会话的历史，无需重传。
+3. 插件复用 `chatSessionId` 或 `sessionFile`，仅在 B 模式首次使用时创建会话。`sessionController.prompt` 的 `content` 只放本次用户正文，保留原有换行和文本，不添加角色标签、规约或旧回复。
+4. `agent/inbox/claimed` 用 `source.rpcId` 在系统提示组装前关联确切请求和回合。一次注册的 `live2d:chat-rules`、`live2d:page-context` 两个 section 只向匹配的 Agent／回合返回内容，使用 `interpolate:false`；A 会话中尚在排队的桌宠请求不会改变当前其他任务。
+5. 原生模式正常回复并按需调用一次 `avatar_reply`，`nativePerformed` 保留防重复播放语义；非原生模式返回第 8.3 节的 JSON。桥只回传同一回合最终、未中断的助手回复。
+6. DSH 通路不再为压缩长回复额外追加“改写上一条”的模型请求。短句预算交给隐藏规约和原子工具，普通助手长文本可供阅读；Codex/API 仍保留其独立上下文与一次语义修复路径。
+7. 取消已领取的桌宠回合才调用 `sessionController.cancel`；还在排队时通过 `Agent.inbox.remove` 持久删除对应消息，迟到入队也删除，领取竞态由 `agent/pre-step` 过滤。不会为了取消排队消息而停止 A 会话正在执行的其他工作。桥单请求上限约 175 秒、服务总请求约 185 秒；断线采用有界退避重连，不重放已取消请求。
 
-桥内部请求 ID 与 `/api/chat` 对外 `requestId` 是两层标识，不应硬编码为相同值。只允许一个活动 DSH 聊天桥；不要为同一桌宠重复加载多个聊天桥插件。指定 `chatSessionId` 时使用专用会话，不与人工同时向该会话追加不相关任务。
+桥内部请求 ID 与 `/api/chat` 对外 `requestId` 是两层标识，不应硬编码为相同值。只允许一个活动 DSH 聊天桥；不要为同一桌宠重复加载多个聊天桥插件。A 模式仍共享用户选中的会话上下文，并不是隔离的新会话；需要隔离时选择 B。
 
-### 8.3 专用 DSH 会话输出格式
+升级到 0.23.0 后，正常更新完整集成目录并重载一次桥，读取 `/api/state.dsh.promptProtocol` 确认为 `2`。旧桥可继续聊天，主程序也停止重传旧历史，但旧模块仍可能添加旧规则前缀；只重启桌宠不能更新 DSH 内存中的插件。不会自动删除已积累的旧消息，也不会重建 A/B 会话。隐藏表示不再作为用户聊天正文出现，规约和当前网页仍占模型输入额度，不意味着零 token。
 
-只输出一个 JSON 对象，不附加 Markdown 围栏、工具调用或舞台说明：
+### 8.3 非原生兼容模式的 JSON 输出格式
+
+仅在未启用 `native:true` 时，按隐藏 section 中的 schema 输出一个 JSON 对象，不附加 Markdown 围栏、工具调用或舞台说明。原生模式使用 `avatar_reply`，不照抄这个 JSON 到聊天正文：
 
 ```json
 {
@@ -420,13 +428,13 @@ Content-Type: application/json
 
 顶层 `segments/details/sources` 必须齐全；当前严格 schema 要求每个段落包含 `text/intent/emotion/gesture/bodyAnimation/combination/expressionCues`。`bodyAnimation` 通常填 `auto`，明确需要安静肢体时填 `none`，也可使用第 4.4 节的 12 个 ID；`combination` 通常填 `auto`，其具体 ID 见第 4.5 节。旧提供方省略这两个字段时，服务仍兼容归一化为 `auto`。schema 允许 1–3 段；实际预算通常更少：问候 1 段，brief 通常最多 2 段，非 brief 的复杂说明最多 3 段。`details` 是不自动朗读的详细说明，可用 Markdown；`sources` 是实际检索支持的 `{title,url}` 数组，仅使用 HTTP(S) 链接。
 
-默认 brief 通常一两句、约 30–90 汉字；复杂问题也要先给结论，完整步骤放 details。服务会对超预算或复杂问题的空洞应答最多做一次语义修复，不能依赖它替你把长篇讲稿机械切短。单段超过 1200 字符会被拒绝；6000 字的 MCP 朗读上限也不是推荐长度。
+默认 brief 通常一两句、约 30–90 汉字；复杂问题先给结论，完整步骤放 details。DSH 不会再发一个修复回合，智能体应一次组织好朗读计划。单段超过 1200 字符会被拒绝；6000 字的 MCP 朗读上限也不是推荐长度。
 
 ### 8.4 搜索权限
 
 `searchTools` 只接受插件加载时确实存在的精确工具名，并排除名称中含 `run_code/shell/exec/write/delete` 的工具。默认空列表表示没有授权搜索。真正允许检索还要求桌宠设置 `webSearch: true`。若后来新装了工具，应重新加载插件，以便重新读取工具清单。
 
-桌宠专用会话的工具守卫只放行被授权的这些检索工具；终端、文件读写、程序化 `run_code` 和角色工具均被阻止。应选择适合原生工具调用的专用 DSH 预设，不能用程序化工具模式绕过限制。默认自动创建的专用会话在空闲时也受守卫保护；指定既有 `chatSessionId` 的工具限制与当前桥接操作关联，因此更应避免把普通开发会话用作聊天桥。
+桌宠回合的工具守卫只放行被授权的检索工具，原生模式另放行 `avatar_reply`；终端、文件读写、程序化 `run_code` 和其他角色工具仍被阻止。B 独立会话在空闲时也受守卫保护；A 既有会话只在确切的桌宠回合受此限制，排队期间和回合结束后不改变其其他任务的工具权限。
 
 `searchAttempted` 表示尝试调用配置的搜索工具；收到同一调用的非错误 `tool/result` 后才设置 `searchUsed`。没有成功检索时服务会清空 sources。模型仍须诚实描述能力，不能因为出现搜索工具或用户提供了 URL 就声称查证完成。
 
